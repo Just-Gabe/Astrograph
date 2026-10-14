@@ -1,0 +1,15 @@
+# Normaliza finais de linha por tipo de arquivo
+* text=auto
+
+# Scripts shell SEMPRE com LF (senão `curl | bash` quebra no Windows)
+*.sh text eol=lf
+install.sh text eol=lf
+
+# Scripts PowerShell com CRLF
+*.ps1 text eol=crlf
+
+# Binários
+*.png binary
+*.ttf binary
+*.otf binary
+*.zip binary
