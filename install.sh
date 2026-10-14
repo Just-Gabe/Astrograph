@@ -128,6 +128,15 @@ info "Ligado: $CONFIG -> $ROOT/template"
 if command -v nvim >/dev/null 2>&1; then
   info "Baixando plugins e ferramentas (pode demorar alguns minutos)..."
   nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>/dev/null || true
+
+  # Confere que a config subiu com o tema certo (senão caiu no fallback)
+  info "Verificando o tema..."
+  theme_name="$(nvim --headless "+lua vim.wait(1500); io.write(vim.g.colors_name or 'nil')" +qa 2>/dev/null || true)"
+  if printf '%s' "$theme_name" | grep -q astrograph; then
+    info "Tema astrograph ativo ($theme_name)."
+  else
+    warn "Tema astrograph NÃO carregou (colorscheme='$theme_name'). Rode: nvim e :colorscheme astrograph"
+  fi
 else
   warn "nvim não encontrado no PATH. Abra um terminal novo e rode: nvim"
 fi

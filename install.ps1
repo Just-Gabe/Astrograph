@@ -121,6 +121,15 @@ Info "Ligado: $Config -> $Root\template"
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
   Info 'Baixando plugins e ferramentas (pode demorar alguns minutos)...'
   nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>$null
+
+  # Confere que a config subiu com o tema certo (senão caiu no fallback)
+  Info 'Verificando o tema...'
+  $themeName = ((nvim --headless "+lua vim.wait(1500); io.write(vim.g.colors_name or 'nil')" +qa 2>$null) -join '').Trim()
+  if ($themeName -match 'astrograph') {
+    Info "Tema astrograph ativo ($themeName)."
+  } else {
+    Warn "Tema astrograph NÃO carregou (colorscheme='$themeName'). Abra o nvim e rode: :colorscheme astrograph"
+  }
 } else {
   Warn 'nvim não está no PATH desta sessão. Abra um terminal novo e rode: nvim'
 }
