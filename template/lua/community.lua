@@ -6,6 +6,8 @@
 return {
   "AstroNvim/astrocommunity",
   { import = "astrocommunity.pack.lua" },
-  { import = "astrocommunity.ai.claudecode-nvim" },
+  -- Agentes: configurados em `lua/plugins/` (CodeCompanion + terminais + avante).
+  -- O prefixo de IA é `<Leader>A`; o antigo `astrocommunity.ai.claudecode-nvim`
+  -- foi substituído pelo CodeCompanion (evita colisão de keymaps).
   -- import/override with your plugins folder
 }

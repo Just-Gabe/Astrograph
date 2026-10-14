@@ -29,12 +29,29 @@ Astrograph/
   - **`scroll`** — scroll suave (`outCubic`), com animação mais curta ao segurar a tecla;
   - **`indent`** — reativa a animação das indent guides (o AstroNvim desliga por padrão);
   - **`win`** — backdrop levemente escurecido nos floats (notify, lazy, picker).
-  - Atalhos: `<Leader>ua` liga/desliga **todas** as animações; `<Leader>uC` só o scroll suave.
+  - Atalhos: `<Leader>ua` liga/desliga **todas** as animações; `<Leader>uS` só o scroll suave.
 - **`lua/polish.lua`** — otimização geral:
   - `vim.loader.enable()` (cache de bytecode Lua → startup mais rápido);
   - desabilita os providers Perl/Ruby não usados (evita checagem no startup);
   - `smoothscroll` ligado (complementa o scroll suave do Snacks);
   - mantém o `CC=gcc` no Windows (treesitter compila com WinLibs).
+
+### Modo agentic (agentes no editor)
+
+Configurado em `template/lua/plugins/` com um núcleo de detecção em
+`template/lua/astrograph/agents.lua`. Prefixo único de IA: **`<Leader>A`**.
+
+- **`codecompanion.lua`** — engine unificada (CodeCompanion):
+  - **HTTP** → Claude, OpenAI, Gemini, **Ollama** e endpoints locais OpenAI-compatíveis;
+  - **ACP** → `claude_code`, `codex`, `gemini_cli`, `opencode` (no chat buffer);
+  - **CLI** → TUIs nativos recebendo contexto do buffer.
+  - Teclas: `<Leader>Ac` (chat), `<Leader>An` (novo chat), `<Leader>Aq` (inline),
+    `<Leader>Ap` (ações/adapter·modelo), `<Leader>Aa` (adicionar seleção). Dentro do chat, `ga` troca adapter/modelo.
+- **`terminals.lua`** — lança os CLIs num terminal flutuante (Snacks):
+  `<Leader>Al` (lançar/agente), `<Leader>AT` (alternar), `<Leader>A.` (enviar arquivo atual).
+- **`avante.lua`** — edição inline estilo Cursor, priorizando o modelo local (Ollama):
+  `<Leader>AE` (perguntar/editar), `<Leader>At`/`<Leader>As`/`<Leader>Af`/`<Leader>Az`.
+- Detecção automática: só habilita o que existe (Ollama no ar, CLIs no PATH); sem custo de startup.
 
 ### `lua/lazy_setup.lua` (template)
 - Passa a **preferir o core local** do monorepo (`../core`) quando existir, caindo para o
@@ -66,6 +83,10 @@ curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.s
 
 Depois é só abrir um terminal novo e rodar `nvim`. Os dois scripts são **idempotentes**
 (podem rodar de novo) e fazem **backup** da config antiga antes de ligar a nova.
+
+No fim, aparece um **checklist** (`[ ]`) pra escolher agentes opcionais — Claude Code, opencode,
+Codex CLI, Gemini CLI e Ollama (com download de modelo) — seguido dos passos de login. Sem
+terminal interativo, use a variável `ASTROGRAPH_AGENTS` (ex.: `ASTROGRAPH_AGENTS="claude,ollama:qwen2.5-coder:7b"`).
 
 ## Como usar
 

@@ -3,7 +3,7 @@
 -- transições de picker/notify. Desligar tudo globalmente: vim.g.snacks_animate = false
 --
 --   <Leader>ua  → liga/desliga TODAS as animações
---   <Leader>uC  → liga/desliga apenas o scroll suave
+--   <Leader>uS  → liga/desliga apenas o scroll suave
 
 ---@type LazySpec
 return {
@@ -31,7 +31,7 @@ return {
     end,
     keys = {
       { "<Leader>ua", function() require("snacks").toggle.animate():toggle() end, desc = "Toggle Animations" },
-      { "<Leader>uC", function() require("snacks").toggle.scroll():toggle() end, desc = "Toggle Smooth Scroll" },
+      { "<Leader>uS", function() require("snacks").toggle.scroll():toggle() end, desc = "Toggle Smooth Scroll" },
     },
   },
 }
