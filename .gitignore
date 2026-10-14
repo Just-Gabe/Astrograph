@@ -10,3 +10,6 @@ mason/
 lazy/
 lazy-lock.json.bak
 *.log
+
+# Mockups do brainstorm (visual companion)
+.superpowers/
