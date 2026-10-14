@@ -13,7 +13,7 @@ return function()
     if type(cleaner) == "function" then str = cleaner(str) end
     local parsed_ok, parsed = pcall(parser, str)
     if not parsed_ok then
-      require("astrocore").notify("Error parsing `.vscode/launch.json`.", vim.log.levels.ERROR)
+      require("astrocore").notify("Erro ao ler o `.vscode/launch.json`.", vim.log.levels.ERROR)
       parsed = {}
     end
     return parsed

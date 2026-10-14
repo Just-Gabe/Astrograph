@@ -32,13 +32,13 @@ return {
                     or ""
                   astro.toggle_term_cmd { cmd = "lazygit " .. flags, direction = "float" }
                 end
-                m.n["<Leader>gg"] = { lazygit, desc = "ToggleTerm lazygit" }
-                m.n["<Leader>tl"] = { lazygit, desc = "ToggleTerm lazygit" }
+                m.n["<Leader>gg"] = { lazygit, desc = "Terminal: lazygit" }
+                m.n["<Leader>tl"] = { lazygit, desc = "Terminal: lazygit" }
               end
             end,
             function(m)
               if exe "node" then
-                m.n["<Leader>tn"] = { function() astro.toggle_term_cmd "node" end, desc = "ToggleTerm node" }
+                m.n["<Leader>tn"] = { function() astro.toggle_term_cmd "node" end, desc = "Terminal: node" }
               end
             end,
             function(m)
@@ -52,19 +52,19 @@ return {
               end
               if exe(gdu) then
                 m.n["<Leader>tu"] =
-                  { function() astro.toggle_term_cmd { cmd = gdu, direction = "float" } end, desc = "ToggleTerm gdu" }
+                  { function() astro.toggle_term_cmd { cmd = gdu, direction = "float" } end, desc = "Terminal: gdu" }
               end
             end,
             function(m)
               if exe "btm" then
                 m.n["<Leader>tt"] =
-                  { function() astro.toggle_term_cmd { cmd = "btm", direction = "float" } end, desc = "ToggleTerm btm" }
+                  { function() astro.toggle_term_cmd { cmd = "btm", direction = "float" } end, desc = "Terminal: btm" }
               end
             end,
             function(m)
               local python = exe "python" and "python" or exe "python3" and "python3"
               if python then
-                m.n["<Leader>tp"] = { function() astro.toggle_term_cmd(python) end, desc = "ToggleTerm python" }
+                m.n["<Leader>tp"] = { function() astro.toggle_term_cmd(python) end, desc = "Terminal: python" }
               end
             end,
           }
@@ -90,16 +90,16 @@ return {
           desc = "Register external-tool terminal mappings",
           callback = function() vim.schedule(optional_maps) end,
         })
-        maps.n["<Leader>tf"] = { "<Cmd>ToggleTerm direction=float<CR>", desc = "ToggleTerm float" }
+        maps.n["<Leader>tf"] = { "<Cmd>ToggleTerm direction=float<CR>", desc = "Terminal flutuante" }
         maps.n["<Leader>th"] =
-          { "<Cmd>ToggleTerm size=10 direction=horizontal<CR>", desc = "ToggleTerm horizontal split" }
-        maps.n["<Leader>tv"] = { "<Cmd>ToggleTerm size=80 direction=vertical<CR>", desc = "ToggleTerm vertical split" }
-        maps.n["<F7>"] = { '<Cmd>execute v:count . "ToggleTerm"<CR>', desc = "Toggle terminal" }
-        maps.t["<F7>"] = { "<Cmd>ToggleTerm<CR>", desc = "Toggle terminal" }
-        maps.i["<F7>"] = { "<Esc><Cmd>ToggleTerm<CR>", desc = "Toggle terminal" }
-        maps.n["<C-'>"] = { '<Cmd>execute v:count . "ToggleTerm"<CR>', desc = "Toggle terminal" } -- requires terminal that supports binding <C-'>
-        maps.t["<C-'>"] = { "<Cmd>ToggleTerm<CR>", desc = "Toggle terminal" } -- requires terminal that supports binding <C-'>
-        maps.i["<C-'>"] = { "<Esc><Cmd>ToggleTerm<CR>", desc = "Toggle terminal" } -- requires terminal that supports binding <C-'>
+          { "<Cmd>ToggleTerm size=10 direction=horizontal<CR>", desc = "Terminal na horizontal" }
+        maps.n["<Leader>tv"] = { "<Cmd>ToggleTerm size=80 direction=vertical<CR>", desc = "Terminal na vertical" }
+        maps.n["<F7>"] = { '<Cmd>execute v:count . "ToggleTerm"<CR>', desc = "Alternar terminal" }
+        maps.t["<F7>"] = { "<Cmd>ToggleTerm<CR>", desc = "Alternar terminal" }
+        maps.i["<F7>"] = { "<Esc><Cmd>ToggleTerm<CR>", desc = "Alternar terminal" }
+        maps.n["<C-'>"] = { '<Cmd>execute v:count . "ToggleTerm"<CR>', desc = "Alternar terminal" } -- requires terminal that supports binding <C-'>
+        maps.t["<C-'>"] = { "<Cmd>ToggleTerm<CR>", desc = "Alternar terminal" } -- requires terminal that supports binding <C-'>
+        maps.i["<C-'>"] = { "<Esc><Cmd>ToggleTerm<CR>", desc = "Alternar terminal" } -- requires terminal that supports binding <C-'>
       end,
     },
     {
@@ -145,8 +145,8 @@ return {
       vim.opt_local.signcolumn = "no"
       if t.hidden then
         local function toggle() t:toggle() end
-        vim.keymap.set({ "n", "t", "i" }, "<C-'>", toggle, { desc = "Toggle terminal", [buf_key] = t.bufnr })
-        vim.keymap.set({ "n", "t", "i" }, "<F7>", toggle, { desc = "Toggle terminal", [buf_key] = t.bufnr })
+        vim.keymap.set({ "n", "t", "i" }, "<C-'>", toggle, { desc = "Alternar terminal", [buf_key] = t.bufnr })
+        vim.keymap.set({ "n", "t", "i" }, "<F7>", toggle, { desc = "Alternar terminal", [buf_key] = t.bufnr })
       end
     end,
     shading_factor = 2,

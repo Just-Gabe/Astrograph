@@ -1,34 +1,18 @@
-# AstroNvim Template
+# template/ — a configuração que o Neovim abre
 
-**NOTE:** This is for AstroNvim v6+
+Esta pasta é a configuração de usuário do **Astrograph**. O instalador liga
+`%LOCALAPPDATA%\nvim` (Windows) ou `~/.config/nvim` (Linux/macOS) a ela.
 
-A template for getting started with [AstroNvim](https://github.com/AstroNvim/AstroNvim)
+| Arquivo | Para que serve |
+| --- | --- |
+| `init.lua` | Bootstrap: otimizações de startup e instalação do lazy.nvim |
+| `lua/lazy_setup.lua` | Carrega o core local (`../core`) e o tema local (`../theme`) |
+| `lua/polish.lua` | Ajustes finais: recarregar arquivos dos agentes, `:Astrograph` |
+| `lua/plugins/*.lua` | Plugins e ajustes (agentes, animações, dashboard, Mason…) |
+| `lua/astrograph/*.lua` | Módulos próprios: agentes, dashboard, health, comandos |
 
-## 🛠️ Installation
+Os arquivos `astrocore.lua`, `astrolsp.lua`, `none-ls.lua`, `treesitter.lua` e
+`user.lua` são exemplos do AstroNvim e vêm **desligados** (primeira linha
+`if true then return {} end`). Apague essa linha para personalizar.
 
-#### Make a backup of your current nvim and shared folder
-
-```shell
-mv ~/.config/nvim ~/.config/nvim.bak
-mv ~/.local/share/nvim ~/.local/share/nvim.bak
-mv ~/.local/state/nvim ~/.local/state/nvim.bak
-mv ~/.cache/nvim ~/.cache/nvim.bak
-```
-
-#### Create a new user repository from this template
-
-Press the "Use this template" button above to create a new repository to store your user configuration.
-
-You can also just clone this repository directly if you do not want to track your user configuration in GitHub.
-
-#### Clone the repository
-
-```shell
-git clone https://github.com/<your_user>/<your_repository> ~/.config/nvim
-```
-
-#### Start Neovim
-
-```shell
-nvim
-```
+Documentação completa: <https://just-gabe.github.io/Astrograph/>

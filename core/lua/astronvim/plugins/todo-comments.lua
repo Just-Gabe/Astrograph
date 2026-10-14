@@ -21,11 +21,11 @@ return {
               end
               require("snacks").picker.todo_comments()
             end,
-            desc = "Find TODOs",
+            desc = "Buscar TODOs",
           }
         end
-        maps.n["]T"] = { function() require("todo-comments").jump_next() end, desc = "Next TODO comment" }
-        maps.n["[T"] = { function() require("todo-comments").jump_prev() end, desc = "Previous TODO comment" }
+        maps.n["]T"] = { function() require("todo-comments").jump_next() end, desc = "Próximo TODO" }
+        maps.n["[T"] = { function() require("todo-comments").jump_prev() end, desc = "TODO anterior" }
       end,
     },
     {
@@ -35,7 +35,7 @@ return {
         { "folke/todo-comments.nvim", cmd = { "TodoTelescope" } },
         {
           "AstroNvim/astrocore",
-          opts = { mappings = { n = { ["<Leader>fT"] = { "<Cmd>TodoTelescope<CR>", desc = "Find TODOs" } } } },
+          opts = { mappings = { n = { ["<Leader>fT"] = { "<Cmd>TodoTelescope<CR>", desc = "Buscar TODOs" } } } },
         },
       },
     },
@@ -46,7 +46,7 @@ return {
         { "folke/todo-comments.nvim", cmd = { "TodoFzfLua" } },
         {
           "AstroNvim/astrocore",
-          opts = { mappings = { n = { ["<Leader>fT"] = { "<Cmd>TodoFzfLua<CR>", desc = "Find TODOs" } } } },
+          opts = { mappings = { n = { ["<Leader>fT"] = { "<Cmd>TodoFzfLua<CR>", desc = "Buscar TODOs" } } } },
         },
       },
     },

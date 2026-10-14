@@ -9,12 +9,12 @@ return {
     opts.dashboard = {
       preset = {
         keys = {
-          { key = "n", action = "<Leader>n", icon = get_icon("FileNew", 0, true), desc = "New File  " },
-          { key = "f", action = "<Leader>ff", icon = get_icon("Search", 0, true), desc = "Find File  " },
-          { key = "o", action = "<Leader>fo", icon = get_icon("DefaultFile", 0, true), desc = "Recents  " },
-          { key = "w", action = "<Leader>fw", icon = get_icon("WordFile", 0, true), desc = "Find Word  " },
-          { key = "'", action = "<Leader>f'", icon = get_icon("Bookmarks", 0, true), desc = "Bookmarks  " },
-          { key = "s", action = "<Leader>Sl", icon = get_icon("Refresh", 0, true), desc = "Last Session  " },
+          { key = "n", action = "<Leader>n", icon = get_icon("FileNew", 0, true), desc = "Novo arquivo  " },
+          { key = "f", action = "<Leader>ff", icon = get_icon("Search", 0, true), desc = "Buscar arquivo  " },
+          { key = "o", action = "<Leader>fo", icon = get_icon("DefaultFile", 0, true), desc = "Recentes  " },
+          { key = "w", action = "<Leader>fw", icon = get_icon("WordFile", 0, true), desc = "Buscar palavra  " },
+          { key = "'", action = "<Leader>f'", icon = get_icon("Bookmarks", 0, true), desc = "Marcadores  " },
+          { key = "s", action = "<Leader>Sl", icon = get_icon("Refresh", 0, true), desc = "Última sessão  " },
         },
         header = table.concat({
           " █████  ███████ ████████ ██████   ██████ ",
@@ -133,24 +133,24 @@ return {
               require("snacks").dashboard()
             end
           end,
-          desc = "Home Screen",
+          desc = "Tela inicial",
         }
 
         -- Snacks.indent mappings
         maps.n["<Leader>u|"] =
-          { function() require("snacks").toggle.indent():toggle() end, desc = "Toggle indent guides" }
+          { function() require("snacks").toggle.indent():toggle() end, desc = "Alternar guias de indentação" }
 
         -- Snacks.notifier mappings
         if vim.tbl_get(snack_opts, "notifier", "enabled") ~= false then
-          maps.n["<Leader>uD"] = { function() require("snacks.notifier").hide() end, desc = "Dismiss notifications" }
+          maps.n["<Leader>uD"] = { function() require("snacks.notifier").hide() end, desc = "Dispensar notificações" }
         end
 
         -- Snacks.gitbrowse mappings
         if vim.tbl_get(snack_opts, "gitbrowse", "enabled") ~= false then
           if require("astronvim").executable "git" then
             maps.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
-            maps.n["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git browse (open)" }
-            maps.x["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git browse (open)" }
+            maps.n["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git: abrir no navegador" }
+            maps.x["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git: abrir no navegador" }
           end
         end
 
@@ -159,69 +159,69 @@ return {
           maps.n["<Leader>f"] = vim.tbl_get(opts, "_map_sections", "f")
           if require("astronvim").executable "git" then
             maps.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
-            maps.n["<Leader>gb"] = { function() require("snacks").picker.git_branches() end, desc = "Git branches" }
+            maps.n["<Leader>gb"] = { function() require("snacks").picker.git_branches() end, desc = "Git: branches" }
             maps.n["<Leader>gc"] = {
               function() require("snacks").picker.git_log() end,
-              desc = "Git commits (repository)",
+              desc = "Git: commits (repositório)",
             }
             maps.n["<Leader>gC"] = {
               function() require("snacks").picker.git_log { current_file = true, follow = true } end,
-              desc = "Git commits (current file)",
+              desc = "Git: commits (arquivo atual)",
             }
-            maps.n["<Leader>gt"] = { function() require("snacks").picker.git_status() end, desc = "Git status" }
-            maps.n["<Leader>gT"] = { function() require("snacks").picker.git_stash() end, desc = "Git stash" }
+            maps.n["<Leader>gt"] = { function() require("snacks").picker.git_status() end, desc = "Git: status" }
+            maps.n["<Leader>gT"] = { function() require("snacks").picker.git_stash() end, desc = "Git: stash" }
           end
           maps.n["<Leader>f<CR>"] =
-            { function() require("snacks").picker.resume() end, desc = "Resume previous search" }
-          maps.n["<Leader>f'"] = { function() require("snacks").picker.marks() end, desc = "Find marks" }
+            { function() require("snacks").picker.resume() end, desc = "Retomar última busca" }
+          maps.n["<Leader>f'"] = { function() require("snacks").picker.marks() end, desc = "Buscar marcas" }
           maps.n["<Leader>fl"] = {
             function() require("snacks").picker.lines() end,
-            desc = "Find lines",
+            desc = "Buscar linhas",
           }
           maps.n["<Leader>fa"] = {
-            function() require("snacks").picker.files { dirs = { vim.fn.stdpath "config" }, desc = "Config Files" } end,
-            desc = "Find AstroNvim config files",
+            function() require("snacks").picker.files { dirs = { vim.fn.stdpath "config" }, desc = "Arquivos de config" } end,
+            desc = "Buscar arquivos de config do Astrograph",
           }
-          maps.n["<Leader>fb"] = { function() require("snacks").picker.buffers() end, desc = "Find buffers" }
+          maps.n["<Leader>fb"] = { function() require("snacks").picker.buffers() end, desc = "Buscar buffers" }
           maps.n["<Leader>fc"] =
-            { function() require("snacks").picker.grep_word() end, desc = "Find word under cursor" }
-          maps.n["<Leader>fC"] = { function() require("snacks").picker.commands() end, desc = "Find commands" }
+            { function() require("snacks").picker.grep_word() end, desc = "Buscar palavra sob o cursor" }
+          maps.n["<Leader>fC"] = { function() require("snacks").picker.commands() end, desc = "Buscar comandos" }
           maps.n["<Leader>ff"] = {
             function()
               require("snacks").picker.files {
                 hidden = vim.tbl_get(vim.uv.fs_stat ".git" or {}, "type") == "directory",
               }
             end,
-            desc = "Find files",
+            desc = "Buscar arquivos",
           }
           maps.n["<Leader>fF"] = {
             function() require("snacks").picker.files { hidden = true, ignored = true } end,
-            desc = "Find all files",
+            desc = "Buscar todos os arquivos",
           }
-          maps.n["<Leader>fg"] = { function() require("snacks").picker.git_files() end, desc = "Find git files" }
-          maps.n["<Leader>fh"] = { function() require("snacks").picker.help() end, desc = "Find help" }
-          maps.n["<Leader>fk"] = { function() require("snacks").picker.keymaps() end, desc = "Find keymaps" }
-          maps.n["<Leader>fm"] = { function() require("snacks").picker.man() end, desc = "Find man" }
+          maps.n["<Leader>fg"] = { function() require("snacks").picker.git_files() end, desc = "Buscar arquivos do git" }
+          maps.n["<Leader>fh"] = { function() require("snacks").picker.help() end, desc = "Buscar ajuda" }
+          maps.n["<Leader>fk"] = { function() require("snacks").picker.keymaps() end, desc = "Buscar atalhos" }
+          maps.n["<Leader>fm"] = { function() require("snacks").picker.man() end, desc = "Buscar man pages" }
           maps.n["<Leader>fn"] =
-            { function() require("snacks").picker.notifications() end, desc = "Find notifications" }
-          maps.n["<Leader>fo"] = { function() require("snacks").picker.recent() end, desc = "Find old files" }
+            { function() require("snacks").picker.notifications() end, desc = "Buscar notificações" }
+          maps.n["<Leader>fo"] = { function() require("snacks").picker.recent() end, desc = "Arquivos recentes" }
           maps.n["<Leader>fO"] = {
             function() require("snacks").picker.recent { filter = { cwd = true } } end,
-            desc = "Find old files (cwd)",
+            desc = "Arquivos recentes (pasta atual)",
           }
-          maps.n["<Leader>fp"] = { function() require("snacks").picker.projects() end, desc = "Find projects" }
-          maps.n["<Leader>fr"] = { function() require("snacks").picker.registers() end, desc = "Find registers" }
-          maps.n["<Leader>fs"] = { function() require("snacks").picker.smart() end, desc = "Find buffers/recent/files" }
-          maps.n["<Leader>ft"] = { function() require("snacks").picker.colorschemes() end, desc = "Find themes" }
+          maps.n["<Leader>fp"] = { function() require("snacks").picker.projects() end, desc = "Buscar projetos" }
+          maps.n["<Leader>fr"] = { function() require("snacks").picker.registers() end, desc = "Buscar registradores" }
+          maps.n["<Leader>fs"] = { function() require("snacks").picker.smart() end, desc = "Buscar buffers/recentes/arquivos" }
+          maps.n["<Leader>ft"] = { function() require("snacks").picker.colorschemes() end, desc = "Buscar temas" }
           if require("astronvim").executable "rg" then
-            maps.n["<Leader>fw"] = { function() require("snacks").picker.grep() end, desc = "Find words" }
+            maps.n["<Leader>fw"] = { function() require("snacks").picker.grep() end, desc = "Buscar texto" }
             maps.n["<Leader>fW"] = {
               function() require("snacks").picker.grep { hidden = true, ignored = true } end,
-              desc = "Find words in all files",
+              desc = "Buscar texto em todos os arquivos",
             }
           end
-          maps.n["<Leader>fu"] = { function() require("snacks").picker.undo() end, desc = "Find undo history" }
-          maps.n["<Leader>lD"] = { function() require("snacks").picker.diagnostics() end, desc = "Search diagnostics" }
+          maps.n["<Leader>fu"] = { function() require("snacks").picker.undo() end, desc = "Histórico de desfazer" }
+          maps.n["<Leader>lD"] = { function() require("snacks").picker.diagnostics() end, desc = "Buscar diagnósticos" }
           maps.n["<Leader>ls"] = {
             function()
               local aerial_avail, aerial = pcall(require, "aerial")
@@ -231,21 +231,21 @@ return {
                 require("snacks").picker.lsp_symbols()
               end
             end,
-            desc = "Search symbols",
+            desc = "Buscar símbolos",
           }
         end
 
         -- Snacks.words mappings
         if vim.tbl_get(snack_opts, "words", "enabled") ~= false then
           maps.n["<Leader>ur"] =
-            { function() require("snacks").toggle.words():toggle() end, desc = "Toggle reference highlighting" }
-          maps.n["]r"] = { function() require("snacks").words.jump(vim.v.count1) end, desc = "Next reference" }
-          maps.n["[r"] = { function() require("snacks").words.jump(-vim.v.count1) end, desc = "Previous reference" }
+            { function() require("snacks").toggle.words():toggle() end, desc = "Alternar destaque de referências" }
+          maps.n["]r"] = { function() require("snacks").words.jump(vim.v.count1) end, desc = "Próxima referência" }
+          maps.n["[r"] = { function() require("snacks").words.jump(-vim.v.count1) end, desc = "Referência anterior" }
         end
 
         -- Snacks.zen mappings
         if vim.tbl_get(snack_opts, "zen", "enabled") ~= false then
-          maps.n["<Leader>uZ"] = { function() require("snacks").toggle.zen():toggle() end, desc = "Toggle zen mode" }
+          maps.n["<Leader>uZ"] = { function() require("snacks").toggle.zen():toggle() end, desc = "Alternar modo zen" }
         end
       end,
     },

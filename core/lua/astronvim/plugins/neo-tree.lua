@@ -10,7 +10,7 @@ return {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.n["<Leader>e"] = { "<Cmd>Neotree toggle<CR>", desc = "Toggle Explorer" }
+        maps.n["<Leader>e"] = { "<Cmd>Neotree toggle<CR>", desc = "Alternar explorador" }
         maps.n["<Leader>o"] = {
           function()
             if vim.bo.filetype == "neo-tree" then
@@ -19,7 +19,7 @@ return {
               vim.cmd.Neotree "focus"
             end
           end,
-          desc = "Toggle Explorer Focus",
+          desc = "Focar explorador",
         }
         opts.autocmds.neotree_start = {
           {
@@ -68,9 +68,9 @@ return {
     local astro, get_icon = require "astrocore", require("astroui").get_icon
     local git_available = require("astronvim").executable "git"
     local sources = {
-      { source = "filesystem", display_name = get_icon("FolderClosed", 1, true) .. "File" },
-      { source = "buffers", display_name = get_icon("DefaultFile", 1, true) .. "Bufs" },
-      { source = "diagnostics", display_name = get_icon("Diagnostic", 1, true) .. "Diagnostic" },
+      { source = "filesystem", display_name = get_icon("FolderClosed", 1, true) .. "Arquivos" },
+      { source = "buffers", display_name = get_icon("DefaultFile", 1, true) .. "Buffers" },
+      { source = "diagnostics", display_name = get_icon("Diagnostic", 1, true) .. "Diagnóstico" },
     }
     if git_available then
       table.insert(sources, 3, { source = "git_status", display_name = get_icon("Git", 1, true) .. "Git" })
@@ -158,7 +158,7 @@ return {
 
           local options = vim.tbl_filter(function(val) return vals[val] ~= "" end, vim.tbl_keys(vals))
           if vim.tbl_isempty(options) then
-            astro.notify("No values to copy", vim.log.levels.WARN)
+            astro.notify("Nada para copiar", vim.log.levels.WARN)
             return
           end
           table.sort(options)
@@ -168,7 +168,7 @@ return {
           }, function(choice)
             local result = vals[choice]
             if result then
-              astro.notify(("Copied: `%s`"):format(result))
+              astro.notify(("Copiado: `%s`"):format(result))
               vim.fn.setreg("+", result)
             end
           end)

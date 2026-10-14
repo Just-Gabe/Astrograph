@@ -119,7 +119,10 @@ fi
 # --- 4. Clonar/atualizar o Astrograph -------------------------------------
 if [ -d "$ROOT/.git" ]; then
   info "Atualizando $ROOT"
-  git -C "$ROOT" pull --ff-only || true
+  # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
+  # alteração o pull falha e a instalação continua velha sem avisar
+  git -C "$ROOT" checkout -- template/lazy-lock.json 2>/dev/null || true
+  git -C "$ROOT" pull --ff-only || warn "Não consegui atualizar $ROOT (alterações locais?). Rode: git -C \"$ROOT\" status"
 else
   info "Clonando o Astrograph em $ROOT"
   git clone --depth 1 "$REPO" "$ROOT"

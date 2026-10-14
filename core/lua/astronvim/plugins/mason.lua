@@ -12,7 +12,7 @@ return {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.n["<Leader>pm"] = { function() require("mason.ui").open() end, desc = "Mason Installer" }
+        maps.n["<Leader>pm"] = { function() require("mason.ui").open() end, desc = "Instalador Mason" }
       end,
     },
   },

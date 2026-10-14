@@ -6,7 +6,7 @@ return {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.n["<Leader>lS"] = { function() require("aerial").toggle() end, desc = "Symbols outline" }
+        maps.n["<Leader>lS"] = { function() require("aerial").toggle() end, desc = "Estrutura de símbolos" }
       end,
     },
   },
@@ -37,10 +37,10 @@ return {
         local astrocore = require "astrocore"
         astrocore.set_mappings({
           n = {
-            ["]y"] = { function() require("aerial").next(vim.v.count1) end, desc = "Next symbol" },
-            ["[y"] = { function() require("aerial").prev(vim.v.count1) end, desc = "Previous symbol" },
-            ["]Y"] = { function() require("aerial").next_up(vim.v.count1) end, desc = "Next symbol upwards" },
-            ["[Y"] = { function() require("aerial").prev_up(vim.v.count1) end, desc = "Previous symbol upwards" },
+            ["]y"] = { function() require("aerial").next(vim.v.count1) end, desc = "Próximo símbolo" },
+            ["[y"] = { function() require("aerial").prev(vim.v.count1) end, desc = "Símbolo anterior" },
+            ["]Y"] = { function() require("aerial").next_up(vim.v.count1) end, desc = "Próximo símbolo acima" },
+            ["[Y"] = { function() require("aerial").prev_up(vim.v.count1) end, desc = "Símbolo anterior acima" },
           },
         }, { buffer = bufnr })
       end,

@@ -9,7 +9,7 @@ return {
         local maps = opts.mappings
         maps.n["<Leader>lI"] = {
           "<Cmd>NullLsInfo<CR>",
-          desc = "Null-ls information",
+          desc = "Informações do none-ls",
           cond = function() return vim.fn.exists ":NullLsInfo" > 0 end,
         }
       end,

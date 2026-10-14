@@ -97,7 +97,11 @@ if (Test-Path $wtSettings) {
 # --- 4. Clonar/atualizar o Astrograph --------------------------------------
 if (Test-Path (Join-Path $Root '.git')) {
   Info "Atualizando $Root"
+  # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
+  # alteração o pull falha e a instalação continua velha sem avisar
+  git -C $Root checkout -- template/lazy-lock.json
   git -C $Root pull --ff-only
+  if ($LASTEXITCODE -ne 0) { Warn "Não consegui atualizar $Root (alterações locais?). Rode: git -C `"$Root`" status" }
 } else {
   Info "Clonando o Astrograph em $Root"
   git clone --depth 1 $Repo $Root
@@ -273,7 +277,8 @@ if ($selectedIds.Count -gt 0) {
     if ($model) {
       Info "Baixando o modelo $model ..."
       try { ollama pull $model } catch { Warn "Falha ao baixar $model : $($_.Exception.Message)" }
-      $cfgDir = Join-Path $env:LOCALAPPDATA 'astrograph'
+      # %APPDATA% (Roaming): %LOCALAPPDATA%/astrograph seria a pasta do próprio clone
+      $cfgDir = Join-Path $env:APPDATA 'astrograph'
       New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
       [IO.File]::WriteAllText((Join-Path $cfgDir 'config.json'),
         (@{ local_model = $model } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))

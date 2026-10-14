@@ -215,9 +215,9 @@ return {
       opts = function(_, opts)
         local maps = opts.mappings
         maps.n["<Leader>uc"] =
-          { function() require("astrocore.toggles").buffer_cmp() end, desc = "Toggle autocompletion (buffer)" }
+          { function() require("astrocore.toggles").buffer_cmp() end, desc = "Alternar autocompletar (buffer)" }
         maps.n["<Leader>uC"] =
-          { function() require("astrocore.toggles").cmp() end, desc = "Toggle autocompletion (global)" }
+          { function() require("astrocore.toggles").cmp() end, desc = "Alternar autocompletar (global)" }
       end,
     },
   },

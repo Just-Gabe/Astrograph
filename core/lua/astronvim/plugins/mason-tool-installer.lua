@@ -13,7 +13,7 @@ return {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.n["<Leader>pM"] = { "<Cmd>MasonToolsUpdate<CR>", desc = "Mason Update" }
+        maps.n["<Leader>pM"] = { "<Cmd>MasonToolsUpdate<CR>", desc = "Atualizar Mason" }
       end,
     },
   },

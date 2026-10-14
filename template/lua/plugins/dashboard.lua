@@ -1,20 +1,34 @@
--- Dashboard de abertura proprio do Astrograph: substitui apenas o cabecalho
--- (sections[1]) pela cena lua + estrelas + banner. O resto do dashboard do
--- AstroNvim (atalhos, startup, <Leader>h) permanece intacto.
+-- Dashboard de abertura do Astrograph: troca o cabeçalho (sections[1]) pela cena
+-- lua + estrelas + banner, adiciona o botão de Agentes e põe o rodapé de
+-- startup em português. O resto do dashboard do AstroNvim permanece.
 --
--- O core do AstroNvim define `opts.dashboard` depois dos specs do usuario, entao
--- o patch tem que acontecer no `config` (ja com os opts finais), nao no `opts`.
+-- O core define `opts.dashboard` depois dos specs do usuário, então o ajuste é
+-- feito no `config` (já com os opts finais), não no `opts`.
 --
--- Implementacao em `astrograph.dashboard`; arte em `astrograph.art`.
+-- Implementação em `astrograph.dashboard`; arte em `astrograph.art`.
 
 ---@type LazySpec
 return {
   {
     "folke/snacks.nvim",
     config = function(_, opts)
-      if type(opts.dashboard) == "table" and type(opts.dashboard.sections) == "table" then
-        opts.dashboard.sections[1] = function(self)
-          return require("astrograph.dashboard").scene(self)
+      local dash = opts.dashboard
+      if type(dash) == "table" and type(dash.sections) == "table" then
+        local scene = require "astrograph.dashboard"
+        dash.sections[1] = function(self) return scene.scene(self) end
+        for i, section in ipairs(dash.sections) do
+          if type(section) == "table" and section.section == "startup" then
+            dash.sections[i] = function() return scene.footer() end
+          end
+        end
+        local keys = vim.tbl_get(dash, "preset", "keys")
+        if type(keys) == "table" then
+          table.insert(keys, math.min(#keys + 1, 5), {
+            key = "a",
+            action = "<Leader>Ac",
+            icon = "󰚩 ",
+            desc = "Agentes de IA  ",
+          })
         end
       end
       require("snacks").setup(opts)

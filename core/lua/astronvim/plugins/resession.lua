@@ -7,27 +7,27 @@ return {
       opts = function(_, opts)
         local maps = opts.mappings
         maps.n["<Leader>S"] = vim.tbl_get(opts, "_map_sections", "S")
-        maps.n["<Leader>Sl"] = { function() require("resession").load "Last Session" end, desc = "Load last session" }
-        maps.n["<Leader>Ss"] = { function() require("resession").save() end, desc = "Save this session" }
+        maps.n["<Leader>Sl"] = { function() require("resession").load "Last Session" end, desc = "Abrir última sessão" }
+        maps.n["<Leader>Ss"] = { function() require("resession").save() end, desc = "Salvar esta sessão" }
         maps.n["<Leader>SS"] = {
           function() require("resession").save(vim.uv.cwd(), { dir = "dirsession" }) end,
-          desc = "Save this dirsession",
+          desc = "Salvar sessão desta pasta",
         }
-        maps.n["<Leader>St"] = { function() require("resession").save_tab() end, desc = "Save this tab's session" }
-        maps.n["<Leader>Sd"] = { function() require("resession").delete() end, desc = "Delete a session" }
+        maps.n["<Leader>St"] = { function() require("resession").save_tab() end, desc = "Salvar sessão desta aba" }
+        maps.n["<Leader>Sd"] = { function() require("resession").delete() end, desc = "Apagar sessão" }
         maps.n["<Leader>SD"] =
-          { function() require("resession").delete(nil, { dir = "dirsession" }) end, desc = "Delete a dirsession" }
-        maps.n["<Leader>Sf"] = { function() require("resession").load() end, desc = "Load a session" }
+          { function() require("resession").delete(nil, { dir = "dirsession" }) end, desc = "Apagar sessão de pasta" }
+        maps.n["<Leader>Sf"] = { function() require("resession").load() end, desc = "Abrir sessão" }
         maps.n["<Leader>SF"] =
-          { function() require("resession").load(nil, { dir = "dirsession" }) end, desc = "Load a dirsession" }
+          { function() require("resession").load(nil, { dir = "dirsession" }) end, desc = "Abrir sessão de pasta" }
         maps.n["<Leader>S."] = {
           function() require("resession").load(vim.uv.cwd(), { dir = "dirsession" }) end,
-          desc = "Load current dirsession",
+          desc = "Abrir sessão da pasta atual",
         }
         opts.autocmds.resession_auto_save = {
           {
             event = "VimLeavePre",
-            desc = "Save session on close",
+            desc = "Salvar sessão ao fechar",
             callback = function()
               local buf_utils = require "astrocore.buffer"
               local autosave = require("astrocore").config.sessions.autosave

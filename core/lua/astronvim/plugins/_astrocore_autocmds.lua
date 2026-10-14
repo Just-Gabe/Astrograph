@@ -13,7 +13,7 @@ return {
       AstroVersion = {
         function()
           local version = require("astronvim").version()
-          if version then require("astrocore").notify(("Version: *%s*"):format(version)) end
+          if version then require("astrocore").notify(("Versão: *%s*"):format(version)) end
         end,
         desc = "Check AstroNvim Version",
       },

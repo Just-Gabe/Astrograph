@@ -167,11 +167,22 @@ local function play(grad)
   end, { duration = 400, easing = "outQuad" })
 end
 
---- Twinkle continuo das estrelas (8 Hz) enquanto o dashboard existir
+local focused = true
+vim.api.nvim_create_autocmd({ "FocusLost", "FocusGained" }, {
+  group = vim.api.nvim_create_augroup("AstrographDashboardFocus", { clear = true }),
+  callback = function(ev) focused = ev.event == "FocusGained" end,
+})
+
+--- Twinkle continuo das estrelas (~6 Hz) enquanto o dashboard estiver na tela.
+--- Pausa (sem redesenhar nada) quando o terminal perde o foco ou o dashboard
+--- nao esta visivel em nenhuma janela; cada `nvim_set_hl` forca um redraw.
 local function twinkle(buf)
   local timer = vim.uv.new_timer()
   local t = 0
-  timer:start(0, 125, vim.schedule_wrap(function()
+  timer:start(0, 160, vim.schedule_wrap(function()
+    if not focused or (vim.api.nvim_buf_is_valid(buf) and vim.fn.bufwinid(buf) == -1) then
+      return
+    end
     if not vim.api.nvim_buf_is_valid(buf) or vim.g.snacks_animate == false then
       for i = 1, 3 do
         set_fg(HL .. "Star" .. i, STAR_BRIGHT)
@@ -185,7 +196,7 @@ local function twinkle(buf)
     end
     t = t + 1
     for i = 1, 3 do
-      local w = 0.5 + 0.5 * math.sin(t * 0.45 + i * 2.1)
+      local w = 0.5 + 0.5 * math.sin(t * 0.58 + i * 2.1)
       set_fg(HL .. "Star" .. i, lerp(STAR_DIM, STAR_BRIGHT, w))
     end
   end))
@@ -218,6 +229,25 @@ local function start(buf, grad)
   end
   play(grad)
   twinkle(buf)
+end
+
+--- Rodape do dashboard em portugues (substitui a secao `startup` do snacks)
+function M.footer()
+  local ok, stats = pcall(function() return require("lazy").stats() end)
+  if not ok then
+    return {}
+  end
+  local text = {
+    { "⚡ Astrograph carregou ", hl = "footer" },
+    { stats.loaded .. "/" .. stats.count, hl = "special" },
+    { " plugins", hl = "footer" },
+  }
+  -- o tempo só existe depois do UIEnter; antes disso mostra só a contagem
+  if stats.startuptime > 0 then
+    text[#text + 1] = { " em ", hl = "footer" }
+    text[#text + 1] = { (math.floor(stats.startuptime * 100 + 0.5) / 100) .. " ms", hl = "special" }
+  end
+  return { align = "center", text = text }
 end
 
 --- Item de secao do dashboard (Gen). Nunca lanca: cai para o header padrao.

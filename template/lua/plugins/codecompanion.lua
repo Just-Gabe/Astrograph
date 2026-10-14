@@ -81,8 +81,8 @@ return {
           maps.n = maps.n or {}
           maps.v = maps.v or {}
           maps.n["<Leader>A"] = { desc = "Agentes" }
-          maps.n["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (toggle)" }
-          maps.v["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (toggle)" }
+          maps.n["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (abrir/fechar)" }
+          maps.v["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (abrir/fechar)" }
           maps.n["<Leader>An"] = { "<cmd>CodeCompanionChat<cr>", desc = "Novo chat" }
           maps.n["<Leader>Aq"] = { "<cmd>CodeCompanion<cr>", desc = "Assistente inline" }
           maps.v["<Leader>Aq"] = { "<cmd>CodeCompanion<cr>", desc = "Assistente inline" }

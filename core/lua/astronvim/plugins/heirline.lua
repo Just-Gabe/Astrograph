@@ -12,7 +12,7 @@ return {
           function()
             require("astroui.status.heirline").buffer_picker(function(bufnr) vim.api.nvim_win_set_buf(0, bufnr) end)
           end,
-          desc = "Select buffer from tabline",
+          desc = "Escolher buffer pela tabline",
         }
         maps.n["<Leader>bd"] = {
           function()
@@ -20,7 +20,7 @@ return {
               function(bufnr) require("astrocore.buffer").close(bufnr) end
             )
           end,
-          desc = "Close buffer from tabline",
+          desc = "Fechar buffer pela tabline",
         }
         maps.n["<Leader>b\\"] = {
           function()
@@ -29,7 +29,7 @@ return {
               vim.api.nvim_win_set_buf(0, bufnr)
             end)
           end,
-          desc = "Horizontal split buffer from tabline",
+          desc = "Dividir na horizontal pela tabline",
         }
         maps.n["<Leader>b|"] = {
           function()
@@ -38,7 +38,7 @@ return {
               vim.api.nvim_win_set_buf(0, bufnr)
             end)
           end,
-          desc = "Vertical split buffer from tabline",
+          desc = "Dividir na vertical pela tabline",
         }
         opts.autocmds.heirline_colors = {
           {

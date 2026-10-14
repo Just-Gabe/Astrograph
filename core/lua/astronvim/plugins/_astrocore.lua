@@ -12,7 +12,7 @@ return {
           vim.schedule(
             function()
               astrocore.notify(
-                "Pinned versions of core plugins may have been updated\nRun `:Lazy update` again to get these updates.",
+                "As versões fixadas dos plugins do core podem ter mudado.\nRode `:Lazy update` de novo para receber as atualizações.",
                 vim.log.levels.WARN
               )
             end
@@ -99,52 +99,52 @@ return {
           textobjects = {
             select = {
               select_textobject = {
-                ["ak"] = { query = "@block.outer", desc = "around block" },
-                ["ik"] = { query = "@block.inner", desc = "inside block" },
-                ["ac"] = { query = "@class.outer", desc = "around class" },
-                ["ic"] = { query = "@class.inner", desc = "inside class" },
-                ["a?"] = { query = "@conditional.outer", desc = "around conditional" },
-                ["i?"] = { query = "@conditional.inner", desc = "inside conditional" },
-                ["af"] = { query = "@function.outer", desc = "around function" },
-                ["if"] = { query = "@function.inner", desc = "inside function" },
-                ["ao"] = { query = "@loop.outer", desc = "around loop" },
-                ["io"] = { query = "@loop.inner", desc = "inside loop" },
-                ["aa"] = { query = "@parameter.outer", desc = "around argument" },
-                ["ia"] = { query = "@parameter.inner", desc = "inside argument" },
+                ["ak"] = { query = "@block.outer", desc = "ao redor do bloco" },
+                ["ik"] = { query = "@block.inner", desc = "dentro do bloco" },
+                ["ac"] = { query = "@class.outer", desc = "ao redor da classe" },
+                ["ic"] = { query = "@class.inner", desc = "dentro da classe" },
+                ["a?"] = { query = "@conditional.outer", desc = "ao redor da condicional" },
+                ["i?"] = { query = "@conditional.inner", desc = "dentro da condicional" },
+                ["af"] = { query = "@function.outer", desc = "ao redor da função" },
+                ["if"] = { query = "@function.inner", desc = "dentro da função" },
+                ["ao"] = { query = "@loop.outer", desc = "ao redor do loop" },
+                ["io"] = { query = "@loop.inner", desc = "dentro do loop" },
+                ["aa"] = { query = "@parameter.outer", desc = "ao redor do argumento" },
+                ["ia"] = { query = "@parameter.inner", desc = "dentro do argumento" },
               },
             },
             move = {
               goto_next_start = {
-                ["]k"] = { query = "@block.outer", desc = "Next block start" },
-                ["]f"] = { query = "@function.outer", desc = "Next function start" },
-                ["]a"] = { query = "@parameter.inner", desc = "Next argument start" },
+                ["]k"] = { query = "@block.outer", desc = "Próximo início de bloco" },
+                ["]f"] = { query = "@function.outer", desc = "Próximo início de função" },
+                ["]a"] = { query = "@parameter.inner", desc = "Próximo início de argumento" },
               },
               goto_next_end = {
-                ["]K"] = { query = "@block.outer", desc = "Next block end" },
-                ["]F"] = { query = "@function.outer", desc = "Next function end" },
-                ["]A"] = { query = "@parameter.inner", desc = "Next argument end" },
+                ["]K"] = { query = "@block.outer", desc = "Próximo fim de bloco" },
+                ["]F"] = { query = "@function.outer", desc = "Próximo fim de função" },
+                ["]A"] = { query = "@parameter.inner", desc = "Próximo fim de argumento" },
               },
               goto_previous_start = {
-                ["[k"] = { query = "@block.outer", desc = "Previous block start" },
-                ["[f"] = { query = "@function.outer", desc = "Previous function start" },
-                ["[a"] = { query = "@parameter.inner", desc = "Previous argument start" },
+                ["[k"] = { query = "@block.outer", desc = "Início de bloco anterior" },
+                ["[f"] = { query = "@function.outer", desc = "Início de função anterior" },
+                ["[a"] = { query = "@parameter.inner", desc = "Início de argumento anterior" },
               },
               goto_previous_end = {
-                ["[K"] = { query = "@block.outer", desc = "Previous block end" },
-                ["[F"] = { query = "@function.outer", desc = "Previous function end" },
-                ["[A"] = { query = "@parameter.inner", desc = "Previous argument end" },
+                ["[K"] = { query = "@block.outer", desc = "Fim de bloco anterior" },
+                ["[F"] = { query = "@function.outer", desc = "Fim de função anterior" },
+                ["[A"] = { query = "@parameter.inner", desc = "Fim de argumento anterior" },
               },
             },
             swap = {
               swap_next = {
-                [">K"] = { query = "@block.outer", desc = "Swap next block" },
-                [">F"] = { query = "@function.outer", desc = "Swap next function" },
-                [">A"] = { query = "@parameter.inner", desc = "Swap next argument" },
+                [">K"] = { query = "@block.outer", desc = "Trocar com próximo bloco" },
+                [">F"] = { query = "@function.outer", desc = "Trocar com próxima função" },
+                [">A"] = { query = "@parameter.inner", desc = "Trocar com próximo argumento" },
               },
               swap_previous = {
-                ["<K"] = { query = "@block.outer", desc = "Swap previous block" },
-                ["<F"] = { query = "@function.outer", desc = "Swap previous function" },
-                ["<A"] = { query = "@parameter.inner", desc = "Swap previous argument" },
+                ["<K"] = { query = "@block.outer", desc = "Trocar com bloco anterior" },
+                ["<F"] = { query = "@function.outer", desc = "Trocar com função anterior" },
+                ["<A"] = { query = "@parameter.inner", desc = "Trocar com argumento anterior" },
               },
             },
           },

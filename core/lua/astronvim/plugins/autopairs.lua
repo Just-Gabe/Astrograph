@@ -6,7 +6,7 @@ return {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.n["<Leader>ua"] = { function() require("astrocore.toggles").autopairs() end, desc = "Toggle autopairs" }
+        maps.n["<Leader>ua"] = { function() require("astrocore.toggles").autopairs() end, desc = "Alternar autopairs" }
       end,
     },
   },

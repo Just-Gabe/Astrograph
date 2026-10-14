@@ -85,7 +85,7 @@ return {
   {
     "folke/snacks.nvim",
     keys = {
-      { "<Leader>Al", M.launch, desc = "Lançar agente-CLI" },
+      { "<Leader>Al", M.launch, desc = "Abrir agente no terminal" },
       { "<Leader>AT", M.toggle, desc = "Alternar terminal do agente" },
       { "<Leader>A.", M.send, desc = "Enviar arquivo atual ao agente" },
     },

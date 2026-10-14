@@ -100,9 +100,11 @@ function M.ollama_models()
 end
 
 ---Diretório de config do Astrograph (gravado pelo instalador).
+---No Windows fica em %APPDATA%/astrograph: o antigo %LOCALAPPDATA%/astrograph é a
+---mesma pasta do clone `%LOCALAPPDATA%\Astrograph` (o NTFS não diferencia caixa).
 ---@return string
 function M.config_dir()
-  local base = vim.fn.has "win32" == 1 and (vim.env.LOCALAPPDATA or vim.fn.expand "~/AppData/Local")
+  local base = vim.fn.has "win32" == 1 and (vim.env.APPDATA or vim.fn.expand "~/AppData/Roaming")
     or vim.fn.expand((vim.env.XDG_CONFIG_HOME or "~/.config"))
   return vim.fs.joinpath(base, "astrograph")
 end
@@ -110,9 +112,17 @@ end
 ---@return string
 function M.config_path() return vim.fs.joinpath(M.config_dir(), "config.json") end
 
+---Caminho legado (instaladores antigos no Windows), lido só como fallback.
+---@return string?
+local function legacy_config_path()
+  if vim.fn.has "win32" == 0 or not vim.env.LOCALAPPDATA then return nil end
+  return vim.fs.joinpath(vim.env.LOCALAPPDATA, "astrograph", "config.json")
+end
+
 ---@return table
 function M.read_config()
   local path = M.config_path()
+  if vim.fn.filereadable(path) == 0 then path = legacy_config_path() or path end
   if vim.fn.filereadable(path) == 0 then return {} end
   local ok, lines = pcall(vim.fn.readfile, path)
   if not ok then return {} end

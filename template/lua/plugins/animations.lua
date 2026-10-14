@@ -2,16 +2,20 @@
 -- Controladas pelo Snacks: janelas (backdrop), scroll suave, indent guides e
 -- transições de picker/notify. Desligar tudo globalmente: vim.g.snacks_animate = false
 --
---   <Leader>ua  → liga/desliga TODAS as animações
---   <Leader>uS  → liga/desliga apenas o scroll suave
+--   <Leader>um  → liga/desliga TODAS as animações (m = movimento)
+--   <Leader>uM  → liga/desliga apenas o scroll suave
 
 ---@type LazySpec
 return {
   {
     "folke/snacks.nvim",
     opts = function(_, opts)
-      -- Base das animações (fps alto + easing suave = sensação fluida)
-      opts.animate = { fps = 120, duration = { step = 5, total = 160 }, easing = "outQuad" }
+      -- Via SSH cada quadro vira tráfego de rede: desliga tudo (reative com <Leader>um)
+      if vim.env.SSH_CONNECTION or vim.env.SSH_TTY then vim.g.snacks_animate = false end
+
+      -- Base das animações. 60 fps acompanha a taxa de atualização dos terminais;
+      -- 120 dobrava os redraws sem diferença visível (e tremia no Windows Terminal).
+      opts.animate = { fps = 60, duration = { step = 5, total = 160 }, easing = "outQuad" }
 
       -- Scroll suave: passo curto, easing "out" para começar forte e frear no fim
       opts.scroll = {
@@ -30,8 +34,8 @@ return {
       return opts
     end,
     keys = {
-      { "<Leader>ua", function() require("snacks").toggle.animate():toggle() end, desc = "Toggle Animations" },
-      { "<Leader>uS", function() require("snacks").toggle.scroll():toggle() end, desc = "Toggle Smooth Scroll" },
+      { "<Leader>um", function() require("snacks").toggle.animate():toggle() end, desc = "Alternar animações" },
+      { "<Leader>uM", function() require("snacks").toggle.scroll():toggle() end, desc = "Alternar scroll suave" },
     },
   },
 }
