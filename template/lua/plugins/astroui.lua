@@ -1,5 +1,3 @@
-if true then return {} end -- WARN: REMOVE THIS LINE TO ACTIVATE THIS FILE
-
 -- AstroUI provides the basis for configuring the AstroNvim User Interface
 -- Configuration documentation can be found with `:h astroui`
 -- NOTE: We highly recommend setting up the Lua Language Server (`:LspInstall lua_ls`)
@@ -10,14 +8,14 @@ return {
   "AstroNvim/astroui",
   ---@type AstroUIOpts
   opts = {
-    -- change colorscheme
-    colorscheme = "astrodark",
+    -- change colorscheme (cai para astrodark se o tema local `theme/` não existir)
+    colorscheme = vim.g.astrograph_theme and "astrograph" or "astrodark",
     -- AstroUI allows you to easily modify highlight groups easily for any and all colorschemes
     highlights = {
       init = { -- this table overrides highlights in all themes
         -- Normal = { bg = "#000000" },
       },
-      astrodark = { -- a table of overrides/changes when applying the astrotheme theme
+      astrograph = { -- a table of overrides/changes when applying the astrograph theme
         -- Normal = { bg = "#000000" },
       },
     },

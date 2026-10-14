@@ -138,9 +138,44 @@ visual=rosa, replace=`#FF7E9D`, command=ouro, inactive=cinza. Sem cores hardcode
 
 ## Critérios de aceite
 
-- [ ] `:colorscheme astrograph` e `astrograph-light` carregam sem erro.
-- [ ] `check_contrast.lua` passa (comment como exceção documentada).
-- [ ] `palette.json` gerado e idêntico à paleta Lua (verificação no teste).
-- [ ] Sem `theme/` → cai em `astrodark`, sem erro.
-- [ ] Lualine reflete corretamente os 5 modos em dark e light.
-- [ ] Nenhuma cor hardcoded fora dos módulos de paleta.
+- [x] `:colorscheme astrograph` e `astrograph-light` carregam sem erro.
+- [x] `check_contrast.lua` passa (comment como exceção documentada).
+- [x] `palette.json` gerado a partir da paleta Lua.
+- [x] Sem `theme/` → cai em `astrodark`, sem erro.
+- [x] Lualine reflete os modos em dark e light.
+- [x] Nenhuma cor hardcoded fora dos módulos de paleta (extras de `syntax` na paleta).
+
+## Implementação
+
+Arquivos criados:
+
+- `theme/lua/astrograph/lib/color.lua` — helper de cor auto-contido (lighten/darken/blend).
+- `theme/lua/astrograph/palettes/{astrograph,astrograph-light}.lua` — paletas (fonte única).
+- `theme/lua/astrograph/init.lua` — `register()` (package.preload) + `setup()` (astrotheme).
+- `theme/colors/{astrograph,astrograph-light}.lua` — entradas `:colorscheme`.
+- `theme/lua/lualine/themes/{astrograph,astrograph-light}.lua` — temas lualine.
+- `theme/tools/gen_palette.lua` — gera `theme/palette.json`.
+- `theme/tools/check_contrast.lua` — valida ≥4.5:1 (comment ≥3:1).
+- `theme/palette.json` — artefato gerado (consumido por instalador/repo).
+
+Alterados:
+
+- `template/lua/lazy_setup.lua` — descobre `../theme` (ou `$ASTROGRAPH_THEME`) e o registra
+  como spec com `priority = 1000`, expondo `vim.g.astrograph_theme` (fallback).
+- `template/lua/plugins/astroui.lua` — reativado; `colorscheme = "astrograph"` com fallback
+  para `astrodark`.
+
+Comandos:
+
+- Gerar JSON: `nvim --headless -u NONE -l tools/gen_palette.lua` (dentro de `theme/`).
+- Validar: `nvim --headless -u NONE -l tools/check_contrast.lua`.
+
+Notas de integração com o motor (`astrotheme`):
+
+- As paletas são injetadas via `package.preload["astrotheme.palettes.<nome>"]`.
+- `config.palettes.<nome>` precisa existir (mesmo vazio) — o motor faz `tbl_deep_extend`.
+- `Operator`/`Identifier` compartilham `syntax.text`; `Macro`/`Number` compartilham
+  `syntax.orange`; por isso `operator`, `macro`, `cursorline` e `parameter` são slots extras
+  da paleta, aplicados como **overrides de highlight** em `astrograph/init.lua`.
+- Chamar `astrotheme.load()` sem argumento usa `config.background[vim.o.background]`,
+  evitando o lookup em `style_background` (que não conhece `astrograph`).

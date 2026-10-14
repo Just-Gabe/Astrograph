@@ -23,6 +23,27 @@ local function astrograph_core()
   return { "AstroNvim/AstroNvim", version = "^6" } --[[@as LazySpec]]
 end
 
+-- Astrograph: põe o tema LOCAL do monorepo (`../theme` ou $ASTROGRAPH_THEME) no
+-- runtimepath quando existir, habilitando `:colorscheme astrograph` / `astrograph-light`.
+local function astrograph_theme()
+  local uv = vim.uv or vim.loop
+  local this = debug.getinfo(1, "S").source:sub(2)
+  local resolved = uv.fs_realpath(this) or this
+  local root = vim.fn.fnamemodify(resolved, ":h:h:h")
+  local candidates = {}
+  local env = vim.env.ASTROGRAPH_THEME
+  if env and env ~= "" then table.insert(candidates, env) end
+  table.insert(candidates, root .. "/theme")
+  table.insert(candidates, vim.fn.expand "~/Astrograph/theme")
+
+  for _, dir in ipairs(candidates) do
+    if dir and dir ~= "" and uv.fs_stat(dir .. "/colors/astrograph.lua") then return dir end
+  end
+end
+
+local theme = astrograph_theme()
+vim.g.astrograph_theme = theme -- exposto p/ o astroui escolher colorscheme (fallback)
+
 local astro = astrograph_core()
 astro.import = "astronvim.plugins"
 astro.opts = { -- AstroNvim options must be set here with the `import` key
@@ -33,11 +54,17 @@ astro.opts = { -- AstroNvim options must be set here with the `import` key
   update_notifications = true, -- Enable/disable notification about running `:Lazy update` twice to update pinned plugins
 }
 
-require("lazy").setup({
+local specs = {
   astro,
   { import = "community" },
   { import = "plugins" },
-} --[[@as LazySpec]], {
+}
+
+-- Tema local primeiro (prioridade alta) para o rtp/`colors/` existir antes do
+-- astroui aplicar `colorscheme = "astrograph"`.
+if theme then table.insert(specs, 1, { dir = theme, name = "astrograph-theme", priority = 1000 }) end
+
+require("lazy").setup(specs --[[@as LazySpec]], {
   -- Configure any other `lazy.nvim` configuration options here
   install = { colorscheme = { "astrotheme", "habamax" } },
   ui = { backdrop = 100 },
