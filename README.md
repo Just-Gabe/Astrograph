@@ -53,6 +53,25 @@ Configurado em `template/lua/plugins/` com um núcleo de detecção em
   `<Leader>AE` (perguntar/editar), `<Leader>At`/`<Leader>As`/`<Leader>Af`/`<Leader>Az`.
 - Detecção automática: só habilita o que existe (Ollama no ar, CLIs no PATH); sem custo de startup.
 
+### Performance (startup ~390 ms → ~280 ms no Windows)
+
+Medido com `nvim --startuptime` e o profile do lazy.nvim. O que pesava não era o runtime
+legado do Vim (~18 ms no total), e sim checagens de binário e plugins carregados cedo:
+
+- **`core/` — `require("astronvim").executable(bin)`**: cache por sessão de `vim.fn.executable`.
+  No Windows cada busca de um binário **ausente** varre o PATH inteiro (~20 ms cada), e o core
+  repetia `git`/`rg` em vários specs.
+- **`core/.../toggleterm.lua`**: os atalhos de lazygit/node/gdu/btm/python são registrados logo
+  após o startup (`VeryLazy`, um binário por tick), sem bloquear a abertura. Overrides do
+  usuário continuam valendo.
+- **`core/.../_astroui.lua`**: sem `lazygit` instalado, o astroui não regrava o YAML do tema dele
+  a cada startup.
+- **`avante.lua`**: carrega só pelas teclas/comandos (antes: em todo primeiro arquivo aberto,
+  ~100 ms + detecção do Ollama). Primeiro arquivo aberto: ~230 ms → ~120 ms.
+- **Runtime legado**: `rplugin` e `tutor` desligados; providers perl/ruby/python3/node desligados
+  (nenhum plugin usa); `vim.loader` ativado no topo do `init.lua`, antes do lazy.nvim.
+- **`astrograph.agents`**: detecção de CLIs cacheada (`detect(true)` força nova checagem).
+
 ### `lua/lazy_setup.lua` (template)
 - Passa a **preferir o core local** do monorepo (`../core`) quando existir, caindo para o
   AstroNvim oficial caso contrário. Isso permite testar mudanças no core sem publicar nada.

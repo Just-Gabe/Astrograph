@@ -4,6 +4,24 @@ M.did_init = false
 
 M.config = require "astronvim.config"
 
+-- Astrograph: cache de `vim.fn.executable` por sessão. No Windows cada busca
+-- varre todo o PATH × PATHEXT (~20ms por binário ausente), e o core repete as
+-- mesmas checagens (git, rg…) em vários specs durante o startup.
+local executable_cache = {}
+
+---Memoized `vim.fn.executable(bin) == 1`. Pass `refresh` to re-check.
+---@param bin string
+---@param refresh? boolean
+---@return boolean
+function M.executable(bin, refresh)
+  local cached = executable_cache[bin]
+  if cached == nil or refresh then
+    cached = vim.fn.executable(bin) == 1
+    executable_cache[bin] = cached
+  end
+  return cached
+end
+
 function M.version()
   local astrocore = require "astrocore"
   local plugin = assert(astrocore.get_plugin "AstroNvim")

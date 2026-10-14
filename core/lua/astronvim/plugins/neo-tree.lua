@@ -66,7 +66,7 @@ return {
   opts_extend = { "sources", "event_handlers" },
   opts = function(_, opts)
     local astro, get_icon = require "astrocore", require("astroui").get_icon
-    local git_available = vim.fn.executable "git" == 1
+    local git_available = require("astronvim").executable "git"
     local sources = {
       { source = "filesystem", display_name = get_icon("FolderClosed", 1, true) .. "File" },
       { source = "buffers", display_name = get_icon("DefaultFile", 1, true) .. "Bufs" },

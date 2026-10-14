@@ -1,5 +1,15 @@
 -- This file simply bootstraps the installation of Lazy.nvim and then calls other files for execution
 -- This file doesn't necessarily need to be touched, BE CAUTIOUS editing this file and proceed at your own risk.
+-- Astrograph: otimizações que precisam rodar ANTES de tudo (inclusive do lazy.nvim)
+-- Cache de bytecode Lua: os próprios módulos do lazy/core também ficam em cache.
+pcall(vim.loader.enable)
+-- Providers remotos não usados por nenhum plugin do Astrograph: evita que um
+-- `has('python3')`/`:checkhealth` dispare a busca (lenta) por interpretadores.
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_ruby_provider = 0
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_node_provider = 0
+
 local lazypath = vim.env.LAZY or vim.fn.stdpath "data" .. "/lazy/lazy.nvim"
 
 if not (vim.env.LAZY or (vim.uv or vim.loop).fs_stat(lazypath)) then

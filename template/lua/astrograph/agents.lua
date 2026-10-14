@@ -24,11 +24,16 @@ M.agents = {
 }
 
 local cache ---@type table?
+local exe_cache = {} ---@type table<string, boolean>
 
----`true` se o executável está no PATH.
+---`true` se o executável está no PATH (cacheado; no Windows cada busca de um
+---binário ausente custa ~20ms). `detect(true)` limpa o cache.
 ---@param bin string
 ---@return boolean
-function M.has(bin) return vim.fn.executable(bin) == 1 end
+function M.has(bin)
+  if exe_cache[bin] == nil then exe_cache[bin] = vim.fn.executable(bin) == 1 end
+  return exe_cache[bin]
+end
 
 ---Host base do Ollama, aceitando `OLLAMA_HOST` com ou sem esquema.
 ---@return string
@@ -130,7 +135,10 @@ end
 
 ---URL/model de endpoint local OpenAI-compatível (LM Studio, llama.cpp, vLLM…).
 ---@return string?
-function M.local_url() local url = vim.env.ASTROGRAPH_LOCAL_URL; return (url ~= "" and url) or nil end
+function M.local_url()
+  local url = vim.env.ASTROGRAPH_LOCAL_URL
+  return (url and url ~= "" and url) or nil
+end
 
 ---Comando base de um agente pelo nome do binário.
 ---@param bin string
@@ -154,6 +162,7 @@ end
 ---@return table
 function M.detect(refresh)
   if cache and not refresh then return cache end
+  if refresh then exe_cache = {} end
   local info = {
     claude = M.has "claude",
     opencode = M.has "opencode",

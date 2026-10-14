@@ -14,7 +14,18 @@ return {
     build = vim.fn.has "win32" == 1
         and "powershell -ExecutionPolicy Bypass -File Build.ps1 -BuildFromSource false"
       or "make",
-    event = "User AstroFile",
+    -- Carrega só sob demanda (teclas/comandos). Antes era `User AstroFile`, o que
+    -- custava ~100ms (+ detecção do Ollama) no primeiro arquivo aberto, mesmo sem
+    -- usar o avante. As teclas apontam para os <Plug> do avante porque ele não
+    -- remapeia teclas já gerenciadas pelo lazy.nvim (Utils.safe_keymap_set).
+    keys = {
+      { "<Leader>AE", "<Plug>(AvanteAsk)", mode = "n", remap = true, desc = "avante: perguntar" },
+      { "<Leader>AE", "<Plug>(AvanteEdit)", mode = "v", remap = true, desc = "avante: editar seleção" },
+      { "<Leader>At", "<Plug>(AvanteToggle)", remap = true, desc = "avante: alternar sidebar" },
+      { "<Leader>As", "<Plug>(AvanteToggleSuggestion)", remap = true, desc = "avante: alternar sugestões" },
+      { "<Leader>Af", "<Plug>(AvanteFocus)", remap = true, desc = "avante: focar" },
+      { "<Leader>Az", "<Plug>(AvanteZenMode)", mode = { "n", "v" }, remap = true, desc = "avante: zen" },
+    },
     cmd = {
       "AvanteAsk",
       "AvanteBuild",

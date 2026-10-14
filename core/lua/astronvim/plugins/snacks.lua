@@ -147,7 +147,7 @@ return {
 
         -- Snacks.gitbrowse mappings
         if vim.tbl_get(snack_opts, "gitbrowse", "enabled") ~= false then
-          if vim.fn.executable "git" == 1 then
+          if require("astronvim").executable "git" then
             maps.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
             maps.n["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git browse (open)" }
             maps.x["<Leader>go"] = { function() require("snacks").gitbrowse() end, desc = "Git browse (open)" }
@@ -157,7 +157,7 @@ return {
         -- Snacks.picker
         if vim.tbl_get(snack_opts, "picker", "enabled") ~= false then
           maps.n["<Leader>f"] = vim.tbl_get(opts, "_map_sections", "f")
-          if vim.fn.executable "git" == 1 then
+          if require("astronvim").executable "git" then
             maps.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
             maps.n["<Leader>gb"] = { function() require("snacks").picker.git_branches() end, desc = "Git branches" }
             maps.n["<Leader>gc"] = {
@@ -213,7 +213,7 @@ return {
           maps.n["<Leader>fr"] = { function() require("snacks").picker.registers() end, desc = "Find registers" }
           maps.n["<Leader>fs"] = { function() require("snacks").picker.smart() end, desc = "Find buffers/recent/files" }
           maps.n["<Leader>ft"] = { function() require("snacks").picker.colorschemes() end, desc = "Find themes" }
-          if vim.fn.executable "rg" == 1 then
+          if require("astronvim").executable "rg" then
             maps.n["<Leader>fw"] = { function() require("snacks").picker.grep() end, desc = "Find words" }
             maps.n["<Leader>fW"] = {
               function() require("snacks").picker.grep { hidden = true, ignored = true } end,
@@ -282,8 +282,8 @@ return {
               ["f/"] = "filter_on_submit",
               ff = "find_files_in_dir",
               fF = "find_all_files_in_dir",
-              fw = vim.fn.executable "rg" == 1 and "find_words_in_dir" or nil,
-              fW = vim.fn.executable "rg" == 1 and "find_all_words_in_dir" or nil,
+              fw = require("astronvim").executable "rg" and "find_words_in_dir" or nil,
+              fW = require("astronvim").executable "rg" and "find_all_words_in_dir" or nil,
             },
           },
         },

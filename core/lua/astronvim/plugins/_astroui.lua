@@ -143,7 +143,9 @@ return {
       Spellcheck = "[SPELL]",
       TabClose = "X",
     },
-    lazygit = {
+    -- Astrograph: sem lazygit instalado, não sincroniza o tema dele. O astroui
+    -- regravava o YAML do tema em todo startup (e checava o binário sem cache).
+    lazygit = require("astronvim").executable "lazygit" and {
       theme_path = vim.fs.normalize(vim.fn.stdpath "cache" .. "/astroui-lazygit-config.yml"),
       theme = {
         [241] = { fg = "Special" },
@@ -159,6 +161,6 @@ return {
         selectedLineBgColor = { bg = "Visual" }, -- set to `default` to have no background colour
         unstagedChangesColor = { fg = "DiagnosticError" },
       },
-    },
+    } or false,
   },
 }

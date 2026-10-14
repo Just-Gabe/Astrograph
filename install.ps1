@@ -165,7 +165,7 @@ function Read-AgentMenu {
   $cursor = 0
   Write-Host ''
   Write-Host '  Agentes a instalar  (↑/↓ navega · espaço marca · enter confirma · a=todos)' -ForegroundColor Cyan
-  Write-Host '  ' + ('-' * 60)
+  Write-Host ('  ' + ('-' * 60))
   foreach ($it in $Items) { Write-Host '' }
   $top = [Console]::CursorTop - $n
   $width = 79
@@ -236,8 +236,15 @@ if ($selectedIds.Count -gt 0) {
     if (Test-Bin $d.Bin) { Info "$($d.Label) já instalado"; continue }
     if ($d.Npm) {
       Info "Instalando $($d.Label) (npm $($d.Npm))..."
-      try { npm install -g $d.Npm 2>$null | Out-Null; Info "$($d.Label) instalado" }
-      catch { Warn "Falha ao instalar $($d.Label): $($_.Exception.Message)" }
+      # PS 5.1: com 'Stop', qualquer aviso do npm no stderr redirecionado vira
+      # exceção e interrompe a instalação no meio. Usa o código de saída.
+      $prevEap = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      npm install -g $d.Npm 2>&1 | Out-Null
+      $npmCode = $LASTEXITCODE
+      $ErrorActionPreference = $prevEap
+      if ($npmCode -eq 0) { Info "$($d.Label) instalado" }
+      else { Warn "Falha ao instalar $($d.Label) (npm saiu com código $npmCode)" }
     } elseif ($d.Id -eq 'ollama') {
       Info 'Instalando Ollama (winget)...'
       try {

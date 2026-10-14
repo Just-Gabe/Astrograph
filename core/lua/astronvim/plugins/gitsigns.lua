@@ -1,6 +1,6 @@
 return {
   "lewis6991/gitsigns.nvim",
-  enabled = vim.fn.executable "git" == 1,
+  enabled = require("astronvim").executable "git",
   event = "User AstroGitFile",
   opts = function(_, opts)
     local astrocore, get_icon = require "astrocore", require("astroui").get_icon

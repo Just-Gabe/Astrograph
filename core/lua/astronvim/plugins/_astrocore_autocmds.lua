@@ -157,7 +157,7 @@ return {
               astro.event "File"
               local folder = vim.fs.abspath(vim.fs.dirname(current_file))
               if vim.fn.has "win32" == 1 then folder = ('"%s"'):format(folder) end
-              if vim.fn.executable "git" == 1 then
+              if require("astronvim").executable "git" then
                 if astro.cmd({ "git", "-C", folder, "rev-parse" }, false) or astro.file_worktree() then
                   astro.event "GitFile"
                   pcall(vim.api.nvim_del_augroup_by_name, "file_user_events")

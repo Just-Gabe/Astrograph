@@ -11,47 +11,85 @@ return {
         local maps = opts.mappings
         local astro = require "astrocore"
         maps.n["<Leader>t"] = vim.tbl_get(opts, "_map_sections", "t")
-        if vim.fn.executable "git" == 1 and vim.fn.executable "lazygit" == 1 then
-          maps.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
-          local lazygit = {
-            callback = function()
-              local worktree = astro.file_worktree()
-              local flags = worktree
-                  and (" --work-tree=%s --git-dir=%s"):format(
-                    vim.fn.shellescape(worktree.toplevel),
-                    vim.fn.shellescape(worktree.gitdir)
-                  )
-                or ""
-              astro.toggle_term_cmd { cmd = "lazygit " .. flags, direction = "float" }
+        -- Astrograph: os atalhos que dependem de binários externos (lazygit, node,
+        -- gdu, btm, python) são registrados logo após o startup, um binário por
+        -- tick. No Windows cada `executable()` de um binário ausente custa ~20ms,
+        -- o que somava ~100ms ao boot. Overrides do usuário (inclusive `false`)
+        -- continuam valendo: chaves já definidas na config final são puladas.
+        local function optional_maps()
+          local exe = require("astronvim").executable
+          local checks = {
+            function(m)
+              if exe "git" and exe "lazygit" then
+                m.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
+                local function lazygit()
+                  local worktree = astro.file_worktree()
+                  local flags = worktree
+                      and (" --work-tree=%s --git-dir=%s"):format(
+                        vim.fn.shellescape(worktree.toplevel),
+                        vim.fn.shellescape(worktree.gitdir)
+                      )
+                    or ""
+                  astro.toggle_term_cmd { cmd = "lazygit " .. flags, direction = "float" }
+                end
+                m.n["<Leader>gg"] = { lazygit, desc = "ToggleTerm lazygit" }
+                m.n["<Leader>tl"] = { lazygit, desc = "ToggleTerm lazygit" }
+              end
             end,
-            desc = "ToggleTerm lazygit",
+            function(m)
+              if exe "node" then
+                m.n["<Leader>tn"] = { function() astro.toggle_term_cmd "node" end, desc = "ToggleTerm node" }
+              end
+            end,
+            function(m)
+              local gdu = "gdu"
+              if not exe(gdu) then
+                if vim.fn.has "win32" == 1 then
+                  gdu = "gdu_windows_amd64.exe"
+                elseif vim.fn.has "mac" == 1 then
+                  gdu = "gdu-go"
+                end
+              end
+              if exe(gdu) then
+                m.n["<Leader>tu"] =
+                  { function() astro.toggle_term_cmd { cmd = gdu, direction = "float" } end, desc = "ToggleTerm gdu" }
+              end
+            end,
+            function(m)
+              if exe "btm" then
+                m.n["<Leader>tt"] =
+                  { function() astro.toggle_term_cmd { cmd = "btm", direction = "float" } end, desc = "ToggleTerm btm" }
+              end
+            end,
+            function(m)
+              local python = exe "python" and "python" or exe "python3" and "python3"
+              if python then
+                m.n["<Leader>tp"] = { function() astro.toggle_term_cmd(python) end, desc = "ToggleTerm python" }
+              end
+            end,
           }
-          maps.n["<Leader>gg"] = { lazygit.callback, desc = lazygit.desc }
-          maps.n["<Leader>tl"] = { lazygit.callback, desc = lazygit.desc }
-        end
-        if vim.fn.executable "node" == 1 then
-          maps.n["<Leader>tn"] = { function() astro.toggle_term_cmd "node" end, desc = "ToggleTerm node" }
-        end
-        local gdu = "gdu"
-        if vim.fn.executable(gdu) ~= 1 then
-          if vim.fn.has "win32" == 1 then
-            gdu = "gdu_windows_amd64.exe"
-          elseif vim.fn.has "mac" == 1 then
-            gdu = "gdu-go"
+          local function step(i)
+            local check = checks[i]
+            if not check then return end
+            local m = astro.empty_map_table()
+            check(m)
+            local final = astro.config.mappings or {}
+            for mode, mode_maps in pairs(m) do
+              for lhs in pairs(mode_maps) do
+                if vim.tbl_get(final, mode, lhs) ~= nil then mode_maps[lhs] = nil end
+              end
+            end
+            astro.set_mappings(m)
+            vim.defer_fn(function() step(i + 1) end, 0)
           end
+          step(1)
         end
-        if vim.fn.executable(gdu) == 1 then
-          maps.n["<Leader>tu"] =
-            { function() astro.toggle_term_cmd { cmd = gdu, direction = "float" } end, desc = "ToggleTerm gdu" }
-        end
-        if vim.fn.executable "btm" == 1 then
-          maps.n["<Leader>tt"] =
-            { function() astro.toggle_term_cmd { cmd = "btm", direction = "float" } end, desc = "ToggleTerm btm" }
-        end
-        local python = vim.fn.executable "python" == 1 and "python" or vim.fn.executable "python3" == 1 and "python3"
-        if python then
-          maps.n["<Leader>tp"] = { function() astro.toggle_term_cmd(python) end, desc = "ToggleTerm python" }
-        end
+        vim.api.nvim_create_autocmd("User", {
+          pattern = "VeryLazy",
+          once = true,
+          desc = "Register external-tool terminal mappings",
+          callback = function() vim.schedule(optional_maps) end,
+        })
         maps.n["<Leader>tf"] = { "<Cmd>ToggleTerm direction=float<CR>", desc = "ToggleTerm float" }
         maps.n["<Leader>th"] =
           { "<Cmd>ToggleTerm size=10 direction=horizontal<CR>", desc = "ToggleTerm horizontal split" }

@@ -74,8 +74,10 @@ require("lazy").setup(specs --[[@as LazySpec]], {
       disabled_plugins = {
         "gzip",
         "netrwPlugin",
+        "rplugin", -- remote plugins (python/node): nenhum plugin do Astrograph usa
         "tarPlugin",
         "tohtml",
+        "tutor",
         "zipPlugin",
       },
     },

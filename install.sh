@@ -64,6 +64,12 @@ fi
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 
+# Debian/Ubuntu instalam o fd como `fdfind`; o picker do Snacks procura `fd`.
+if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then
+  ln -sfn "$(command -v fdfind)" "$BIN_DIR/fd"
+  info "fd: atalho $BIN_DIR/fd -> fdfind"
+fi
+
 # --- 2. Neovim 0.11+ -------------------------------------------------------
 need_nvim=1
 if command -v nvim >/dev/null 2>&1; then
@@ -74,6 +80,11 @@ if command -v nvim >/dev/null 2>&1; then
   else
     info "Neovim $ver é antigo; baixando a versão oficial..."
   fi
+fi
+if [ "$need_nvim" -eq 1 ] && [ "$OS" = "Darwin" ]; then
+  # o tarball abaixo é de Linux; no macOS o Homebrew é a fonte do Neovim
+  brew upgrade neovim 2>/dev/null || warn "Atualize o Neovim para 0.11+ (brew upgrade neovim)."
+  need_nvim=0
 fi
 if [ "$need_nvim" -eq 1 ]; then
   case "$ARCH" in
@@ -132,7 +143,10 @@ if command -v nvim >/dev/null 2>&1; then
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   info "Verificando o tema..."
   theme_out="$(nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>/dev/null || true)"
-  theme_name="${theme_out#*ARTHEME=}"
+  case "$theme_out" in
+    *ARTHEME=*) theme_name="${theme_out##*ARTHEME=}"; theme_name="${theme_name%%[[:space:]]*}" ;;
+    *) theme_name="" ;;
+  esac
   if [ -z "$theme_name" ]; then theme_name="desconhecido"; fi
   if printf '%s' "$theme_name" | grep -q astrograph; then
     info "Tema astrograph ativo ($theme_name)."

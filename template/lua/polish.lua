@@ -2,15 +2,8 @@
 -- This is just pure lua so anything that doesn't
 -- fit in the normal config locations above can go here
 
--- Otimização geral (performance)
---------------------------------
--- Cache de bytecode Lua: startup mais rápido nas execuções seguintes
--- (cross-platform: Windows, Linux e macOS)
-pcall(vim.loader.enable)
-
--- Evita a checagem de providers remotos não usados no startup
-vim.g.loaded_perl_provider = 0
-vim.g.loaded_ruby_provider = 0
+-- Otimização geral (performance): `vim.loader` e providers ficam no topo do
+-- `init.lua`, para valerem antes do lazy.nvim carregar.
 
 -- Treesitter compila parsers com o gcc do WinLibs (não tem MSVC/cl.exe)
 if vim.fn.has "win32" == 1 then vim.env.CC = "gcc" end
