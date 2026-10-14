@@ -4,9 +4,6 @@
 um monorepo que reúne o **core** do AstroNvim e o **template** (a configuração do usuário),
 com otimizações e ajustes próprios.
 
-> Não é um fork oficial no GitHub (sem o vínculo “forked from”). É um repositório novo que
-> **vendoriza** o core para podermos evoluí-lo junto com a configuração.
-
 ## Estrutura
 
 ```
