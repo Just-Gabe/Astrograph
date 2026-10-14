@@ -131,7 +131,9 @@ if command -v nvim >/dev/null 2>&1; then
 
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   info "Verificando o tema..."
-  theme_name="$(nvim --headless "+lua vim.wait(1500); io.write(vim.g.colors_name or 'nil')" +qa 2>/dev/null || true)"
+  theme_out="$(nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>/dev/null || true)"
+  theme_name="${theme_out#*ARTHEME=}"
+  if [ -z "$theme_name" ]; then theme_name="desconhecido"; fi
   if printf '%s' "$theme_name" | grep -q astrograph; then
     info "Tema astrograph ativo ($theme_name)."
   else

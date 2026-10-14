@@ -120,11 +120,18 @@ Info "Ligado: $Config -> $Root\template"
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) ------------------------
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
   Info 'Baixando plugins e ferramentas (pode demorar alguns minutos)...'
-  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>$null
+  # No PowerShell 5.1 um comando nativo que escreve em stderr aborta o script
+  # quando $ErrorActionPreference='Stop' (o nvim/treesitter escreve bastante).
+  # Isola as chamadas nativas para o instalador não parar no meio.
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>&1 | Out-Null
 
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   Info 'Verificando o tema...'
-  $themeName = ((nvim --headless "+lua vim.wait(1500); io.write(vim.g.colors_name or 'nil')" +qa 2>$null) -join '').Trim()
+  $themeOut = ((nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>&1) -join '')
+  $ErrorActionPreference = $prevEap
+  $themeName = if ($themeOut -match 'ARTHEME=(\S+)') { $Matches[1] } else { 'desconhecido' }
   if ($themeName -match 'astrograph') {
     Info "Tema astrograph ativo ($themeName)."
   } else {
