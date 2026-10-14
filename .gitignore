@@ -1,0 +1,12 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Neovim runtime / local state (não versionar)
+.mason/
+mason/
+lazy/
+lazy-lock.json.bak
+*.log
