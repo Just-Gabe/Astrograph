@@ -2,8 +2,12 @@
 -- $ASTROGRAPH_CORE), permitindo testar mudanças no core sem publicar nada.
 -- Caso contrário, cai para o AstroNvim oficial do GitHub.
 local function astrograph_core()
+  local uv = vim.uv or vim.loop
   local this = debug.getinfo(1, "S").source:sub(2)
-  local root = vim.fn.fnamemodify(this, ":h:h:h")
+  -- resolve symlinks/junctions: o config pode ser uma junction para o template,
+  -- então o caminho real é `Astrograph/template/...` → irmão `../core`.
+  local resolved = uv.fs_realpath(this) or this
+  local root = vim.fn.fnamemodify(resolved, ":h:h:h")
   -- EVITAR nil no início da lista: ipairs pararia antes de começar
   local candidates = {}
   local env = vim.env.ASTROGRAPH_CORE
@@ -11,7 +15,6 @@ local function astrograph_core()
   table.insert(candidates, root .. "/core")
   table.insert(candidates, vim.fn.expand "~/Astrograph/core")
 
-  local uv = vim.uv or vim.loop
   for _, dir in ipairs(candidates) do
     if dir and dir ~= "" and uv.fs_stat(dir .. "/lua/astronvim/init.lua") then
       return { dir = dir, name = "AstroNvim" } --[[@as LazySpec]]

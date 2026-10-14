@@ -27,9 +27,16 @@ Astrograph/
   - `ripgrep` → `<Leader>fw`, `<Leader>fW` (live grep)
   - Há uma guarda com `mason-registry.has_package` para nunca abortar a instalação dos
     outros pacotes quando o registry estiver incompleto/offline.
+- **`lua/plugins/animations.lua`** — animações no estilo *Claude/opencode*, via Snacks:
+  - **`animate`** — base rápida (`fps = 120`) com easing `outQuad` (suave, sem overshoot);
+  - **`scroll`** — scroll suave (`outCubic`), com animação mais curta ao segurar a tecla;
+  - **`indent`** — reativa a animação das indent guides (o AstroNvim desliga por padrão);
+  - **`win`** — backdrop levemente escurecido nos floats (notify, lazy, picker).
+  - Atalhos: `<Leader>ua` liga/desliga **todas** as animações; `<Leader>uC` só o scroll suave.
 - **`lua/polish.lua`** — otimização geral:
   - `vim.loader.enable()` (cache de bytecode Lua → startup mais rápido);
   - desabilita os providers Perl/Ruby não usados (evita checagem no startup);
+  - `smoothscroll` ligado (complementa o scroll suave do Snacks);
   - mantém o `CC=gcc` no Windows (treesitter compila com WinLibs).
 
 ### `lua/lazy_setup.lua` (template)
@@ -42,6 +49,26 @@ Astrograph/
 - Uma [Nerd Font](https://www.nerdfonts.com/font-downloads) instalada e configurada no terminal
 - Um compilador C no PATH (para os parsers do Treesitter)
 - `git` (obrigatório); `fd` e `ripgrep` são instalados automaticamente via Mason
+
+## Instalação (uma linha)
+
+Em uma máquina limpa, o instalador cuida de tudo: Neovim, Git, `ripgrep`, `fd`, compilador C,
+Nerd Font JetBrainsMono, o clone do Astrograph e a ligação da config (Lazy + Mason inclusos).
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.ps1 | iex
+```
+
+**Linux / macOS** (bash):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.sh | bash
+```
+
+Depois é só abrir um terminal novo e rodar `nvim`. Os dois scripts são **idempotentes**
+(podem rodar de novo) e fazem **backup** da config antiga antes de ligar a nova.
 
 ## Como usar
 
