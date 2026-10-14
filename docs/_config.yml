@@ -1,0 +1,25 @@
+title: Astrograph
+description: Neovim baseado no AstroNvim, com agentes de IA integrados, mais rápido e em português.
+lang: pt-BR
+
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+plugins:
+  - jekyll-remote-theme
+
+color_scheme: dark
+search_enabled: true
+heading_anchors: true
+back_to_top: true
+back_to_top_text: "Voltar ao topo"
+
+aux_links:
+  "Astrograph no GitHub": "https://github.com/Just-Gabe/Astrograph"
+aux_links_new_tab: true
+
+footer_content: >-
+  Astrograph é baseado no <a href="https://github.com/AstroNvim/AstroNvim">AstroNvim</a> (GPL-3.0).
+  Mantido por <a href="https://github.com/Just-Gabe">Just-Gabe</a>.
+
+# specs internas de design (não fazem parte do site)
+exclude:
+  - superpowers

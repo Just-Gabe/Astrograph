@@ -1,92 +1,13 @@
 # Astrograph
 
-**Astrograph** é a minha versão pessoal do [AstroNvim](https://github.com/AstroNvim/AstroNvim):
-um monorepo que reúne o **core** do AstroNvim e o **template** (a configuração do usuário),
-com otimizações e ajustes próprios.
+**Um Neovim pronto para usar**, baseado no [AstroNvim](https://github.com/AstroNvim/AstroNvim),
+com **agentes de IA dentro do editor**, abertura mais rápida e tudo em **português**.
 
-## Estrutura
+📖 **Documentação:** <https://just-gabe.github.io/Astrograph/>
 
-```
-Astrograph/
-├── core/       # Nossa versão do core (base: AstroNvim v6.1.0)
-└── template/   # Nossa configuração de usuário (derivada do AstroNvim/template)
-```
+![Tela inicial do Astrograph](docs/img/dashboard.png)
 
-- `core/` — código-fonte do AstroNvim (plugins, engine de configuração, UI via astroui/astrocore/astrolsp).
-- `template/` — a config que você abre no Neovim (`init.lua`, `lua/plugins/*`, etc.).
-
-## Mudanças e otimizações
-
-### `template/`
-- **`lua/plugins/mason.lua`** — instala `fd` e `ripgrep` via Mason de forma **cross-platform**
-  (Windows/Linux/macOS). São as dependências do *Snacks picker*:
-  - `fd` → `<Leader>ff`, `<Leader>fF`, `<Leader>fs` (buscar arquivos)
-  - `ripgrep` → `<Leader>fw`, `<Leader>fW` (live grep)
-  - Há uma guarda com `mason-registry.has_package` para nunca abortar a instalação dos
-    outros pacotes quando o registry estiver incompleto/offline.
-- **`lua/plugins/animations.lua`** — animações no estilo *Claude/opencode*, via Snacks:
-  - **`animate`** — base rápida (`fps = 120`) com easing `outQuad` (suave, sem overshoot);
-  - **`scroll`** — scroll suave (`outCubic`), com animação mais curta ao segurar a tecla;
-  - **`indent`** — reativa a animação das indent guides (o AstroNvim desliga por padrão);
-  - **`win`** — backdrop levemente escurecido nos floats (notify, lazy, picker).
-  - Atalhos: `<Leader>ua` liga/desliga **todas** as animações; `<Leader>uS` só o scroll suave.
-- **`lua/polish.lua`** — otimização geral:
-  - `vim.loader.enable()` (cache de bytecode Lua → startup mais rápido);
-  - desabilita os providers Perl/Ruby não usados (evita checagem no startup);
-  - `smoothscroll` ligado (complementa o scroll suave do Snacks);
-  - mantém o `CC=gcc` no Windows (treesitter compila com WinLibs).
-
-### Modo agentic (agentes no editor)
-
-Configurado em `template/lua/plugins/` com um núcleo de detecção em
-`template/lua/astrograph/agents.lua`. Prefixo único de IA: **`<Leader>A`**.
-
-- **`codecompanion.lua`** — engine unificada (CodeCompanion):
-  - **HTTP** → Claude, OpenAI, Gemini, **Ollama** e endpoints locais OpenAI-compatíveis;
-  - **ACP** → `claude_code`, `codex`, `gemini_cli`, `opencode` (no chat buffer);
-  - **CLI** → TUIs nativos recebendo contexto do buffer.
-  - Teclas: `<Leader>Ac` (chat), `<Leader>An` (novo chat), `<Leader>Aq` (inline),
-    `<Leader>Ap` (ações/adapter·modelo), `<Leader>Aa` (adicionar seleção). Dentro do chat, `ga` troca adapter/modelo.
-- **`terminals.lua`** — lança os CLIs num terminal flutuante (Snacks):
-  `<Leader>Al` (lançar/agente), `<Leader>AT` (alternar), `<Leader>A.` (enviar arquivo atual).
-- **`avante.lua`** — edição inline estilo Cursor, priorizando o modelo local (Ollama):
-  `<Leader>AE` (perguntar/editar), `<Leader>At`/`<Leader>As`/`<Leader>Af`/`<Leader>Az`.
-- Detecção automática: só habilita o que existe (Ollama no ar, CLIs no PATH); sem custo de startup.
-
-### Performance (startup ~390 ms → ~280 ms no Windows)
-
-Medido com `nvim --startuptime` e o profile do lazy.nvim. O que pesava não era o runtime
-legado do Vim (~18 ms no total), e sim checagens de binário e plugins carregados cedo:
-
-- **`core/` — `require("astronvim").executable(bin)`**: cache por sessão de `vim.fn.executable`.
-  No Windows cada busca de um binário **ausente** varre o PATH inteiro (~20 ms cada), e o core
-  repetia `git`/`rg` em vários specs.
-- **`core/.../toggleterm.lua`**: os atalhos de lazygit/node/gdu/btm/python são registrados logo
-  após o startup (`VeryLazy`, um binário por tick), sem bloquear a abertura. Overrides do
-  usuário continuam valendo.
-- **`core/.../_astroui.lua`**: sem `lazygit` instalado, o astroui não regrava o YAML do tema dele
-  a cada startup.
-- **`avante.lua`**: carrega só pelas teclas/comandos (antes: em todo primeiro arquivo aberto,
-  ~100 ms + detecção do Ollama). Primeiro arquivo aberto: ~230 ms → ~120 ms.
-- **Runtime legado**: `rplugin` e `tutor` desligados; providers perl/ruby/python3/node desligados
-  (nenhum plugin usa); `vim.loader` ativado no topo do `init.lua`, antes do lazy.nvim.
-- **`astrograph.agents`**: detecção de CLIs cacheada (`detect(true)` força nova checagem).
-
-### `lua/lazy_setup.lua` (template)
-- Passa a **preferir o core local** do monorepo (`../core`) quando existir, caindo para o
-  AstroNvim oficial caso contrário. Isso permite testar mudanças no core sem publicar nada.
-
-## Requisitos
-
-- Neovim **0.11+**
-- Uma [Nerd Font](https://www.nerdfonts.com/font-downloads) instalada e configurada no terminal
-- Um compilador C no PATH (para os parsers do Treesitter)
-- `git` (obrigatório); `fd` e `ripgrep` são instalados automaticamente via Mason
-
-## Instalação (uma linha)
-
-Em uma máquina limpa, o instalador cuida de tudo: Neovim, Git, `ripgrep`, `fd`, compilador C,
-Nerd Font JetBrainsMono, o clone do Astrograph e a ligação da config (Lazy + Mason inclusos).
+## Instalar
 
 **Windows** (PowerShell):
 
@@ -100,30 +21,66 @@ irm https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.sh | bash
 ```
 
-Depois é só abrir um terminal novo e rodar `nvim`. Os dois scripts são **idempotentes**
-(podem rodar de novo) e fazem **backup** da config antiga antes de ligar a nova.
+O instalador cuida de tudo: Neovim 0.11+, Git, ripgrep, fd, compilador C, a
+JetBrainsMono Nerd Font, o clone do Astrograph e a ligação da config (com backup da
+antiga). No fim, um checklist opcional instala agentes de IA: Claude Code, opencode,
+Codex, Gemini e Ollama. Depois é só abrir um terminal novo e rodar `nvim`.
 
-No fim, aparece um **checklist** (`[ ]`) pra escolher agentes opcionais — Claude Code, opencode,
-Codex CLI, Gemini CLI e Ollama (com download de modelo) — seguido dos passos de login. Sem
-terminal interativo, use a variável `ASTROGRAPH_AGENTS` (ex.: `ASTROGRAPH_AGENTS="claude,ollama:qwen2.5-coder:7b"`).
+[Mais detalhes da instalação →](https://just-gabe.github.io/Astrograph/instalacao)
 
-## Como usar
+## O que vem pronto
 
-Copie (ou faça symlink de) `template/` para o diretório de config do Neovim:
+- **Agentes de IA no prefixo `<Leader>A`**: terminal flutuante com Claude Code,
+  opencode, Codex ou Gemini; chat do CodeCompanion; edição inline com o avante; IA
+  local com Ollama. Ele detecta sozinho o que está instalado.
+- **Em português**: menu de atalhos, tela inicial, `:checkhealth astrograph` e
+  mensagens.
+- **Mais rápido**: abre em ~280 ms no Windows (o AstroNvim original, ~390 ms) e o
+  primeiro arquivo em ~120 ms (antes, ~230 ms).
+- **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
+  verificado.
+- **Arquivos editados pelo agente recarregam sozinhos** no editor.
+- **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `atalhos`, `docs`.
 
-- **Windows:** `%LOCALAPPDATA%\nvim`
-- **Linux/macOS:** `~/.config/nvim`
+| Editor | Menu de atalhos (`Espaço`) |
+| --- | --- |
+| ![Editor](docs/img/editor.png) | ![Atalhos](docs/img/atalhos.png) |
+| **Agentes de IA (`Espaço` `A`)** | **Diagnóstico (`:Astrograph saude`)** |
+| ![Agentes](docs/img/agentes.png) | ![Diagnóstico](docs/img/saude.png) |
 
-Durante o desenvolvimento do core, aponte a config para este checkout — o `lazy_setup.lua`
-detecta automaticamente o `../core` (ou use a variável de ambiente `ASTROGRAPH_CORE`):
+## Primeiros passos
 
-```powershell
-$env:ASTROGRAPH_CORE = "C:\caminho\para\Astrograph\core"
-nvim
+| Atalho | O que faz |
+| --- | --- |
+| `Espaço` | Mostra todos os atalhos (espere meio segundo) |
+| `<Leader>ff` / `<Leader>fw` | Buscar arquivo / texto |
+| `<Leader>e` | Explorador de arquivos |
+| `<Leader>w` / `<Leader>q` | Salvar / fechar janela |
+| `<Leader>Al` | Abrir um agente de IA no terminal |
+| `<Leader>Ac` | Chat com IA |
+| `<Leader>AE` | Pedir uma edição para a IA (selecione o trecho antes) |
+| `<Leader>um` | Ligar/desligar as animações |
+
+`<Leader>` é a tecla **Espaço**. Veja a [lista completa](https://just-gabe.github.io/Astrograph/uso)
+e o [guia dos agentes](https://just-gabe.github.io/Astrograph/agentes).
+
+## Estrutura
+
 ```
+core/       fork do core do AstroNvim (v6.1.0) com as otimizações
+template/   a config que o Neovim abre
+theme/      colorschemes astrograph e astrograph-light
+tools/      geradores da arte da tela inicial e dos prints
+docs/       documentação (GitHub Pages) e prints
+```
+
+[Como funciona por dentro →](https://just-gabe.github.io/Astrograph/desenvolvimento) ·
+[Performance →](https://just-gabe.github.io/Astrograph/performance) ·
+[Solução de problemas →](https://just-gabe.github.io/Astrograph/problemas)
 
 ## Créditos e licença
 
-Baseado em [AstroNvim](https://github.com/AstroNvim/AstroNvim) (GPL-3.0), de Folke Lemaitre
-e colaboradores. Este repositório é mantido por [Just-Gabe](https://github.com/Just-Gabe).
-O `core/` mantém a licença original; veja [`LICENSE`](./LICENSE).
+Baseado no [AstroNvim](https://github.com/AstroNvim/AstroNvim) (GPL-3.0), de Micah
+Halter ([mehalter](https://github.com/mehalter)) e colaboradores; usa o lazy.nvim e o
+snacks.nvim de Folke Lemaitre. Mantido por [Just-Gabe](https://github.com/Just-Gabe).
+O `core/` mantém a licença original; veja o [`LICENSE`](./LICENSE).
