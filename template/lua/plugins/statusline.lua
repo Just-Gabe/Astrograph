@@ -75,6 +75,14 @@ return {
         status.component.fill(),
         status.component.cmd_info(),
         status.component.fill(),
+        { -- agente trabalhando (chat/ações do CodeCompanion)
+          provider = function()
+            local ok, agentic = pcall(require, "astrograph.agentic")
+            local text = ok and agentic.status() or ""
+            return text ~= "" and (text .. "  ") or ""
+          end,
+          hl = { fg = "normal" },
+        },
         status.component.lsp(),
         status.component.virtual_env(),
         status.component.nav { percentage = false, scrollbar = false, hl = { fg = "buffer_fg" } },

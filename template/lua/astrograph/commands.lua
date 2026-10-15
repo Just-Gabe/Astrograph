@@ -102,6 +102,8 @@ end
 
 local function finished()
   require("astrograph.agents").detect(true)
+  -- o chat deixa de avisar "sem login" assim que o login entra
+  pcall(function() require("astrograph.agentic").refresh_login() end)
   notify "Pronto. Reinicie o Neovim para os agentes novos aparecerem no chat (<Leader>Ac)."
 end
 

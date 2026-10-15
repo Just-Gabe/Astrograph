@@ -5,7 +5,7 @@
 -- :Astrograph agente ou <Leader>Ag (nenhum custo de detecção no boot).
 --
 --   <Leader>Al  abrir o agente atual         <Leader>AT  alternar o terminal dele
---   <Leader>A.  enviar o arquivo atual ao agente
+--   <Leader>A.  mencionar o arquivo atual (ou a seleção) no agente: `@arquivo#L1-9`
 
 local M = {}
 
@@ -53,21 +53,37 @@ function M.toggle()
   end)
 end
 
----Envia o caminho do arquivo atual (buffer alternativo) para o terminal do agente.
+---Menciona o arquivo atual (ou as linhas selecionadas) no terminal do agente,
+---como `@caminho#L10-20`. Abre o terminal se ele ainda não existir.
 function M.send()
+  local ref = require("astrograph.agentic").mention()
+  if not ref then
+    vim.notify("Astrograph: abra um arquivo para mencioná-lo ao agente", vim.log.levels.WARN)
+    return
+  end
+  local function deliver(tries)
+    local buf = last.buf
+    local chan = buf and vim.api.nvim_buf_is_valid(buf) and vim.b[buf].terminal_job_id
+    if chan then
+      vim.api.nvim_chan_send(chan, ref)
+      return
+    end
+    if tries > 0 then vim.defer_fn(function() deliver(tries - 1) end, 150) end
+  end
+  if not (last.buf and vim.api.nvim_buf_is_valid(last.buf)) then
+    M.launch()
+    -- o TUI do agente leva um instante para aceitar texto
+    vim.defer_fn(function() deliver(20) end, 1200)
+  else
+    M.toggle_visible()
+    deliver(0)
+  end
+end
+
+---Mostra o terminal do agente (sem fechar se já estiver na tela).
+function M.toggle_visible()
   local buf = last.buf
-  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
-    vim.notify("Astrograph: nenhum terminal de agente aberto", vim.log.levels.WARN)
-    return
-  end
-  local chan = vim.b[buf].terminal_job_id
-  if not chan then
-    vim.notify("Astrograph: terminal sem job ativo", vim.log.levels.WARN)
-    return
-  end
-  local path = vim.fn.expand "#:p"
-  if path == "" then path = vim.fn.getcwd() end
-  vim.api.nvim_chan_send(chan, path .. " ")
+  if buf and vim.fn.bufwinid(buf) == -1 then M.toggle() end
 end
 
 ---@type LazySpec
@@ -78,7 +94,7 @@ return {
       { "<Leader>Al", M.launch, desc = "Abrir agente no terminal" },
       { "<Leader>AT", M.toggle, desc = "Alternar terminal do agente" },
       { "<Leader>Ag", function() require("astrograph.agents").pick() end, desc = "Escolher agente (vale para tudo)" },
-      { "<Leader>A.", M.send, desc = "Enviar arquivo atual ao agente" },
+      { "<Leader>A.", M.send, mode = { "n", "v" }, desc = "Mencionar arquivo/seleção ao agente" },
     },
   },
 }

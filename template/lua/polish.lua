@@ -35,6 +35,10 @@ require("astrograph.clipboard").setup()
 -- Agente central: trocar o agente no chat (`ga`) troca o de todo o modo agentic
 require("astrograph.agents").setup()
 
+-- Ações agênticas (corrigir, explicar, revisar, commit), login checado em
+-- segundo plano e indicador do agente trabalhando
+require("astrograph.agentic").setup()
+
 -- Pré-aquecimento no ocioso: a 1ª busca/explorador tão rápidos quanto os seguintes
 require("astrograph.warmup").setup()
 

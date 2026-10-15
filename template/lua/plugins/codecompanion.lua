@@ -63,6 +63,20 @@ return {
             if a.adapter == "codex" and not vim.env.OPENAI_API_KEY then
               ext.defaults = { auth_method = "chat-gpt" }
             end
+            -- Claude Code: o adapter declara `CLAUDE_CODE_OAUTH_TOKEN =
+            -- "CLAUDE_CODE_OAUTH_TOKEN"`; sem a variavel no ambiente, o
+            -- CodeCompanion mandava o proprio texto como token (erro 401). So
+            -- passa o token quando ele existe; senao a ponte usa o login do CLI
+            -- (`claude auth login`), como no terminal.
+            if a.adapter == "claude_code" then
+              ext.env = {
+                CLAUDE_CODE_OAUTH_TOKEN = function()
+                  local token = vim.env.CLAUDE_CODE_OAUTH_TOKEN
+                  return (token and token ~= "") and token or nil
+                end,
+              }
+              ext.handlers = { auth = function() return true end }
+            end
             return require("codecompanion.adapters").extend(a.adapter, ext)
           end
         end
@@ -132,12 +146,38 @@ return {
           local maps = opts.mappings
           maps.n = maps.n or {}
           maps.v = maps.v or {}
+          local agentic = function() return require "astrograph.agentic" end
+          -- abre o chat só depois de checar o login (cacheado): sem login o
+          -- agente nunca responde, e é melhor saber antes
+          local function chat(cmd)
+            return function()
+              agentic().ensure_ready(function() vim.cmd(cmd) end)
+            end
+          end
+          -- assistente inline: precisa de um modelo por HTTP (chave de API ou
+          -- Ollama); sem isso, o agente atual edita pelo avante
+          local function inline()
+            local info = require("astrograph.agents").detect()
+            local http = (info.ollama and info.local_model) or vim.env.ANTHROPIC_API_KEY
+              or vim.env.OPENAI_API_KEY or vim.env.GEMINI_API_KEY or require("astrograph.agents").local_url()
+            if http then return vim.cmd "CodeCompanion" end
+            local visual = vim.fn.mode():match "[vV\22]"
+            -- os <Plug> do avante só existem depois que ele carrega
+            require("lazy").load { plugins = { "avante.nvim" } }
+            vim.api.nvim_feedkeys(vim.keycode(visual and "<Plug>(AvanteEdit)" or "<Plug>(AvanteAsk)"), "m", false)
+          end
           maps.n["<Leader>A"] = { desc = "Agentes" }
-          maps.n["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (abrir/fechar)" }
-          maps.v["<Leader>Ac"] = { "<cmd>CodeCompanionChat Toggle<cr>", desc = "Chat (abrir/fechar)" }
-          maps.n["<Leader>An"] = { "<cmd>CodeCompanionChat<cr>", desc = "Novo chat" }
-          maps.n["<Leader>Aq"] = { "<cmd>CodeCompanion<cr>", desc = "Assistente inline" }
-          maps.v["<Leader>Aq"] = { "<cmd>CodeCompanion<cr>", desc = "Assistente inline" }
+          maps.n["<Leader>Ac"] = { chat "CodeCompanionChat Toggle", desc = "Chat (abrir/fechar)" }
+          maps.v["<Leader>Ac"] = { chat "CodeCompanionChat Toggle", desc = "Chat (abrir/fechar)" }
+          maps.n["<Leader>An"] = { chat "CodeCompanionChat", desc = "Novo chat" }
+          maps.n["<Leader>Aq"] = { inline, desc = "Assistente inline" }
+          maps.v["<Leader>Aq"] = { inline, desc = "Assistente inline" }
+          maps.n["<Leader>Ax"] = { function() agentic().fix() end, desc = "Corrigir o problema da linha" }
+          maps.n["<Leader>Ai"] = { function() agentic().explain() end, desc = "Explicar o arquivo" }
+          maps.v["<Leader>Ai"] = { function() agentic().explain() end, desc = "Explicar a seleção" }
+          maps.n["<Leader>Ar"] = { function() agentic().review() end, desc = "Revisar alterações" }
+          maps.n["<Leader>Am"] = { function() agentic().commit_message() end, desc = "Mensagem de commit" }
+          maps.n["<Leader>Ad"] = { function() agentic().changes() end, desc = "Ver alterações (diff)" }
           maps.n["<Leader>Ap"] = { "<cmd>CodeCompanionActions<cr>", desc = "Ações (adapter/modelo)" }
           maps.v["<Leader>Ap"] = { "<cmd>CodeCompanionActions<cr>", desc = "Ações (adapter/modelo)" }
           maps.v["<Leader>Aa"] = { "<cmd>CodeCompanionChat Add<cr>", desc = "Adicionar seleção ao chat" }

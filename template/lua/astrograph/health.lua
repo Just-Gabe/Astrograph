@@ -93,8 +93,9 @@ function M.check()
   local http = vim.env.ANTHROPIC_API_KEY or vim.env.OPENAI_API_KEY or vim.env.GEMINI_API_KEY or info.local_model
   if not http then
     health.info(
-      "Assistente inline (<Leader>Aq) precisa de Ollama ou de uma chave (ANTHROPIC_API_KEY, OPENAI_API_KEY ou GEMINI_API_KEY). "
-        .. "O chat e o terminal funcionam só com o login dos agentes."
+      "Assistente inline (<Leader>Aq): sem Ollama nem chave de API, ele usa o agente atual pelo avante "
+        .. "(com uma chave ANTHROPIC_API_KEY, OPENAI_API_KEY ou GEMINI_API_KEY, ou o Ollama, fica mais rápido). "
+        .. "Chat, terminal e as ações (<Leader>Ax corrigir, Ai explicar, Ar revisar, Am commit) usam o login dos agentes."
     )
   end
   if info.ollama then
