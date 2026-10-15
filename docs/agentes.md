@@ -14,13 +14,53 @@ todas no prefixo **`<Leader>A`** (Espaço + A maiúsculo).
 
 ![Menu de agentes]({{ '/img/agentes.png' | relative_url }})
 
+## Configurar em 1 minuto
+
+O instalador já faz isto. Para conferir ou refazer, dentro do `nvim`:
+
+```vim
+:Astrograph configurar
+```
+
+Ele verifica cada agente instalado e oferece, num terminal flutuante:
+
+- **instalar a ponte do chat** (ACP) que faltar;
+- **fazer login** nos agentes que ainda não estão logados (abre o navegador);
+- **instalar outros agentes** (Claude Code, opencode, Codex, Gemini).
+
+Depois, reinicie o Neovim. `:Astrograph agentes` mostra a situação de cada um:
+
+```
+Agentes de IA:
+  ✓ Claude Code  logado · chat ok
+  ✓ opencode     SEM LOGIN · chat ok
+  · Codex CLI    não instalado
+```
+
+Para entrar em um agente específico: `:Astrograph login claude` (ou `opencode`,
+`codex`, `gemini`).
+
+### O que cada agente precisa
+
+| Agente | Login | Ponte do chat (instalada automaticamente) |
+| --- | --- | --- |
+| Claude Code | `claude auth login` (conta claude.ai ou API) | `@agentclientprotocol/claude-agent-acp` |
+| opencode | `opencode auth login` | embutida (`opencode acp`) |
+| Codex CLI | `codex login` (ChatGPT) ou `OPENAI_API_KEY` | `@agentclientprotocol/codex-acp` |
+| Gemini CLI | na 1ª execução do `gemini` (saia com `/quit`) ou `GEMINI_API_KEY` | embutida |
+
+{: .note }
+O chat e o terminal usam **o login do próprio CLI**: não é preciso token nem
+chave de API. Só o assistente inline (`<Leader>Aq`) precisa de uma chave
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` ou `GEMINI_API_KEY`) ou do Ollama.
+
 ## Os três jeitos
 
 | Jeito | Quando usar | Atalho |
 | --- | --- | --- |
 | **Terminal do agente** | Conversar com o Claude Code, opencode, Codex ou Gemini no TUI deles, com o projeto aberto ao lado. | `<Leader>Al` |
 | **Chat (CodeCompanion)** | Chat dentro do Neovim, com o buffer/seleção como contexto. Funciona com APIs (Anthropic, OpenAI, Gemini), com agentes via ACP e com Ollama. | `<Leader>Ac` |
-| **Edição inline (avante)** | Pedir uma alteração num trecho selecionado, estilo Cursor. Prefere o modelo local (Ollama) quando ele está no ar. | `<Leader>AE` |
+| **Edição inline (avante)** | Pedir uma alteração num trecho selecionado, estilo Cursor. Usa o Ollama quando ele está no ar; senão o Claude Code pelo seu login. | `<Leader>AE` |
 
 ## Todos os atalhos
 
@@ -40,7 +80,10 @@ todas no prefixo **`<Leader>A`** (Espaço + A maiúsculo).
 | `<Leader>Az` | avante: modo zen |
 | `<Leader>As` | avante: alternar sugestões automáticas |
 
-Dentro do chat do CodeCompanion, `ga` troca o adapter/modelo.
+Dentro do chat do CodeCompanion, `ga` troca o agente/modelo. As respostas vêm em
+português.
+
+![Chat com o Claude Code]({{ '/img/chat.png' | relative_url }})
 
 ## Detecção automática
 
@@ -49,8 +92,9 @@ habilita o que funciona.
 
 - **CLIs no PATH**: `claude`, `opencode`, `codex`, `gemini` aparecem no
   `<Leader>Al` e como agentes do CodeCompanion.
-- **Chat padrão**: `claude_code` (via ACP) se o Claude Code estiver instalado;
-  senão o Ollama local; senão a API da Anthropic.
+- **Chat padrão**: o primeiro agente com a ponte do chat instalada (Claude
+  Code, opencode, Codex, Gemini, nessa ordem); senão o Ollama local; senão o
+  primeiro provedor com chave de API no ambiente.
 - **Ollama**: detectado pela porta (`OLLAMA_HOST` ou `localhost:11434`), sem
   atrasar a abertura do editor; a checagem só roda quando um plugin de IA carrega.
 
@@ -84,16 +128,11 @@ export ASTROGRAPH_LOCAL_MODEL=qwen2.5-coder-7b-instruct
 export ASTROGRAPH_LOCAL_KEY=opcional
 ```
 
-## Chaves de API
+## Chaves de API (opcional)
 
-Os adapters HTTP do CodeCompanion e o avante leem as chaves do ambiente:
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`. Os agentes de terminal
-(Claude Code, opencode, …) usam o login de cada um:
-
-```bash
-claude              # autentica o Claude Code
-opencode auth login
-```
+Só são necessárias para o assistente inline (`<Leader>Aq`) e para usar um
+provedor de API direto no chat. Leia-as do ambiente:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
 
 {: .warning }
 Não coloque chaves de API dentro dos arquivos da config (eles estão num

@@ -24,29 +24,36 @@ curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.s
 O instalador cuida de tudo: Neovim 0.11+, Git, ripgrep, fd, compilador C, a
 JetBrainsMono Nerd Font, o clone do Astrograph e a ligação da config (com backup da
 antiga). No fim, um checklist opcional instala agentes de IA: Claude Code, opencode,
-Codex, Gemini e Ollama. Depois é só abrir um terminal novo e rodar `nvim`.
+Codex, Gemini e Ollama. Em seguida ele instala o que o chat precisa e oferece
+fazer o **login de cada agente** ali mesmo. Depois é só abrir um terminal novo e
+rodar `nvim`.
 
 [Mais detalhes da instalação →](https://just-gabe.github.io/Astrograph/instalacao)
 
 ## O que vem pronto
 
-- **Agentes de IA no prefixo `<Leader>A`**: terminal flutuante com Claude Code,
-  opencode, Codex ou Gemini; chat do CodeCompanion; edição inline com o avante; IA
-  local com Ollama. Ele detecta sozinho o que está instalado.
+- **Agentes de IA no prefixo `<Leader>A`**: Claude Code, opencode, Codex ou Gemini
+  no terminal flutuante e no chat, usando o login de cada CLI (sem chave de API);
+  edição inline com o avante; IA local com Ollama. `:Astrograph configurar`
+  instala e faz login no que faltar.
 - **Em português**: menu de atalhos, tela inicial, `:checkhealth astrograph` e
   mensagens.
-- **Mais rápido**: abre em ~280 ms no Windows (o AstroNvim original, ~390 ms) e o
-  primeiro arquivo em ~120 ms (antes, ~230 ms).
+- **Mais rápido**: abre em ~256 ms no Windows (o AstroNvim original, ~392 ms);
+  arquivos abrem em estágios, com o essencial em ~59 ms.
+- **Moderno no terminal**: linha de comando com destaque, cursor animado, bordas
+  arredondadas, ghost text na completação e animações a 60 fps.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
   verificado.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.
-- **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `atalhos`, `docs`.
+- **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `configurar`, `login`, `atalhos`, `docs`.
 
 | Editor | Menu de atalhos (`Espaço`) |
 | --- | --- |
 | ![Editor](docs/img/editor.png) | ![Atalhos](docs/img/atalhos.png) |
-| **Agentes de IA (`Espaço` `A`)** | **Diagnóstico (`:Astrograph saude`)** |
-| ![Agentes](docs/img/agentes.png) | ![Diagnóstico](docs/img/saude.png) |
+| **Agentes de IA (`Espaço` `A`)** | **Chat com o Claude Code (`Espaço` `A` `c`)** |
+| ![Agentes](docs/img/agentes.png) | ![Chat](docs/img/chat.png) |
+| **Completação com ghost text** | **Diagnóstico (`:Astrograph saude`)** |
+| ![Completação](docs/img/completar.png) | ![Diagnóstico](docs/img/saude.png) |
 
 ## Primeiros passos
 
@@ -76,6 +83,7 @@ docs/       documentação (GitHub Pages) e prints
 
 [Como funciona por dentro →](https://just-gabe.github.io/Astrograph/desenvolvimento) ·
 [Performance →](https://just-gabe.github.io/Astrograph/performance) ·
+[Astrograph e AstroNvim →](https://just-gabe.github.io/Astrograph/astronvim) ·
 [Solução de problemas →](https://just-gabe.github.io/Astrograph/problemas)
 
 ## Créditos e licença

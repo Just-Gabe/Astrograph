@@ -286,13 +286,98 @@ if ($selectedIds.Count -gt 0) {
     }
   }
 
+}
+
+# --- 8. Configurar os agentes instalados (ponte do chat + login) -----------
+# Roda para TODOS os agentes no PATH, inclusive os que já existiam: o chat do
+# editor (<Leader>Ac) precisa da ponte ACP, e cada CLI precisa de login.
+# Sem terminal interativo, ou com ASTROGRAPH_NO_LOGIN=1, só mostra os comandos.
+$agentSetup = @(
+  [pscustomobject]@{ Id = 'claude';   Label = 'Claude Code'; Login = 'claude auth login';   AcpBin = 'claude-agent-acp'; AcpNpm = '@agentclientprotocol/claude-agent-acp'; Legacy = '@zed-industries/claude-agent-acp' },
+  [pscustomobject]@{ Id = 'opencode'; Label = 'opencode';    Login = 'opencode auth login'; AcpBin = $null;              AcpNpm = $null;                                   Legacy = $null },
+  [pscustomobject]@{ Id = 'codex';    Label = 'Codex CLI';   Login = 'codex login';         AcpBin = 'codex-acp';        AcpNpm = '@agentclientprotocol/codex-acp';        Legacy = $null },
+  [pscustomobject]@{ Id = 'gemini';   Label = 'Gemini CLI';  Login = 'gemini';              AcpBin = $null;              AcpNpm = $null;                                   Legacy = $null }
+)
+
+$canAsk = (-not [Console]::IsInputRedirected) -and ($env:ASTROGRAPH_NO_LOGIN -ne '1')
+if ($canAsk) { try { $null = [Console]::KeyAvailable } catch { $canAsk = $false } }
+
+function Test-AgentLogin($id) {
+  if (-not (Test-Bin $id)) { return $false }
+  switch ($id) {
+    'claude' {
+      if ($env:ANTHROPIC_API_KEY -or $env:CLAUDE_CODE_OAUTH_TOKEN) { return $true }
+      $raw = (claude auth status 2>&1 | Out-String)
+      if ($raw -match '"loggedIn"\s*:\s*true') { return $true }
+      if ($raw -match '"loggedIn"\s*:\s*false') { return $false }
+      return $null
+    }
+    'opencode' {
+      $raw = (opencode auth list 2>&1 | Out-String) -replace ([string][char]27 + '\[[\d;]*m'), ''
+      if ($raw -match '(\d+)\s+credentials?') { return ([int]$Matches[1] -gt 0) }
+      return $null
+    }
+    'codex' {
+      if ($env:OPENAI_API_KEY) { return $true }
+      codex login status 2>&1 | Out-Null
+      return ($LASTEXITCODE -eq 0)
+    }
+    'gemini' {
+      if ($env:GEMINI_API_KEY -or $env:GOOGLE_API_KEY) { return $true }
+      return (Test-Path (Join-Path $env:USERPROFILE '.gemini\oauth_creds.json'))
+    }
+  }
+  return $null
+}
+
+function Ask-YesNo($question) {
+  $answer = Read-Host "  $question [S/n]"
+  return ($answer -eq '' -or $answer -match '^[sSyY]')
+}
+
+$present = $agentSetup | Where-Object { Test-Bin $_.Id }
+if ($present) {
   Write-Host ''
-  Info 'Próximos passos (login dos agentes):'
-  if ($selectedIds -contains 'claude') { Write-Host '  claude            -> autentica o Claude Code' }
-  if ($selectedIds -contains 'opencode') { Write-Host '  opencode auth login' }
-  if ($selectedIds -contains 'codex') { Write-Host '  codex             -> autentica o Codex' }
-  if ($selectedIds -contains 'gemini') { Write-Host '  gemini            -> autentica o Gemini CLI' }
-  if ($selectedIds -contains 'ollama') { Write-Host '  ollama serve      -> se o serviço não estiver no ar' }
+  Info 'Configurando os agentes de IA...'
+  # stderr dos CLIs (avisos do npm, barras de progresso) não pode abortar o script
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $pending = @()
+  foreach ($a in $present) {
+    # 1) ponte ACP para o chat do editor
+    # pacote antigo (renomeado) da ponte: troca pelo novo
+    $legacyOn = $a.Legacy -and (Test-Path (Join-Path $env:APPDATA "npm\node_modules\$($a.Legacy)"))
+    if ($a.AcpNpm -and ((-not (Test-Bin $a.AcpBin)) -or $legacyOn)) {
+      Info "$($a.Label): instalando a ponte do chat ($($a.AcpNpm))..."
+      if ($a.Legacy) { npm uninstall -g $a.Legacy 2>&1 | Out-Null }
+      npm install -g $a.AcpNpm 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0) { Info "$($a.Label): ponte do chat instalada" }
+      else { Warn "$($a.Label): falha ao instalar $($a.AcpNpm) (rode depois: npm install -g $($a.AcpNpm))" }
+    }
+    # 2) login
+    $logged = Test-AgentLogin $a.Id
+    if ($logged -eq $true) {
+      Info "$($a.Label): login ok"
+    } elseif ($canAsk -and (Ask-YesNo "$($a.Label) está sem login. Entrar agora? (abre o navegador)")) {
+      if ($a.Id -eq 'gemini') { Info 'O Gemini abre a tela de login; depois de entrar, saia com /quit.' }
+      Invoke-Expression $a.Login
+      if ((Test-AgentLogin $a.Id) -eq $true) { Info "$($a.Label): login ok" }
+      else { $pending += $a }
+    } else {
+      $pending += $a
+    }
+  }
+  $ErrorActionPreference = $prevEap
+  Refresh-Path
+
+  if ($pending.Count -gt 0) {
+    Write-Host ''
+    Info 'Falta entrar nestes agentes (rode num terminal, ou no nvim: :Astrograph login):'
+    foreach ($a in $pending) { Write-Host ("  {0,-20} -> {1}" -f $a.Login, $a.Label) }
+  }
+  if ($selectedIds -contains 'ollama') { Write-Host '  ollama serve         -> se o Ollama não estiver no ar' }
+  Write-Host ''
+  Info 'No nvim: <Leader>Al abre o agente no terminal, <Leader>Ac abre o chat, :Astrograph agentes mostra o status.'
 }
 
 Info 'Pronto! Abra um terminal novo e rode: nvim'

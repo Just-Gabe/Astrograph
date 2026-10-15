@@ -1,6 +1,6 @@
 ---
 title: Solução de problemas
-nav_order: 9
+nav_order: 10
 ---
 
 # Solução de problemas
@@ -41,6 +41,13 @@ terminal **novo** depois de instalar para o PATH valer. No Linux:
 O executável (`claude`, `opencode`, `codex`, `gemini`) precisa estar no PATH do
 terminal que abriu o Neovim. Instale-o, abra um terminal novo e confira com
 `:Astrograph agentes`.
+
+## O chat (`<Leader>Ac`) não abre
+
+Rode `:Astrograph agentes`. Se aparecer "SEM LOGIN" ou "falta a ponte",
+`:Astrograph configurar` resolve e depois é só reiniciar o Neovim. No Windows,
+versões antigas do Astrograph não conseguiam iniciar a ponte do chat (os CLIs
+do npm são scripts `.cmd`); atualize com `:Astrograph atualizar`.
 
 ## O avante/chat não usa o Ollama
 

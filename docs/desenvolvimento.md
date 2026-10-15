@@ -46,6 +46,7 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 | `commands.lua` | `:Astrograph atualizar / saude / agentes / atalhos / docs` |
 | `health.lua` | `:checkhealth astrograph` |
 | `dashboard.lua` | Cena animada da tela inicial e rodapé em português |
+| `plugins/visual.lua` | ui2, bordas arredondadas, ghost text e cursor animado |
 | `art.lua` | Arte gerada por `tools/gen_art.py` (não edite à mão) |
 
 ## Diferenças do core em relação ao AstroNvim
@@ -54,9 +55,13 @@ O `core/` é um fork do AstroNvim v6.1.0. As mudanças são pequenas e marcadas 
 comentários `Astrograph:` no código:
 
 - `astronvim.executable()`: cache de `vim.fn.executable`;
+- `plugins/_astrocore_autocmds.lua`: arquivo em estágios (`AstroFile` →
+  `AstroFileIdle`) e detecção do git sem processo externo;
 - `plugins/toggleterm.lua`: atalhos de ferramentas externas registrados após o startup;
-- `plugins/_astroui.lua`: tema do lazygit só quando ele está instalado;
+- `astronvim/lazygit.lua` + `plugins/_astroui.lua`: tema do lazygit só quando ele existe;
 - descrições dos atalhos, tela inicial e mensagens em português.
+
+A análise completa está em [Astrograph e AstroNvim](astronvim).
 
 ## Desenvolver com o checkout local
 

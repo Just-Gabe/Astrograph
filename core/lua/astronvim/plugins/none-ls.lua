@@ -25,6 +25,6 @@ return {
       config = function(...) require "astronvim.plugins.configs.mason-null-ls"(...) end,
     },
   },
-  event = "User AstroFile",
+  event = "User AstroFileIdle",
   opts = {},
 }

@@ -154,18 +154,34 @@ return {
                 if autocmd.group_name then skip_augroups[autocmd.group_name] = true end
               end
               skip_augroups["filetypedetect"] = false -- don't skip filetypedetect events
+              -- Astrograph: o arquivo abre em estágios. `AstroFile` carrega só o
+              -- essencial (LSP, completação, treesitter); o resto (`AstroFileIdle`:
+              -- TODOs, cores, breadcrumbs, autotag, none-ls; e o git) vem num tick
+              -- seguinte, depois de o editor desenhar e voltar a responder.
               astro.event "File"
-              local folder = vim.fs.abspath(vim.fs.dirname(current_file))
-              if vim.fn.has "win32" == 1 then folder = ('"%s"'):format(folder) end
-              if require("astronvim").executable "git" then
-                if astro.cmd({ "git", "-C", folder, "rev-parse" }, false) or astro.file_worktree() then
-                  astro.event "GitFile"
+              vim.defer_fn(function()
+                if not vim.api.nvim_buf_is_valid(args.buf) then return end
+                astro.event "FileIdle"
+                -- Astrograph: procura `.git` em Lua puro (~0,2 ms). O `git rev-parse`
+                -- (via `cmd.exe /C` no Windows) custava ~40 ms síncronos por arquivo.
+                -- `GIT_DIR` no ambiente e worktrees configurados caem no método antigo.
+                local in_git
+                if require("astronvim").executable "git" then
+                  if vim.env.GIT_DIR then
+                    local folder = vim.fs.abspath(vim.fs.dirname(current_file))
+                    if vim.fn.has "win32" == 1 then folder = ('"%s"'):format(folder) end
+                    in_git = astro.cmd({ "git", "-C", folder, "rev-parse" }, false) ~= nil
+                  else
+                    in_git = vim.fs.root(current_file, ".git") ~= nil
+                  end
+                  in_git = in_git or astro.file_worktree() ~= nil
+                  if in_git then
+                    astro.event "GitFile"
+                    pcall(vim.api.nvim_del_augroup_by_name, "file_user_events")
+                  end
+                else
                   pcall(vim.api.nvim_del_augroup_by_name, "file_user_events")
                 end
-              else
-                pcall(vim.api.nvim_del_augroup_by_name, "file_user_events")
-              end
-              vim.schedule(function()
                 if require("astrocore.buffer").is_valid(args.buf) then
                   for _, autocmd in ipairs(vim.api.nvim_get_autocmds { event = args.event }) do
                     if autocmd.group_name and not skip_augroups[autocmd.group_name] then
@@ -177,7 +193,7 @@ return {
                     end
                   end
                 end
-              end)
+              end, 10)
             end)
           end,
         },

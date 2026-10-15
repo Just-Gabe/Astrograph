@@ -62,7 +62,28 @@ return {
         toggle = { default = "<Leader>At", suggestion = "<Leader>As" },
       }
 
-      -- Local (Ollama) quando disponível; senão Claude via API/env.
+      -- Agentes via ACP (usam o login do CLI, sem chave de API). No Windows o
+      -- binário do npm é um `.cmd`: o uv.spawn precisa do caminho completo. O
+      -- ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE padrão aponta para o shim sem
+      -- extensão (que não executa no Windows); vazio, a ponte usa o CLI embutido.
+      opts.acp_providers = opts.acp_providers or {}
+      for _, a in ipairs(agents.agents) do
+        if a.adapter == "claude_code" and agents.has(a.bin) and agents.has_acp(a) then
+          opts.acp_providers["claude-code"] = vim.tbl_deep_extend("force", opts.acp_providers["claude-code"] or {}, {
+            command = agents.exe(a.acp_bin),
+            env = { ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = "" },
+          })
+        elseif a.adapter == "gemini_cli" and agents.has(a.bin) then
+          opts.acp_providers["gemini-cli"] =
+            vim.tbl_deep_extend("force", opts.acp_providers["gemini-cli"] or {}, { command = agents.exe(a.bin) })
+        elseif a.adapter == "codex" and agents.has(a.bin) and agents.has_acp(a) then
+          opts.acp_providers["codex"] =
+            vim.tbl_deep_extend("force", opts.acp_providers["codex"] or {}, { command = agents.exe(a.acp_bin) })
+        end
+      end
+
+      -- Provedor: modelo local (Ollama) quando no ar; senão Claude por API (se
+      -- houver chave); senão o Claude Code via ACP; por último a API do Claude.
       if info.ollama and info.local_model then
         opts.provider = "ollama"
         opts.providers = {
@@ -75,6 +96,10 @@ return {
             end,
           },
         }
+      elseif vim.env.ANTHROPIC_API_KEY then
+        opts.provider = "claude"
+      elseif opts.acp_providers["claude-code"] then
+        opts.provider = "claude-code"
       else
         opts.provider = "claude"
       end

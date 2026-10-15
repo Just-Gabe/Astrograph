@@ -1,6 +1,6 @@
 return {
   "stevearc/aerial.nvim",
-  event = "User AstroFile",
+  event = "User AstroFileIdle",
   specs = {
     {
       "AstroNvim/astrocore",

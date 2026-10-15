@@ -51,14 +51,60 @@ return {
         end
       end
 
-      -- Defaults por detecção. inline/cmd/background exigem adapter HTTP.
-      local local_default = (info.ollama and info.local_model and "ollama") or "anthropic"
-      local chat_default = (info.claude and "claude_code") or local_default
+      -- Adapters ACP (agentes no chat). No Windows os CLIs do npm são `.cmd` e o
+      -- spawn pelo nome falha (ENOENT): usa o caminho completo resolvido.
+      opts.adapters.acp = opts.adapters.acp or {}
+      for _, a in ipairs(agents.agents) do
+        if agents.has(a.bin) and agents.has_acp(a) then
+          opts.adapters.acp[a.adapter] = function()
+            local cmd = agents.acp_command(a)
+            local ext = { commands = { default = cmd } }
+            -- Codex: sem OPENAI_API_KEY usa o login do ChatGPT (`codex login`)
+            if a.adapter == "codex" and not vim.env.OPENAI_API_KEY then
+              ext.defaults = { auth_method = "chat-gpt" }
+            end
+            return require("codecompanion.adapters").extend(a.adapter, ext)
+          end
+        end
+      end
+
+      -- Padrões por detecção. inline/cmd/background exigem um adapter HTTP:
+      -- Ollama local, depois o primeiro provedor com chave de API no ambiente.
+      local http_default = (info.ollama and info.local_model and "ollama")
+        or (vim.env.ANTHROPIC_API_KEY and "anthropic")
+        or (vim.env.OPENAI_API_KEY and "openai")
+        or (vim.env.GEMINI_API_KEY and "gemini")
+        or (url and "astrograph_local")
+        or "anthropic"
+      -- Chat: o primeiro agente com a ponte ACP instalada (usa o login do CLI);
+      -- senão o mesmo adapter HTTP.
+      local chat_default = http_default
+      for _, a in ipairs(agents.agents) do
+        if agents.has(a.bin) and agents.has_acp(a) then
+          chat_default = a.adapter
+          break
+        end
+      end
 
       opts.interactions = opts.interactions or {}
-      opts.interactions.chat = vim.tbl_deep_extend("force", opts.interactions.chat or {}, { adapter = chat_default })
+      opts.interactions.chat = vim.tbl_deep_extend("force", opts.interactions.chat or {}, {
+        adapter = chat_default,
+        roles = {
+          user = "Você",
+          llm = function(adapter) return adapter.formatted_name end,
+        },
+      })
+
+      -- Chat em português (textos e respostas) e janelas com borda arredondada.
+      opts.opts = vim.tbl_deep_extend("force", opts.opts or {}, { language = "Portuguese" })
+      opts.display = vim.tbl_deep_extend("force", opts.display or {}, {
+        chat = {
+          intro_message = "Chat do Astrograph ✨  ? opções · ga troca o agente",
+          floating_window = { border = "rounded" },
+        },
+      })
       for _, key in ipairs { "inline", "cmd", "background" } do
-        opts.interactions[key] = vim.tbl_deep_extend("force", opts.interactions[key] or {}, { adapter = local_default })
+        opts.interactions[key] = vim.tbl_deep_extend("force", opts.interactions[key] or {}, { adapter = http_default })
       end
 
       -- Interação CLI: registra só os agentes presentes no PATH.

@@ -37,6 +37,7 @@ Treesitter terminam de compilar em segundo plano.
 | Config | liga `%LOCALAPPDATA%\nvim` → `Astrograph\template` | liga `~/.config/nvim` → `~/Astrograph/template` |
 | Plugins | `Lazy! restore` + ferramentas do Mason | igual |
 | Agentes | checklist opcional (Claude Code, opencode, Codex, Gemini, Ollama) | igual |
+| Login dos agentes | instala a ponte do chat e oferece login em cada agente instalado | igual |
 
 {: .note }
 Os dois scripts podem rodar de novo sem problema: atualizam o clone, mantêm a
@@ -57,6 +58,19 @@ ASTROGRAPH_AGENTS="claude,opencode" bash -c "$(curl -fsSL https://raw.githubuser
 
 Valores aceitos: `claude`, `opencode`, `codex`, `gemini`, `ollama` e
 `ollama:<modelo>` (baixa o modelo e o grava como modelo local).
+
+## Login dos agentes
+
+No fim, o instalador passa por **todos** os agentes instalados (inclusive os
+que já existiam):
+
+1. instala a ponte do chat que faltar (Claude Code e Codex);
+2. confere o login de cada um;
+3. pergunta se quer entrar agora (`[S/n]`) e abre o login no navegador.
+
+O que ficar pendente aparece listado no fim, e dá para resolver depois no
+editor com `:Astrograph configurar`. Para pular as perguntas, defina
+`ASTROGRAPH_NO_LOGIN=1`.
 
 ## Atualizar
 

@@ -53,6 +53,18 @@ Ao abrir o `nvim` sem arquivo aparece a tela inicial. Cada item tem uma tecla:
 | `Ctrl` + `h` `j` `k` `l` | Ir para a janela da esquerda/baixo/cima/direita |
 | `]b` / `[b` | Próximo / anterior buffer |
 
+## Completação
+
+Enquanto você digita, o menu de sugestões aparece com a documentação ao lado e
+a primeira sugestão em cinza na própria linha (ghost text).
+
+| Tecla | O que faz |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Próxima / anterior sugestão |
+| `Enter` | Confirmar |
+| `Ctrl-Espaço` | Abrir o menu |
+| `Ctrl-e` | Fechar o menu |
+
 ## Buscar (`<Leader>f`)
 
 ![Busca de arquivos]({{ '/img/busca.png' | relative_url }})

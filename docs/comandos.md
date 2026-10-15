@@ -11,7 +11,9 @@ nav_order: 5
 | --- | --- |
 | `:Astrograph atualizar` | Baixa a versão nova (`git pull` no clone) e sincroniza os plugins com o `lazy-lock.json` |
 | `:Astrograph saude` | Abre o diagnóstico (`:checkhealth astrograph`) |
-| `:Astrograph agentes` | Mostra os agentes de IA detectados (refaz a detecção) |
+| `:Astrograph agentes` | Mostra cada agente de IA: instalado, logado e com o chat pronto |
+| `:Astrograph configurar` | Instala as pontes do chat e faz os logins que faltam |
+| `:Astrograph login [agente]` | Abre o login de um agente (`claude`, `opencode`, `codex`, `gemini`) |
 | `:Astrograph atalhos` | Busca entre todos os atalhos |
 | `:Astrograph docs` | Abre esta documentação no navegador |
 
@@ -23,7 +25,7 @@ Confere, em português, tudo o que o Astrograph precisa:
 
 - versão do Neovim, de onde vêm o core e o tema;
 - `git`, `ripgrep`, `fd`, compilador C e `lazygit` (opcional);
-- agentes de IA no PATH, Ollama no ar e modelo local.
+- agentes de IA: instalados, logados e com a ponte do chat; Ollama e modelo local.
 
 ![Diagnóstico do Astrograph]({{ '/img/saude.png' | relative_url }})
 

@@ -51,6 +51,24 @@ depois as estrelas piscam devagar.
 - A arte fica em `template/lua/astrograph/art.lua`, gerada por
   `python tools/gen_art.py`.
 
+## Visual moderno no terminal
+
+| Recurso | O que muda |
+| --- | --- |
+| **Linha de comando (ui2)** | Destaque de sintaxe enquanto você digita e mensagens sem o "Press ENTER". Nativo do Neovim 0.12. |
+| **Cursor animado** | Um rastro curto e suave ao pular pelo texto (smear-cursor). |
+| **Bordas arredondadas** | Em hovers do LSP, diagnósticos, completação e documentação. |
+| **Ghost text** | A primeira sugestão da completação aparece em cinza na própria linha. |
+| **Linha do cursor** | Destacada só na janela ativa. |
+
+![Linha de comando com destaque]({{ '/img/linha-de-comando.png' | relative_url }})
+
+![Completação com ghost text]({{ '/img/completar.png' | relative_url }})
+
+{: .note }
+A ui2 ainda é experimental no Neovim. Se algo estranho aparecer nas mensagens,
+desligue com `vim.g.astrograph_ui2 = false` no começo do `template/init.lua`.
+
 ## Animações da interface
 
 Feitas pelo Snacks, no estilo "Claude/opencode": rápidas, suaves e sem
@@ -65,10 +83,11 @@ Feitas pelo Snacks, no estilo "Claude/opencode": rápidas, suaves e sem
 
 | Atalho | O que faz |
 | --- | --- |
-| `<Leader>um` | Liga/desliga **todas** as animações |
+| `<Leader>um` | Liga/desliga **todas** as animações (inclui o cursor animado) |
 | `<Leader>uM` | Liga/desliga só o scroll suave |
 
 {: .note }
-Via SSH as animações começam desligadas (cada quadro vira tráfego de rede).
+Via SSH as animações e o cursor animado começam desligados (cada quadro vira
+tráfego de rede).
 `<Leader>um` religa. Para desligar sempre, ponha `vim.g.snacks_animate = false`
 no `template/lua/polish.lua`.

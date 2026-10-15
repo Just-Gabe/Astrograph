@@ -214,6 +214,8 @@ class Renderer:
         ox, oy = pad, pad + bar
         for r, row in enumerate(grid.cells):
             for c, (text, hid) in enumerate(row):
+                # seletores de variação (ex.: o U+FE0F depois de um emoji) não têm glifo próprio
+                text = text.replace("\ufe0f", "").replace("\ufe0e", "")
                 a = grid.hl.get(hid, {})
                 fg, bg = a.get("foreground", grid.fg), a.get("background", grid.bg)
                 if a.get("reverse"):

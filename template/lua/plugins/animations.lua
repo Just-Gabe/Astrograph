@@ -34,7 +34,16 @@ return {
       return opts
     end,
     keys = {
-      { "<Leader>um", function() require("snacks").toggle.animate():toggle() end, desc = "Alternar animações" },
+      {
+        "<Leader>um",
+        function()
+          require("snacks").toggle.animate():toggle()
+          -- o cursor animado (smear-cursor) acompanha o liga/desliga global
+          local ok, smear = pcall(require, "smear_cursor")
+          if ok then smear.enabled = vim.g.snacks_animate ~= false end
+        end,
+        desc = "Alternar animações",
+      },
       { "<Leader>uM", function() require("snacks").toggle.scroll():toggle() end, desc = "Alternar scroll suave" },
     },
   },

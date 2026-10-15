@@ -10,8 +10,8 @@ Medido no Windows 11 com `nvim --startuptime` e o profile do lazy.nvim
 
 | | AstroNvim original | Astrograph |
 | --- | --- | --- |
-| Abrir o editor | ~392 ms | **~277 ms** (−29%) |
-| Primeiro arquivo aberto | ~230 ms | **~119 ms** (−48%) |
+| Abrir o editor | ~392 ms | **~256 ms** (−35%) |
+| Primeiro arquivo: caminho crítico | ~230 ms | **~59 ms** (−74%) |
 
 ## De onde veio o ganho
 
@@ -27,7 +27,16 @@ e `rg` em vários lugares.
 - Os atalhos que dependem de programas externos (`<Leader>tl`, `<Leader>tn`,
   `<Leader>tp`, `<Leader>tu`, `<Leader>tt`, `<Leader>gg`) são registrados logo
   depois que a tela aparece, um programa por vez, sem travar a abertura.
-- Sem lazygit instalado, o tema dele não é regravado em todo startup.
+- O tema do lazygit só é configurado depois do startup, e só se ele existir.
+
+**Arquivo em estágios.** O AstroNvim carregava tudo ao abrir um arquivo
+(~120 ms com o editor travado) e ainda rodava `cmd.exe /C git rev-parse`
+(~39 ms) para saber se o arquivo está num repositório. Agora:
+
+- `AstroFile` (na hora): só LSP, completação e Treesitter;
+- `AstroFileIdle` (10 ms depois, quando o arquivo já apareceu): none-ls,
+  TODOs, destaque de cores, breadcrumbs, autotag e autopairs;
+- git: detectado procurando a pasta `.git` em Lua (~0,2 ms), sem processo.
 
 **Plugins carregados cedo demais.** O avante carregava em todo primeiro
 arquivo aberto (~100 ms + checagem do Ollama). Agora só carrega quando você usa

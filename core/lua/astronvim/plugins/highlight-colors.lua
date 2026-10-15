@@ -1,6 +1,6 @@
 return {
   "brenoprata10/nvim-highlight-colors",
-  event = { "User AstroFile", "InsertEnter" },
+  event = { "User AstroFileIdle", "InsertEnter" },
   cmd = "HighlightColors",
   specs = {
     {

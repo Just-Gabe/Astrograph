@@ -57,11 +57,45 @@ function M.check()
   local info = agents.detect(true)
   local found = agents.available()
   if #found == 0 then
-    health.info "Nenhum agente-CLI no PATH (claude, opencode, codex, gemini). Instale pelo instalador ou com npm."
+    health.info "Nenhum agente de IA instalado. Rode `:Astrograph configurar` para instalar um."
   else
     for _, a in ipairs(found) do
-      health.ok(("%s (`%s`) — <Leader>Al abre no terminal"):format(a.label, a.bin))
+      local login = agents.logged_in(a)
+      if login == false then
+        health.warn(("%s instalado, mas sem login — rode `:Astrograph login %s`"):format(a.label, a.bin))
+      else
+        health.ok(("%s (`%s`)%s — <Leader>Al abre no terminal"):format(
+          a.label,
+          a.bin,
+          login and ", logado" or ""
+        ))
+      end
+      if agents.legacy_acp(a) then
+        health.warn(
+          ("%s no chat funciona, mas a ponte `%s` é o pacote antigo (renomeado, sem atualizações) — rode `:Astrograph configurar`"):format(
+            a.label,
+            a.acp_bin
+          )
+        )
+      elseif agents.has_acp(a) then
+        health.ok(("%s no chat (<Leader>Ac): ponte ACP `%s` instalada"):format(a.label, a.acp_bin))
+      else
+        health.warn(
+          ("%s não abre no chat: falta a ponte `%s` — rode `:Astrograph configurar` (npm install -g %s)"):format(
+            a.label,
+            a.acp_bin,
+            a.acp_npm or ""
+          )
+        )
+      end
     end
+  end
+  local http = vim.env.ANTHROPIC_API_KEY or vim.env.OPENAI_API_KEY or vim.env.GEMINI_API_KEY or info.local_model
+  if not http then
+    health.info(
+      "Assistente inline (<Leader>Aq) precisa de Ollama ou de uma chave (ANTHROPIC_API_KEY, OPENAI_API_KEY ou GEMINI_API_KEY). "
+        .. "O chat e o terminal funcionam só com o login dos agentes."
+    )
   end
   if info.ollama then
     health.ok(("Ollama no ar em %s (%d modelos)"):format(agents.ollama_host(), #info.models))

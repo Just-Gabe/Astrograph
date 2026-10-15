@@ -21,6 +21,7 @@ return {
           local checks = {
             function(m)
               if exe "git" and exe "lazygit" then
+                require("astronvim.lazygit").enable()
                 m.n["<Leader>g"] = vim.tbl_get(opts, "_map_sections", "g")
                 local function lazygit()
                   local worktree = astro.file_worktree()

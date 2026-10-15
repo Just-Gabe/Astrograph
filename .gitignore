@@ -13,3 +13,6 @@ lazy-lock.json.bak
 
 # Mockups do brainstorm (visual companion)
 .superpowers/
+
+# Python (tools/)
+__pycache__/

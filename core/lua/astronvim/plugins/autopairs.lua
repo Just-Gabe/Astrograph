@@ -1,6 +1,6 @@
 return {
   "windwp/nvim-autopairs",
-  event = "User AstroFile",
+  event = { "InsertEnter", "User AstroFileIdle" },
   specs = {
     {
       "AstroNvim/astrocore",

@@ -2,7 +2,7 @@ return {
   "folke/todo-comments.nvim",
   dependencies = { { "folke/snacks.nvim", optional = true } },
   cmd = { "TodoTrouble", "TodoLocList", "TodoQuickFix" },
-  event = "User AstroFile",
+  event = "User AstroFileIdle",
   specs = {
     { "nvim-lua/plenary.nvim", lazy = true },
     {

@@ -20,9 +20,10 @@ editor**, abertura mais rápida e tudo em **português**.
 
 | | |
 | --- | --- |
-| **Agentes de IA** | Claude Code, opencode, Codex e Gemini no terminal flutuante; chat do CodeCompanion; edição inline com o avante; IA local com Ollama. Tudo no prefixo `<Leader>A`. |
+| **Agentes de IA** | Claude Code, opencode, Codex e Gemini no terminal flutuante e no chat; edição inline com o avante; IA local com Ollama. O instalador e o `:Astrograph configurar` cuidam dos logins. Tudo no prefixo `<Leader>A`. |
 | **Em português** | Menus de atalhos, tela inicial, diagnóstico (`:checkhealth astrograph`) e mensagens. |
-| **Rápido** | ~280 ms para abrir no Windows (o AstroNvim original levava ~390 ms). Plugins pesados só carregam quando você usa. |
+| **Rápido** | ~256 ms para abrir no Windows (o AstroNvim original, ~392 ms). Arquivos abrem em estágios: o essencial em ~59 ms. |
+| **Moderno no terminal** | Linha de comando com destaque, cursor animado, bordas arredondadas, ghost text e animações a 60 fps. |
 | **Tema próprio** | `astrograph` (escuro) e `astrograph-light`, com contraste verificado. |
 | **Instalação de uma linha** | Windows, Linux e macOS: o instalador cuida de Neovim, Git, ripgrep, fd, compilador C e fonte. |
 

@@ -28,6 +28,17 @@ as_root() {
   if [ "$(id -u)" -eq 0 ]; then "$@"; elif command -v sudo >/dev/null 2>&1; then sudo "$@"; else "$@"; fi
 }
 
+# npm global: sem sudo quando o prefixo é gravável (nvm, Homebrew, ~/.npm-global)
+npm_global() {
+  local prefix
+  prefix="$(npm prefix -g 2>/dev/null || true)"
+  if [ "$OS" = "Darwin" ] || [ "$(id -u)" -eq 0 ] || { [ -n "$prefix" ] && [ -w "$prefix/lib" ]; }; then
+    npm "$@"
+  else
+    as_root npm "$@"
+  fi
+}
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -253,9 +264,7 @@ if [ "${#SELECTED_IDS[@]}" -gt 0 ]; then
     elif command -v apk >/dev/null 2>&1; then as_root apk add nodejs npm
     fi
   fi
-  npm_install() {
-    if [ "$OS" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; then npm install -g "$1"; else as_root npm install -g "$1"; fi
-  }
+  npm_install() { npm_global install -g "$1"; }
   for id in "${SELECTED_IDS[@]}"; do
     idx=-1
     for ((i = 0; i < ${#AGENT_IDS[@]}; i++)); do [ "${AGENT_IDS[$i]}" = "$id" ] && idx=$i; done
@@ -301,13 +310,108 @@ if [ "${#SELECTED_IDS[@]}" -gt 0 ]; then
     fi
   fi
 
+fi
+
+# --- 8. Configurar os agentes instalados (ponte do chat + login) ----------
+# Roda para TODOS os agentes no PATH, inclusive os que já existiam: o chat do
+# editor (<Leader>Ac) precisa da ponte ACP, e cada CLI precisa de login.
+# Sem terminal interativo, ou com ASTROGRAPH_NO_LOGIN=1, só mostra os comandos.
+SETUP_IDS=(claude opencode codex gemini)
+SETUP_LABELS=("Claude Code" "opencode" "Codex CLI" "Gemini CLI")
+SETUP_LOGIN=("claude auth login" "opencode auth login" "codex login" "gemini")
+SETUP_ACP_BIN=("claude-agent-acp" "" "codex-acp" "")
+SETUP_ACP_NPM=("@agentclientprotocol/claude-agent-acp" "" "@agentclientprotocol/codex-acp" "")
+SETUP_LEGACY=("@zed-industries/claude-agent-acp" "" "" "")
+
+CAN_ASK=""
+if [ -n "$TTY" ] && [ "${ASTROGRAPH_NO_LOGIN:-}" != "1" ]; then CAN_ASK=1; fi
+
+# 0 = logado, 1 = sem login, 2 = não dá para saber
+agent_login() {
+  case "$1" in
+    claude)
+      [ -n "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && return 0
+      out="$(claude auth status 2>&1 || true)"
+      case "$out" in
+        *'"loggedIn": true'* | *'"loggedIn":true'*) return 0 ;;
+        *'"loggedIn": false'* | *'"loggedIn":false'*) return 1 ;;
+      esac
+      return 2
+      ;;
+    opencode)
+      n="$(opencode auth list 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -oE '[0-9]+ credentials?' | grep -oE '^[0-9]+' | head -n1)"
+      [ -z "$n" ] && return 2
+      [ "$n" -gt 0 ] && return 0
+      return 1
+      ;;
+    codex)
+      [ -n "${OPENAI_API_KEY:-}" ] && return 0
+      codex login status >/dev/null 2>&1 && return 0
+      return 1
+      ;;
+    gemini)
+      [ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ] && return 0
+      [ -f "$HOME/.gemini/oauth_creds.json" ] && return 0
+      return 1
+      ;;
+  esac
+  return 2
+}
+
+PENDING=()
+any_agent=""
+for ((i = 0; i < ${#SETUP_IDS[@]}; i++)); do
+  id="${SETUP_IDS[$i]}"
+  command -v "$id" >/dev/null 2>&1 || continue
+  if [ -z "$any_agent" ]; then
+    printf '\n'
+    info "Configurando os agentes de IA..."
+    any_agent=1
+  fi
+  label="${SETUP_LABELS[$i]}"
+  # 1) ponte ACP para o chat do editor
+  # pacote antigo (renomeado) da ponte: troca pelo novo
+  legacy_on=""
+  if [ -n "${SETUP_LEGACY[$i]}" ] && [ -d "$(npm root -g 2>/dev/null)/${SETUP_LEGACY[$i]}" ]; then legacy_on=1; fi
+  if [ -n "${SETUP_ACP_NPM[$i]}" ] && { [ -n "$legacy_on" ] || ! command -v "${SETUP_ACP_BIN[$i]}" >/dev/null 2>&1; }; then
+    info "$label: instalando a ponte do chat (${SETUP_ACP_NPM[$i]})..."
+    if [ -n "${SETUP_LEGACY[$i]}" ]; then npm_global uninstall -g "${SETUP_LEGACY[$i]}" >/dev/null 2>&1 || true; fi
+    if npm_global install -g "${SETUP_ACP_NPM[$i]}" >/dev/null 2>&1; then
+      info "$label: ponte do chat instalada"
+    else
+      warn "$label: falha ao instalar ${SETUP_ACP_NPM[$i]} (rode depois: npm install -g ${SETUP_ACP_NPM[$i]})"
+    fi
+  fi
+  # 2) login
+  agent_login "$id" && st=0 || st=$?
+  if [ "$st" = 0 ]; then
+    info "$label: login ok"
+    continue
+  fi
+  if [ -n "$CAN_ASK" ]; then
+    printf '  %s está sem login. Entrar agora? (abre o navegador) [S/n] ' "$label"
+    IFS= read -r -u 3 ans || ans="n"
+    case "$ans" in
+      "" | s | S | y | Y)
+        [ "$id" = "gemini" ] && info "O Gemini abre a tela de login; depois de entrar, saia com /quit."
+        ${SETUP_LOGIN[$i]} <&3 || true
+        agent_login "$id" && st=0 || st=$?
+        if [ "$st" = 0 ]; then info "$label: login ok"; continue; fi
+        ;;
+    esac
+  fi
+  PENDING+=("$i")
+done
+
+if [ -n "$any_agent" ]; then
+  if [ "${#PENDING[@]}" -gt 0 ]; then
+    printf '\n'
+    info "Falta entrar nestes agentes (rode num terminal, ou no nvim: :Astrograph login):"
+    for i in "${PENDING[@]}"; do printf '  %-20s -> %s\n' "${SETUP_LOGIN[$i]}" "${SETUP_LABELS[$i]}"; done
+  fi
+  if has_sel ollama; then printf '  ollama serve         -> se o Ollama não estiver no ar\n'; fi
   printf '\n'
-  info "Próximos passos (login dos agentes):"
-  if has_sel claude; then printf '  claude            -> autentica o Claude Code\n'; fi
-  if has_sel opencode; then printf '  opencode auth login\n'; fi
-  if has_sel codex; then printf '  codex             -> autentica o Codex\n'; fi
-  if has_sel gemini; then printf '  gemini            -> autentica o Gemini CLI\n'; fi
-  if has_sel ollama; then printf '  ollama serve      -> se o serviço não estiver no ar\n'; fi
+  info "No nvim: <Leader>Al abre o agente no terminal, <Leader>Ac abre o chat, :Astrograph agentes mostra o status."
 fi
 
 info "Pronto! Abra um terminal novo e rode: nvim"
