@@ -49,6 +49,20 @@ Rode `:Astrograph agentes`. Se aparecer "SEM LOGIN" ou "falta a ponte",
 versões antigas do Astrograph não conseguiam iniciar a ponte do chat (os CLIs
 do npm são scripts `.cmd`); atualize com `:Astrograph atualizar`.
 
+## O chat do Claude Code responde "401 Invalid bearer token"
+
+Versões anteriores mandavam um token inválido para a ponte do chat quando você
+entrou com `claude auth login` (sem a variável `CLAUDE_CODE_OAUTH_TOKEN`).
+Atualize com `:Astrograph atualizar`: a ponte passa a usar o login do CLI.
+
+## O agente não responde no chat
+
+Quase sempre é login: um agente sem login (por exemplo, o opencode sem
+credenciais) aceita a mensagem e nunca responde. O Astrograph checa isso ao
+abrir o chat e oferece entrar, trocar para um agente logado ou seguir; depois de
+40 segundos sem resposta, aparece um aviso. Confira com `:Astrograph agentes` e
+entre com `:Astrograph login <agente>`.
+
 ## O avante/chat não usa o Ollama
 
 - O Ollama precisa estar rodando (`ollama serve`) e ter um modelo

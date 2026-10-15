@@ -20,10 +20,11 @@ editor**, abertura mais rápida e tudo em **português**.
 
 | | |
 | --- | --- |
-| **Agentes de IA** | Claude Code, opencode, Codex e Gemini no terminal flutuante e no chat; edição inline com o avante; IA local com Ollama. O instalador e o `:Astrograph configurar` cuidam dos logins. Tudo no prefixo `<Leader>A`. |
+| **Agentes de IA** | Claude Code, opencode, Codex e Gemini no terminal flutuante e no chat; edição inline com o avante; IA local com Ollama. O instalador e o `:Astrograph configurar` cuidam dos logins, e o editor avisa antes se o agente escolhido estiver sem login. Tudo no prefixo `<Leader>A`. |
 | **Em português** | Menus de atalhos, tela inicial, diagnóstico (`:checkhealth astrograph`) e mensagens. |
 | **Rápido** | ~256 ms para abrir no Windows (o AstroNvim original, ~392 ms). Arquivos abrem em estágios: o essencial em ~59 ms. |
-| **Moderno no terminal** | Janelas com fade, explorador deslizante, `dd` animado, cursor animado, linha de comando com destaque, bordas arredondadas e ghost text. |
+| **Visual no estilo Apple** | Tema grafite inspirado no Xcode, tela inicial limpa, barra de status discreta. Janelas com fade, explorador deslizante, `dd` animado, cursor animado, bordas arredondadas e ghost text. |
+| **Ações com o agente** | Corrigir o erro da linha, explicar, revisar suas alterações e escrever a mensagem de commit, cada uma num atalho. |
 | **Código próprio onde importa** | Cores e TODOs desenhados pelo motor nativo do Neovim: rolar a tela ficou ~10× mais leve. |
 | **Tema próprio** | `astrograph` (escuro) e `astrograph-light`, com contraste verificado. |
 | **Instalação de uma linha** | Windows, Linux e macOS: o instalador cuida de Neovim, Git, ripgrep, fd, compilador C e fonte. |
@@ -42,6 +43,23 @@ não por enfeite, mas por cuidado com o que você sente ao usar.
   nunca atrasando o que você está fazendo.
 - **Acabamento uniforme.** Bordas arredondadas, rótulos que cabem e textos em
   português em toda a interface.
+- **Calma para os olhos.** Um fundo grafite neutro, cores de sintaxe suaves e
+  uma cor de destaque só; o que é secundário fica em cinza.
+
+## UI nativa (em desenvolvimento)
+
+Uma janela própria do Astrograph, escrita em Rust, com o Neovim como motor. Fora
+do terminal, ela faz o que um terminal não consegue: o texto **desliza por
+pixel** ao rolar, o cursor **desliza e pisca com fade**, as janelas flutuantes
+ganham **sombra** de verdade, e a barra de título e a borda acompanham o tema.
+
+| Abertura | Rolagem por pixel |
+| --- | --- |
+| ![Abertura na UI nativa]({{ '/img/ui/abertura.gif' | relative_url }}) | ![Rolagem suave]({{ '/img/ui/rolagem.gif' | relative_url }}) |
+| **Cursor: desliza, muda de forma e pisca com fade** | **Busca com sombra** |
+| ![Cursor]({{ '/img/ui/cursor.gif' | relative_url }}) | ![Painel com sombra]({{ '/img/ui/painel.gif' | relative_url }}) |
+
+O código fica em `prototype/astrograph-ui` (branch `epic/rust-ui`).
 
 ## Em ação
 

@@ -50,9 +50,18 @@ Para entrar em um agente específico: `:Astrograph login claude` (ou `opencode`,
 | Gemini CLI | na 1ª execução do `gemini` (saia com `/quit`) ou `GEMINI_API_KEY` | embutida |
 
 {: .note }
-O chat e o terminal usam **o login do próprio CLI**: não é preciso token nem
-chave de API. Só o assistente inline (`<Leader>Aq`) precisa de uma chave
-(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` ou `GEMINI_API_KEY`) ou do Ollama.
+O chat, o terminal e as ações (corrigir, explicar, revisar, commit) usam **o
+login do próprio CLI**: não é preciso token nem chave de API. O assistente
+inline (`<Leader>Aq`) fica mais rápido com uma chave (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` ou `GEMINI_API_KEY`) ou com o Ollama; sem nenhum dos dois, ele
+usa o agente atual pelo avante.
+
+{: .important }
+**Agente sem login não responde.** O Astrograph checa o login em segundo plano
+logo depois de abrir. Se o agente escolhido estiver sem login, abrir o chat (ou
+pedir uma ação) mostra as opções: entrar nele, usar outro agente que já está
+logado ou seguir assim mesmo. Se uma resposta passar de 40 segundos, um aviso
+aparece em vez de uma espera sem fim.
 
 ## Um agente para tudo
 
@@ -71,6 +80,22 @@ A troca vale na hora, sem reiniciar. Sem a ponte do chat instalada para o
 agente escolhido, o terminal já muda e o aviso diz para rodar
 `:Astrograph configurar`.
 
+## Peça ao agente
+
+Ações prontas para o dia a dia. Cada uma abre um chat novo com o agente atual,
+já com o contexto certo, e envia o pedido:
+
+| Atalho | O que faz |
+| --- | --- |
+| `<Leader>Ax` | **Corrigir** o problema (diagnóstico) da linha do cursor: manda o erro e o trecho ao redor; o agente explica a causa e aplica a correção |
+| `<Leader>Ai` | **Explicar** a seleção (modo visual) ou o arquivo inteiro |
+| `<Leader>Ar` | **Revisar** as alterações ainda não commitadas: bugs e riscos, do mais grave ao menos grave, com arquivo e linha |
+| `<Leader>Am` | **Mensagem de commit** das alterações (preparadas com `git add`, senão as demais), em português e no padrão conventional commits |
+| `<Leader>Ad` | **Ver as alterações** (suas ou do agente) trecho a trecho, com o diff ao lado |
+| `<Leader>A.` | **Mencionar** o arquivo atual no terminal do agente (`@caminho`); no modo visual, com as linhas (`@caminho#L10-20`) |
+
+Enquanto o agente trabalha, a barra de status mostra `✦ Claude Code ⋯`.
+
 ## Os três jeitos
 
 | Jeito | Quando usar | Atalho |
@@ -86,10 +111,15 @@ agente escolhido, o terminal já muda e o aviso diz para rodar
 | `<Leader>Ag` | Escolher o agente (vale para terminal, chat e edição) |
 | `<Leader>Al` | Abrir o agente atual no terminal |
 | `<Leader>AT` | Alternar o terminal do agente atual |
-| `<Leader>A.` | Enviar o caminho do arquivo atual para o agente |
+| `<Leader>A.` | Mencionar o arquivo (ou a seleção) no terminal do agente |
+| `<Leader>Ax` | Corrigir o problema da linha |
+| `<Leader>Ai` | Explicar a seleção ou o arquivo |
+| `<Leader>Ar` | Revisar as alterações não commitadas |
+| `<Leader>Am` | Mensagem de commit |
+| `<Leader>Ad` | Ver as alterações (diff) |
 | `<Leader>Ac` | Chat (abrir/fechar) |
 | `<Leader>An` | Novo chat |
-| `<Leader>Aq` | Assistente inline (CodeCompanion) |
+| `<Leader>Aq` | Assistente inline (CodeCompanion com chave/Ollama; senão o agente pelo avante) |
 | `<Leader>Ap` | Ações: trocar adapter/modelo, prompts prontos |
 | `<Leader>Aa` | (visual) Adicionar a seleção ao chat |
 | `<Leader>AE` | avante: perguntar (normal) / editar seleção (visual) |
@@ -160,4 +190,14 @@ repositório git). Use variáveis de ambiente.
 
 Quando um agente altera um arquivo que está aberto, o Astrograph recarrega o
 buffer sozinho: ao voltar o foco para o Neovim, ao sair do terminal do agente,
-ao trocar de buffer e quando o cursor fica parado.
+ao trocar de buffer e quando o cursor fica parado. Para conferir o que mudou,
+use `<Leader>Ad`.
+
+## Processos que não ficam para trás
+
+O chat conversa com o agente por uma "ponte" (um processo `node` com o CLI do
+agente, ~150 MB). No Windows, se o Neovim for fechado de forma abrupta
+(terminal fechado, travamento), essa ponte não morria junto e se acumulava a
+cada vez. Agora, alguns segundos depois de abrir, o Astrograph encerra em
+silêncio as pontes cujo Neovim já não existe; as de um editor aberto não são
+tocadas.

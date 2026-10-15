@@ -16,6 +16,21 @@ Dois colorschemes próprios, em `theme/`:
 - `astrograph`: escuro (padrão);
 - `astrograph-light`: claro.
 
+O escuro segue o modo escuro do Xcode, pensado para um dia inteiro de leitura
+sem cansar:
+
+- **fundo grafite neutro** (`#1F1F24`), sem o azul-neon de antes;
+- **texto quase branco**, mas não puro (`#DCDCE0`);
+- **sintaxe calma**: palavras-chave rosa, strings salmão, funções e tipos azul
+  suave, números em dourado claro; sem itálico nem negrito chamativos;
+- **um destaque só**: o azul de sistema da Apple (`#409CFF`);
+- **superfícies em vez de linhas**: barras e laterais um tom acima do editor,
+  janelas flutuantes mais acima ainda (como popovers), números de linha e guias
+  quase sumindo.
+
+Todas as cores de sintaxe passam no contraste mínimo (WCAG 4,5:1; comentários
+3:1).
+
 ```vim
 :colorscheme astrograph-light
 ```
@@ -35,33 +50,40 @@ nvim --headless -u NONE -l theme/tools/check_contrast.lua  # confere o contraste
 
 Para trocar o tema padrão, edite `colorscheme` em `template/lua/plugins/astroui.lua`.
 
-## Tela inicial animada
+## Tela inicial
 
 ![Abertura animada]({{ '/img/abertura.gif' | relative_url }})
 
-A tela inicial mostra uma lua crescente, estrelas e o banner ASTROGRAPH com
-gradiente. Ao abrir, a lua aparece em fade, o banner é revelado linha a linha e,
-por último, a linha discreta "Neovim · agentes de IA · em português"; depois as
-estrelas piscam devagar.
+No espírito das telas de boas-vindas da Apple: uma estrela (o ícone), o nome em
+traço fino, uma linha discreta dizendo o que é e, abaixo, as ações com o atalho
+alinhado à direita em cinza, como num menu do macOS. Muito espaço vazio e uma
+cor de destaque só.
 
-- O banner usa letras sólidas e limpas (ANSI Regular), sem as sombras de linha
-  dupla de antes.
-- O tamanho se adapta à largura do terminal: com a lua (≥ 100 colunas), só o
-  traço fino (≥ 44) ou a versão mínima.
-- A entrada roda a 60 fps e é baseada em tempo real: se o editor ficar ocupado
-  por um instante, ela pula quadros em vez de pausar. Ela só começa depois que
-  os plugins do startup terminam de carregar.
-- As estrelas pausam quando o terminal perde o foco ou a tela inicial não está
-  visível, sem gastar CPU em segundo plano.
-- A arte fica em `template/lua/astrograph/art.lua`, gerada por
-  `python tools/gen_art.py`.
+- **Entrada**: a estrela acende, o nome e as ações surgem com um fade curto
+  (~0,6 s), uma vez só. Depois a tela fica parada: nada piscando, nada gastando
+  CPU.
+- **Cores do tema**: tudo vem do tema ativo, então funciona no escuro e no
+  claro.
+- **Seis ações**: novo arquivo, buscar arquivo, recentes, buscar palavra,
+  agentes de IA e última sessão. Os marcadores continuam em `<Leader>f'`.
+- O relógio da entrada é de tempo real e só começa depois que os plugins do
+  startup carregam: se o editor engasgar, o fade pula para o ponto certo.
+- Código em `template/lua/astrograph/dashboard.lua`; as letras vêm de
+  `template/lua/astrograph/art.lua` (`python tools/gen_art.py`).
+
+## Barra de status
+
+Sem os blocos coloridos de modo nas pontas: o modo é um **ponto colorido** e,
+fora do Normal, o nome em português ("Inserir", "Visual", "Comando"…) em cinza.
+A posição aparece como `12:4`, sem porcentagem. Enquanto um agente trabalha,
+aparece `✦ Claude Code ⋯`. Nas abas, o `×` é cinza: vermelho fica para erro.
 
 ## Visual moderno no terminal
 
 | Recurso | O que muda |
 | --- | --- |
 | **Linha de comando (ui2)** | Destaque de sintaxe enquanto você digita e mensagens sem o "Press ENTER". Nativo do Neovim 0.12. |
-| **Cursor animado** | Um rastro curto e suave ao pular pelo texto (smear-cursor). |
+| **Cursor animado** | Um rastro curto e suave ao pular pelo texto (smear-cursor). Na UI nativa o cursor desliza sem rastro, desenhado pela própria UI. |
 | **Bordas arredondadas** | Em hovers do LSP, diagnósticos, completação e documentação. |
 | **Ghost text** | A primeira sugestão da completação aparece em cinza na própria linha. |
 | **Linha do cursor** | Destacada só na janela ativa. |
@@ -110,8 +132,8 @@ Feitas pelo Snacks, no estilo "Claude/opencode": rápidas, suaves e sem
 
 | O quê | Como |
 | --- | --- |
-| Base | 60 fps, `outQuad`, no máximo 160 ms |
-| Scroll suave | `outCubic`, 140 ms; segurando a tecla fica mais curto (60 ms) |
+| Base | 60 fps no terminal, 120 fps na UI nativa; `outQuad`, no máximo 160 ms |
+| Scroll suave | `outCubic`, 140 ms; segurando a tecla fica mais curto (60 ms). Na UI nativa a rolagem é por pixel e feita pela UI |
 | Guias de indentação | animadas ao mover o cursor |
 | Janelas flutuantes | fundo levemente escurecido (notificações, Lazy, busca) |
 

@@ -40,8 +40,12 @@ rodar `nvim`.
   mensagens.
 - **Mais rápido**: abre em ~256 ms no Windows (o AstroNvim original, ~392 ms);
   arquivos abrem em estágios, com o essencial em ~59 ms.
-- **Moderno no terminal**: linha de comando com destaque, cursor animado, bordas
-  arredondadas, ghost text na completação e animações a 60 fps.
+- **Visual no estilo Apple**: tema grafite inspirado no Xcode (cores calmas, um
+  destaque só), tela inicial limpa e barra de status discreta; linha de comando
+  com destaque, cursor animado, bordas arredondadas e ghost text.
+- **Ações com o agente**: corrigir o erro da linha (`<Leader>Ax`), explicar
+  (`<Leader>Ai`), revisar suas alterações (`<Leader>Ar`) e escrever a mensagem
+  de commit (`<Leader>Am`). O editor avisa antes se o agente estiver sem login.
 - **Resposta imediata**: o que você usa é pré-carregado quando o editor está
   ocioso, e o código aparece sem ruído (sem CodeLens nem `~` por padrão).
 - **Movimento**: janelas com fade, explorador deslizante e `dd` animado (a
@@ -65,6 +69,19 @@ rodar `nvim`.
 | **Explorador deslizando (`<Leader>e`)** | **`dd`: a linha colapsa e some** |
 | ![Explorador](docs/img/explorador.gif) | ![Apagar linha](docs/img/apagar-linha.gif) |
 
+### UI nativa (em desenvolvimento)
+
+Uma janela própria em Rust, com o Neovim como motor
+([`prototype/astrograph-ui`](prototype/astrograph-ui)). Fora do terminal, o
+texto desliza por pixel ao rolar, o cursor desliza e pisca com fade, e as
+janelas flutuantes ganham sombra.
+
+| Abertura | Rolagem por pixel |
+| --- | --- |
+| ![Abertura na UI nativa](docs/img/ui/abertura.gif) | ![Rolagem suave](docs/img/ui/rolagem.gif) |
+| **Cursor: desliza, muda de forma e pisca com fade** | **Busca com sombra** |
+| ![Cursor](docs/img/ui/cursor.gif) | ![Painel com sombra](docs/img/ui/painel.gif) |
+
 ## Primeiros passos
 
 | Atalho | O que faz |
@@ -76,6 +93,7 @@ rodar `nvim`.
 | `<Leader>Al` | Abrir um agente de IA no terminal |
 | `<Leader>Ac` | Chat com IA |
 | `<Leader>AE` | Pedir uma edição para a IA (selecione o trecho antes) |
+| `<Leader>Ax` / `<Leader>Ar` | Corrigir o erro da linha / revisar suas alterações |
 | `<Leader>um` | Ligar/desligar as animações |
 
 `<Leader>` é a tecla **Espaço**. Veja a [lista completa](https://just-gabe.github.io/Astrograph/uso)
@@ -88,6 +106,7 @@ core/       fork do core do AstroNvim (v6.1.0) com as otimizações
 template/   a config que o Neovim abre
 theme/      colorschemes astrograph e astrograph-light
 tools/      geradores da arte da tela inicial e dos prints
+prototype/  a UI nativa em Rust (astrograph-ui)
 docs/       documentação (GitHub Pages) e prints
 ```
 

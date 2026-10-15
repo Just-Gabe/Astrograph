@@ -32,10 +32,10 @@ Ao abrir o `nvim` sem arquivo aparece a tela inicial. Cada item tem uma tecla:
 | `o` | Arquivos recentes |
 | `w` | Buscar palavra (em todos os arquivos) |
 | `a` | Agentes de IA (abre o chat) |
-| `'` | Marcadores |
 | `s` | Última sessão |
 
-`<Leader>h` volta para a tela inicial a qualquer momento.
+Os marcadores ficam em `<Leader>f'`. `<Leader>h` volta para a tela inicial a
+qualquer momento.
 
 ## O básico
 

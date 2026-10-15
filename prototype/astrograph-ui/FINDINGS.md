@@ -162,3 +162,46 @@ Mono.
 
 O pior caso (codigo denso em `->`/`=>`/`!=`, teste `bench_ligaduras`) custa
 ~10% a mais; no dashboard a diferenca fica dentro do ruido.
+
+## Animacoes nativas e visual (2026-10-15)
+
+### Rolagem por pixel
+
+- Primeira versao usava os eventos `grid_scroll`. Na config do Astrograph eles
+  **nunca chegavam**: as guias de indentacao do Snacks pedem redesenho da janela
+  a cada rolagem, e entao o Neovim reescreve as linhas em vez de rolar.
+- Versao final: a config avisa a UI no `WinScrolled` (que roda antes do Neovim
+  desenhar o quadro) quantas linhas **de tela** a janela rolou
+  (`nvim_win_text_height`, contando quebras e dobras). A UI guarda as linhas que
+  vao sair e, nos quadros seguintes, desenha a regiao deslocada com as linhas
+  saindo pela borda, desacelerando (exponencial, ~160 ms). Funciona com
+  qualquer plugin.
+- Teste `SPIKE_SCROLL`: Ctrl+D/Ctrl+U de 11 linhas geram ~150 quadros
+  intermediarios, deslocamento maximo de 319 px.
+
+### Neovim esperando a UI (`--embed` sem `--headless`)
+
+Com `--embed --headless` o Neovim **nao espera** o `ui_attach`: carrega a config
+na hora. Tudo que a UI configurava "antes da config" (clipboard, aviso de UI
+nativa) chegava depois dos plugins, e o scroll do Snacks seguia ligado,
+animando por cima da rolagem nativa (cada Ctrl+D virava 7 rolagens). Agora:
+`--embed` (espera a UI), `--cmd` com `g:astrograph_gui` e `ui_attach` ja com o
+tamanho real da janela (o dashboard nascia centralizado para outra altura e
+deslocado 2 linhas).
+
+| Metrica | Antes | Depois |
+|---------|-------|--------|
+| Janela visivel com conteudo | ~290 ms | ~175 ms |
+| Quadro tipico (so o que mudou) | 0,034 ms | 0,038 ms (com sombras e rolagem) |
+| Quadro com a tela inteira | 0,92 ms | 0,96 ms |
+
+### Outros
+
+- Sombra das janelas flutuantes: a config manda os retangulos (com borda) so
+  quando mudam (`SafeState`, `WinResized`, `OptionSet winblend`); a UI desenha
+  uma sombra arredondada suave, so nas linhas repintadas no quadro, sem sombra
+  de paineis dentro de outro painel (as partes da busca).
+- Cursor: fade no piscar (180 ms) e troca de forma animada (constante de 28 ms).
+- Molduras grossas como geometria (tabela de bracos de U+2500..257F).
+- A janela nasce na cor do tema e o primeiro quadro (a tela vazia de antes da
+  config) nao mostra cursor: sem "flash" na abertura.
