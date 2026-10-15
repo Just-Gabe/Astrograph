@@ -151,8 +151,10 @@ info "Ligado: $CONFIG -> $ROOT/template"
 
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) -----------------------
 if command -v nvim >/dev/null 2>&1; then
-  info "Baixando plugins e ferramentas (pode demorar alguns minutos)..."
-  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>/dev/null || true
+  info "Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)..."
+  # O último passo compila os parsers do Treesitter (alguns segundos) para o
+  # primeiro arquivo aberto já vir com o realce de sintaxe pronto.
+  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" "+lua require('astrograph.treesitter').preinstall()" +qa 2>/dev/null || true
 
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   info "Verificando o tema..."

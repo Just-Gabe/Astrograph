@@ -123,13 +123,15 @@ Info "Ligado: $Config -> $Root\template"
 
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) ------------------------
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
-  Info 'Baixando plugins e ferramentas (pode demorar alguns minutos)...'
+  Info 'Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)...'
   # No PowerShell 5.1 um comando nativo que escreve em stderr aborta o script
   # quando $ErrorActionPreference='Stop' (o nvim/treesitter escreve bastante).
   # Isola as chamadas nativas para o instalador não parar no meio.
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" +qa 2>&1 | Out-Null
+  # O último passo compila os parsers do Treesitter (alguns segundos) para o
+  # primeiro arquivo aberto já vir com o realce de sintaxe pronto.
+  nvim --headless "+Lazy! restore" "+MasonToolsInstallSync" "+lua require('astrograph.treesitter').preinstall()" +qa 2>&1 | Out-Null
 
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   Info 'Verificando o tema...'

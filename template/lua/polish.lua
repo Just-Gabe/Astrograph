@@ -37,3 +37,7 @@ require("astrograph.agents").setup()
 
 -- Pré-aquecimento no ocioso: a 1ª busca/explorador tão rápidos quanto os seguintes
 require("astrograph.warmup").setup()
+
+-- Treesitter: o instalador pré-compila os parsers; se ainda faltar algum,
+-- avisa enquanto compila em vez de deixar o realce sumido sem explicação
+require("astrograph.treesitter").setup()
