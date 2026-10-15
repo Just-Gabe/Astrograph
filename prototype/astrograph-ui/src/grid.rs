@@ -111,6 +111,38 @@ pub struct Grid {
     pub title: Option<String>,
     /// Quadros publicados (0 = o Neovim ainda nao desenhou nada).
     pub generation: u64,
+    /// Registrar as rolagens (so na grade de trabalho): o renderer anima.
+    pub record_scrolls: bool,
+    /// Rolagens desde o ultimo quadro, com as linhas que sairam da regiao.
+    pub scrolls: Vec<ScrollEvent>,
+    /// Janelas flutuantes com borda (para a sombra), em celulas.
+    pub floats: Vec<FloatRect>,
+    pub floats_changed: bool,
+}
+
+/// Uma rolagem de regiao (`grid_scroll`): `rows > 0` = o conteudo subiu.
+/// `leaving` guarda as linhas que sairam (de cima para baixo), recortadas nas
+/// colunas da regiao, para desenha-las deslizando para fora.
+#[derive(Clone)]
+pub struct ScrollEvent {
+    pub top: usize,
+    pub bot: usize,
+    pub left: usize,
+    pub right: usize,
+    pub rows: i64,
+    pub leaving: Vec<Vec<Cell>>,
+}
+
+/// Retangulo de uma janela flutuante, borda incluida.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FloatRect {
+    pub row: usize,
+    pub col: usize,
+    pub width: usize,
+    pub height: usize,
+    pub zindex: i64,
+    /// Transparencia (`winblend`, 0..100): a sombra acompanha o fade.
+    pub blend: u8,
 }
 
 impl Grid {
@@ -120,8 +152,9 @@ impl Grid {
             height,
             cells: vec![Cell::default(); width * height],
             highlights: HashMap::new(),
-            default_fg: 0x00d0d0d0,
-            default_bg: 0x00101014,
+            // cores do tema Astrograph: a janela ja nasce no tom certo
+            default_fg: 0x00dcdce0,
+            default_bg: 0x001f1f24,
             default_sp: 0x00ff0000,
             cursor: (0, 0),
             mode: "normal".to_string(),
@@ -132,6 +165,10 @@ impl Grid {
             hl_changed: false,
             title: None,
             generation: 0,
+            record_scrolls: false,
+            scrolls: Vec::new(),
+            floats: Vec::new(),
+            floats_changed: false,
         }
     }
 
@@ -166,6 +203,8 @@ impl Grid {
     /// Copia o quadro terminado (depois de `flush`) para a grade que a UI desenha,
     /// levando so as linhas alteradas. A UI nunca ve um quadro pela metade.
     pub fn publish(&mut self, front: &mut Grid) {
+        let resized_or_cleared =
+            (front.width, front.height) != (self.width, self.height) || self.all_dirty;
         if (front.width, front.height) != (self.width, self.height) {
             front.width = self.width;
             front.height = self.height;
@@ -198,6 +237,18 @@ impl Grid {
         front.bg_changed |= self.bg_changed;
         if let Some(title) = self.title.take() {
             front.title = Some(title);
+        }
+        if resized_or_cleared {
+            // a tela mudou inteira: nada para deslizar
+            self.scrolls.clear();
+            front.scrolls.clear();
+        } else {
+            front.scrolls.append(&mut self.scrolls);
+            // sem quadros (janela minimizada): nao acumula sem limite
+            if front.scrolls.len() > 32 {
+                let extra = front.scrolls.len() - 32;
+                front.scrolls.drain(..extra);
+            }
         }
         front.generation += 1;
         self.clean();
@@ -387,6 +438,32 @@ impl Grid {
         }
     }
 
+    /// Registra a rolagem de uma janela (avisada pela config no `WinScrolled`,
+    /// antes do Neovim redesenhar): guarda as linhas que vao sair para o
+    /// renderer desliza-las. Nao mexe nas celulas; o redesenho vem em seguida.
+    ///
+    /// Nao da para depender do `grid_scroll`: quando um plugin pede redesenho da
+    /// janela (guias de indentacao, escopo), o Neovim reescreve as linhas em vez
+    /// de rolar.
+    pub fn capture_scroll(&mut self, top: usize, bot: usize, left: usize, right: usize, rows: i64) {
+        let bot = bot.min(self.height);
+        let right = right.min(self.width);
+        let n = rows.unsigned_abs() as usize;
+        if !self.record_scrolls || rows == 0 || top >= bot || left >= right {
+            return;
+        }
+        let height = bot - top;
+        if height < 3 || n >= height {
+            return; // salto grande (G, busca): troca direto, como no macOS
+        }
+        let w = self.width;
+        let leaving_rows = if rows > 0 { top..top + n } else { bot - n..bot };
+        let leaving = leaving_rows
+            .map(|row| self.cells[row * w + left..row * w + right].to_vec())
+            .collect();
+        self.scrolls.push(ScrollEvent { top, bot, left, right, rows, leaving });
+    }
+
     /// `grid_scroll`: move a regiao [top, bot) x [left, right) por `rows` linhas
     /// (positivo = conteudo sobe). As linhas que ficam vazias serao reescritas
     /// pelo Neovim em seguida.
@@ -492,6 +569,24 @@ mod tests {
         assert!(!g.flushed);
         g.apply_redraw(&[Value::Array(vec![Value::from("flush"), Value::Array(vec![])])]);
         assert!(g.flushed);
+    }
+
+    #[test]
+    fn rolagem_guarda_linhas_que_saem() {
+        let mut back = Grid::new(2, 4);
+        back.record_scrolls = true;
+        for (r, t) in ["a", "b", "c", "d"].iter().enumerate() {
+            back.apply_redraw(&[line(r as u64, 0, vec![cell(t, Some(0), None)])]);
+        }
+        let mut front = Grid::new(2, 4);
+        back.publish(&mut front);
+        back.capture_scroll(0, 4, 0, 2, 1);
+        back.capture_scroll(0, 4, 0, 2, -2);
+        back.publish(&mut front);
+        assert_eq!(front.scrolls.len(), 2);
+        assert_eq!(front.scrolls[0].leaving[0][0].text.first(), 'a');
+        assert_eq!(front.scrolls[1].rows, -2);
+        assert_eq!(front.scrolls[1].leaving.len(), 2);
     }
 
     #[test]

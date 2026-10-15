@@ -1,8 +1,14 @@
---- Paleta Astrograph (dark) — identidade do dashboard: noite azul + estrelas douradas.
+--- Paleta Astrograph (dark) — inspirada no Xcode e nas cores de sistema da Apple.
+---
+--- Principios: fundo grafite neutro (nada de azul-neon), texto quase branco mas
+--- nao puro, cores de sintaxe suaves e pouco saturadas (dias inteiros de leitura
+--- sem cansar) e um unico destaque azul. A interface (barras, laterais,
+--- janelas flutuantes) se separa do editor por tom de superficie, nao por linhas.
+---
 --- Mapeamento para os slots do astrotheme:
----   statement/keyword -> purple, função/tipo/special -> blue, string -> green,
----   constante/float/struct -> yellow, número/boolean/macro -> orange, identificador -> text.
---- Slots extras (operator/macro/cursorline/parameter) não existem no motor e são
+---   statement/keyword -> purple, funcao/tipo/special -> blue, string -> green,
+---   constante/float/struct -> yellow, numero/boolean/macro -> orange, identificador -> text.
+--- Slots extras (operator/macro/cursorline/parameter) nao existem no motor e sao
 --- aplicados como overrides de highlight em `astrograph/init.lua`.
 local color = require "astrograph.lib.color"
 
@@ -16,61 +22,63 @@ local c = {
 }
 
 --------------------------------
---- Syntax
+--- Syntax (tons do Xcode, um pouco mais calmos)
 --------------------------------
-c.syntax.red = "#FF7E9D"
-c.syntax.orange = "#F9E2AF"
-c.syntax.yellow = "#F9E2AF"
-c.syntax.green = "#7CE38B"
-c.syntax.cyan = "#5DE4D0"
-c.syntax.blue = "#7DD3FC"
-c.syntax.purple = "#8AB4FF"
-c.syntax.text = "#D8DCF0"
-c.syntax.comment = "#6B6B8A"
-c.syntax.mute = "#6B6B8A"
+c.syntax.red = "#FF8A80" -- tags, erros de sintaxe
+c.syntax.orange = "#D9C97C" -- numeros e booleanos
+c.syntax.yellow = "#D9C97C" -- constantes
+c.syntax.green = "#FC8B7A" -- strings (o "salmao" do Xcode)
+c.syntax.cyan = "#9ED9CC"
+c.syntax.blue = "#7CC7E8" -- funcoes e tipos
+c.syntax.purple = "#F38DBA" -- palavras-chave
+c.syntax.text = "#DCDCE0"
+c.syntax.comment = "#7F8C98"
+c.syntax.mute = "#7F8C98"
 
 -- extras astrograph (aplicados via overrides de highlight)
-c.syntax.operator = "#BFC5D6"
-c.syntax.macro = "#E8C982"
-c.syntax.cursorline = "#F9E2AF"
-c.syntax.parameter = "#C7D2FE"
+c.syntax.operator = "#C2C2C8"
+c.syntax.macro = "#F2A86F"
+c.syntax.cursorline = "#DCDCE0"
+c.syntax.parameter = "#C9B6F2"
 
 --------------------------------
---- UI
+--- UI (cores de sistema da Apple, modo escuro)
 --------------------------------
-c.ui.red = "#FF7E9D"
-c.ui.orange = "#E8C982"
-c.ui.yellow = "#F9E2AF"
-c.ui.green = "#7CE38B"
-c.ui.cyan = "#5DE4D0"
-c.ui.blue = "#7DD3FC"
-c.ui.purple = "#F472B6"
+c.ui.red = "#FF6961"
+c.ui.orange = "#FFB340"
+c.ui.yellow = "#FFD426"
+c.ui.green = "#5DD879"
+c.ui.cyan = "#70D7FF"
+c.ui.blue = "#409CFF"
+c.ui.purple = "#C38BF0"
 
 c.ui.accent = c.ui.blue
 
-c.ui.tabline = "#111317"
-c.ui.winbar = "#797D87"
-c.ui.tool = "#16181D"
-c.ui.base = "#1A1D23"
-c.ui.inactive_base = "#16181D"
-c.ui.statusline = "#111317"
-c.ui.split = "#111317"
-c.ui.float = "#14161B"
+-- superficies: editor (base) mais escuro; barras e laterais um tom acima;
+-- janelas flutuantes mais acima ainda (elevacao), como no macOS
+c.ui.base = "#1F1F24"
+c.ui.inactive_base = "#1F1F24"
+c.ui.tabline = "#26262C"
+c.ui.statusline = "#26262C"
+c.ui.tool = "#232328"
+c.ui.split = "#2E2E34"
+c.ui.float = "#2A2A30"
 c.ui.title = c.ui.accent
-c.ui.border = "#3A3E47"
-c.ui.current_line = "#1E222A"
-c.ui.scrollbar = c.ui.accent
-c.ui.selection = "#243447"
+c.ui.border = "#3C3C44"
+c.ui.current_line = "#25262B"
+c.ui.scrollbar = "#4A4A52"
+c.ui.selection = "#3A4A62"
 -- TODO: combine menu_selection and selection
-c.ui.menu_selection = c.ui.selection
-c.ui.highlight = "#23272F"
-c.ui.none_text = "#3A3E47"
-c.ui.text = "#C3C7D4"
-c.ui.text_active = "#D8DCF0"
-c.ui.text_inactive = "#545A68"
-c.ui.text_match = "#E0E0EE"
+c.ui.menu_selection = "#34507A"
+c.ui.highlight = "#2E3036"
+c.ui.none_text = "#3C3C44"
+c.ui.winbar = "#8E8E93"
+c.ui.text = "#C8C8CE"
+c.ui.text_active = "#F2F2F7"
+c.ui.text_inactive = "#6E6E76"
+c.ui.text_match = "#FFFFFF"
 
-c.ui.prompt = "#21242A"
+c.ui.prompt = "#2A2A30"
 
 --------------------------------
 --- terminal

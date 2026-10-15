@@ -14,7 +14,7 @@
 //! celula (as vezes invadindo a vizinha), entao a grade continua valendo e o
 //! resto da linha segue o caminho rapido, celula a celula.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use ab_glyph::{point, Font, FontVec, Glyph, GlyphId, PxScale, ScaleFont};
 
 use crate::config::FontCfg;
-use crate::grid::{Cell, CellText, Grid, Resolved};
+use crate::grid::{FloatRect, ScrollEvent, Cell, CellText, Grid, Resolved};
 
 const ATLAS: usize = 2048;
 
@@ -110,6 +110,32 @@ struct CursorAnim {
     start: Instant,
 }
 
+/// Regiao deslizando depois de um `grid_scroll`: o conteudo novo comeca onde o
+/// antigo estava e escorrega ate o lugar, com as linhas que sairam saindo junto.
+struct ScrollAnim {
+    top: usize,
+    bot: usize,
+    left: usize,
+    right: usize,
+    /// Deslocamento atual em pixels (> 0: conteudo desenhado abaixo do lugar final).
+    offset: f32,
+    /// Linhas que sairam por cima (a ultima e a vizinha da regiao).
+    above: VecDeque<Vec<Cell>>,
+    /// Linhas que sairam por baixo (a primeira e a vizinha da regiao).
+    below: VecDeque<Vec<Cell>>,
+    last: Instant,
+}
+
+impl ScrollAnim {
+    fn bounds(&self) -> (usize, usize, usize, usize) {
+        (self.top, self.bot, self.left, self.right)
+    }
+
+    fn overlaps(&self, top: usize, bot: usize, left: usize, right: usize) -> bool {
+        self.top < bot && top < self.bot && self.left < right && left < self.right
+    }
+}
+
 pub struct Renderer {
     styles: Vec<FontEntry>,
     fallbacks: Vec<FontEntry>,
@@ -141,6 +167,12 @@ pub struct Renderer {
     last_layout: Option<Layout>,
     invalid: bool,
     paint: Vec<bool>,
+    scroll_ms: u64,
+    scrolls: Vec<ScrollAnim>,
+    floats: Vec<FloatRect>,
+    /// Forma do cursor em transicao: (largura, altura, deslocamento y) em pixels.
+    cursor_dims: Option<(f32, f32, f32)>,
+    cursor_dims_at: Option<Instant>,
 }
 
 impl Renderer {
@@ -180,6 +212,11 @@ impl Renderer {
             last_layout: None,
             invalid: true,
             paint: Vec::new(),
+            scroll_ms: 0,
+            scrolls: Vec::new(),
+            floats: Vec::new(),
+            cursor_dims: None,
+            cursor_dims_at: None,
         };
         renderer.recompute_metrics();
         Ok(renderer)
@@ -264,11 +301,197 @@ impl Renderer {
         Layout { cols, rows, ox, oy }
     }
 
-    /// O cursor ainda esta deslizando (a UI deve pedir outro quadro).
+    /// Maior deslocamento de rolagem ativo, em pixels (testes de fumaca).
+    pub fn scroll_offset(&self) -> f32 {
+        self.scrolls.iter().map(|a| a.offset.abs()).fold(0.0, f32::max)
+    }
+
+    /// Duracao da rolagem suave (0 desliga).
+    pub fn set_scroll_ms(&mut self, ms: u64) {
+        self.scroll_ms = ms;
+        if ms == 0 {
+            self.scrolls.clear();
+        }
+    }
+
+    /// Algo ainda esta em movimento (a UI deve pedir outro quadro).
     pub fn animating(&self, now: Instant) -> bool {
-        self.anim
-            .as_ref()
-            .is_some_and(|a| now.duration_since(a.start) < Duration::from_millis(self.anim_ms))
+        !self.scrolls.is_empty()
+            || self.cursor_dims_at.is_some()
+            || self
+                .anim
+                .as_ref()
+                .is_some_and(|a| now.duration_since(a.start) < Duration::from_millis(self.anim_ms))
+    }
+
+    /// Acrescenta uma rolagem do Neovim a animacao da regiao (rolagens seguidas
+    /// se somam: segurar `j` desliza continuo, sem trancos).
+    fn ingest_scroll(&mut self, ev: ScrollEvent, now: Instant) {
+        let ch = self.cell_h as f32;
+        let height = ev.bot - ev.top;
+        let key = (ev.top, ev.bot, ev.left, ev.right);
+        // outra regiao no mesmo lugar (janela redimensionada): recomeca
+        self.scrolls.retain(|a| a.bounds() == key || !a.overlaps(ev.top, ev.bot, ev.left, ev.right));
+        let idx = match self.scrolls.iter().position(|a| a.bounds() == key) {
+            Some(i) => i,
+            None => {
+                self.scrolls.push(ScrollAnim {
+                    top: ev.top,
+                    bot: ev.bot,
+                    left: ev.left,
+                    right: ev.right,
+                    offset: 0.0,
+                    above: VecDeque::new(),
+                    below: VecDeque::new(),
+                    last: now,
+                });
+                self.scrolls.len() - 1
+            }
+        };
+        let a = &mut self.scrolls[idx];
+        // mudou de direcao no meio: parte do ponto atual sem o historico oposto
+        if (ev.rows > 0 && a.offset < 0.0) || (ev.rows < 0 && a.offset > 0.0) {
+            a.offset = 0.0;
+            a.above.clear();
+            a.below.clear();
+        }
+        let n = ev.rows.unsigned_abs() as f32;
+        if ev.rows > 0 {
+            a.above.extend(ev.leaving);
+            while a.above.len() > height {
+                a.above.pop_front();
+            }
+            a.offset = (a.offset + n * ch).min(a.above.len() as f32 * ch);
+        } else {
+            for row in ev.leaving.into_iter().rev() {
+                a.below.push_front(row);
+            }
+            while a.below.len() > height {
+                a.below.pop_back();
+            }
+            a.offset = (a.offset - n * ch).max(-(a.below.len() as f32) * ch);
+        }
+    }
+
+    /// Desenha uma regiao rolando: conteudo atual deslocado e, na fresta, as
+    /// linhas que sairam.
+    fn paint_scroll(&mut self, buffer: &mut [u32], win_w: u32, win_h: u32, grid: &Grid, lay: &Layout, a: &ScrollAnim) {
+        let (cw, ch) = (self.cell_w, self.cell_h);
+        let right = a.right.min(grid.width).min(lay.cols);
+        if a.bot > grid.height || a.left >= right {
+            return;
+        }
+        let rx0 = lay.ox + a.left as u32 * cw;
+        let ry0 = lay.oy + a.top as u32 * ch;
+        let ry_end = lay.oy + a.bot as u32 * ch;
+        let ry1 = ry_end.min(win_h);
+        if ry0 >= ry1 {
+            return;
+        }
+        let clip = (ry0, ry1);
+        let width = right - a.left;
+        fill_rect(buffer, win_w, ry1, rx0, ry0, width as u32 * cw, ry1 - ry0, grid.default_bg);
+        let off = a.offset.round() as i32;
+        let w = grid.width;
+        for i in 0..(a.bot - a.top) {
+            let y = ry0 as i32 + (i as u32 * ch) as i32 + off;
+            if y + ch as i32 <= ry0 as i32 || y >= ry1 as i32 {
+                continue;
+            }
+            let start = (a.top + i) * w + a.left;
+            self.paint_cells(buffer, win_w, grid, &grid.cells[start..start + width], rx0, y, clip, None);
+        }
+        if off > 0 {
+            for (k, row) in a.above.iter().rev().enumerate() {
+                let y = ry0 as i32 - ((k as u32 + 1) * ch) as i32 + off;
+                if y + ch as i32 <= ry0 as i32 {
+                    break;
+                }
+                let n = row.len().min(width);
+                self.paint_cells(buffer, win_w, grid, &row[..n], rx0, y, clip, None);
+            }
+        } else if off < 0 {
+            for (k, row) in a.below.iter().enumerate() {
+                let y = ry_end as i32 + (k as u32 * ch) as i32 + off;
+                if y >= ry1 as i32 {
+                    break;
+                }
+                let n = row.len().min(width);
+                self.paint_cells(buffer, win_w, grid, &row[..n], rx0, y, clip, None);
+            }
+        }
+    }
+
+    /// Sombra suave sob as janelas flutuantes com borda (paineis "elevados", como
+    /// os popovers do macOS). So toca as linhas repintadas neste quadro.
+    fn draw_shadows(&self, buffer: &mut [u32], win_w: u32, win_h: u32, lay: &Layout, rows: usize, full: bool) {
+        let (cw, ch) = (self.cell_w as f32, self.cell_h as f32);
+        let px = |f: &FloatRect| {
+            (
+                lay.ox as f32 + f.col as f32 * cw,
+                lay.oy as f32 + f.row as f32 * ch,
+                f.width as f32 * cw,
+                f.height as f32 * ch,
+            )
+        };
+        let inside = |r: (f32, f32, f32, f32), x: f32, y: f32| x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3;
+        let contains = |outer: &FloatRect, inner: &FloatRect| {
+            !std::ptr::eq(outer, inner)
+                && inner.row >= outer.row
+                && inner.col >= outer.col
+                && inner.row + inner.height <= outer.row + outer.height
+                && inner.col + inner.width <= outer.col + outer.width
+        };
+        let blur = ch * 1.1;
+        let drop = ch * 0.3;
+        let radius = cw * 0.5;
+        for f in &self.floats {
+            // paineis dentro de outro painel (as partes do picker) nao fazem sombra
+            if self.floats.iter().any(|o| contains(o, f)) || f.blend >= 100 {
+                continue;
+            }
+            let strength = 0.6 * (1.0 - f.blend as f32 / 100.0);
+            if strength <= 0.01 {
+                continue;
+            }
+            let r = px(f);
+            let above: Vec<(f32, f32, f32, f32)> = self.floats.iter().filter(|o| o.zindex > f.zindex).map(px).collect();
+            let (hw, hh) = (r.2 / 2.0, r.3 / 2.0);
+            let (cx, cy) = (r.0 + hw, r.1 + drop + hh);
+            let x_from = (r.0 - blur).max(0.0) as u32;
+            let x_to = ((r.0 + r.2 + blur).ceil() as u32).min(win_w);
+            let y_from = (r.1 + drop - blur).max(0.0) as u32;
+            let y_to = ((r.1 + drop + r.3 + blur).ceil() as u32).min(win_h);
+            for y in y_from..y_to {
+                // linha de pixels pertence a uma linha repintada?
+                if !full {
+                    if y < lay.oy {
+                        continue;
+                    }
+                    let row = ((y - lay.oy) as f32 / ch) as usize;
+                    if row >= rows || !self.paint[row] {
+                        continue;
+                    }
+                }
+                let fy = y as f32 + 0.5;
+                let base = y as usize * win_w as usize;
+                for x in x_from..x_to {
+                    let fx = x as f32 + 0.5;
+                    if inside(r, fx, fy) || above.iter().any(|o| inside(*o, fx, fy)) {
+                        continue;
+                    }
+                    let qx = ((fx - cx).abs() - hw + radius).max(0.0);
+                    let qy = ((fy - cy).abs() - hh + radius).max(0.0);
+                    let d = (qx * qx + qy * qy).sqrt() - radius;
+                    let t = (d / blur).clamp(0.0, 1.0);
+                    let a = strength * (1.0 - t * t * (3.0 - 2.0 * t));
+                    if a > 0.004 {
+                        let idx = base + x as usize;
+                        buffer[idx] = mix(0, buffer[idx], (a * 255.0) as u32);
+                    }
+                }
+            }
+        }
     }
 
     fn style(bold: bool, italic: bool) -> u8 {
@@ -321,19 +544,46 @@ impl Renderer {
         win_w: u32,
         win_h: u32,
         grid: &mut Grid,
-        cursor_visible: bool,
+        cursor_alpha: f32,
         focused: bool,
         now: Instant,
         full: bool,
     ) -> Vec<(u32, u32)> {
+        let cursor_visible = cursor_alpha > 0.01;
         let lay = self.layout(win_w, win_h);
-        let full = full
-            || self.invalid
-            || grid.all_dirty
-            || self.last_size != (win_w, win_h)
-            || self.last_layout != Some(lay);
+        let floats_changed = std::mem::take(&mut grid.floats_changed);
+        if floats_changed {
+            self.floats.clone_from(&grid.floats);
+        }
+        let geometry_changed = self.last_size != (win_w, win_h) || self.last_layout != Some(lay);
+        let full = full || self.invalid || grid.all_dirty || geometry_changed || floats_changed;
         let rows = lay.rows.min(grid.height);
         let (cw, ch) = (self.cell_w, self.cell_h);
+
+        // rolagem suave: novas rolagens entram, as atuais desaceleram
+        let events = std::mem::take(&mut grid.scrolls);
+        if geometry_changed || self.scroll_ms == 0 {
+            self.scrolls.clear();
+        } else {
+            for ev in events {
+                // regiao sob uma janela flutuante: o Neovim redesenha, nao anima
+                let covered = self.floats.iter().any(|f| {
+                    f.row < ev.bot && ev.top < f.row + f.height && f.col < ev.right && ev.left < f.col + f.width
+                });
+                if !covered {
+                    self.ingest_scroll(ev, now);
+                }
+            }
+        }
+        let tau = self.scroll_ms as f32 / 4000.0; // ~95% do caminho em 3/4 da duracao
+        let mut scroll_rows: Vec<(usize, usize)> = Vec::new();
+        for a in &mut self.scrolls {
+            let dt = now.duration_since(a.last).as_secs_f32();
+            a.last = now;
+            a.offset *= (-dt / tau.max(0.001)).exp();
+            scroll_rows.push((a.top, a.bot));
+        }
+        self.scrolls.retain(|a| a.offset.abs() >= 0.5);
 
         // cursor: alvo em pixels e retangulo deste quadro
         let (crow, ccol) = grid.cursor;
@@ -350,16 +600,46 @@ impl Renderer {
                 .cells
                 .get(crow * grid.width + ccol + 1)
                 .is_some_and(|c| c.cont);
+        // o cursor acompanha o texto que esta deslizando
+        let cursor_dy = self
+            .scrolls
+            .iter()
+            .find(|a| (a.top..a.bot).contains(&crow) && (a.left..a.right).contains(&ccol))
+            .map_or(0.0, |a| a.offset);
+        // forma do cursor: bloco, barra ou sublinhado; a troca e animada (o bloco
+        // afina ate virar barra ao entrar no modo de insercao)
+        let block_w = if wide { cw * 2 } else { cw } as f32;
+        let target_dims = match (shape, focused) {
+            (CursorShape::Beam, true) => ((cw / 8).max(2) as f32, ch as f32, 0.0),
+            (CursorShape::Underline, true) => {
+                let h = (ch / 8).max(2) as f32;
+                (block_w, h, ch as f32 - h)
+            }
+            _ => (block_w, ch as f32, 0.0),
+        };
+        let dims = match (self.cursor_dims, self.cursor_dims_at) {
+            (Some(d), Some(at)) if self.anim_ms > 0 => {
+                let k = 1.0 - (-now.duration_since(at).as_secs_f32() / 0.028).exp();
+                let step = |a: f32, b: f32| a + (b - a) * k;
+                let next = (step(d.0, target_dims.0), step(d.1, target_dims.1), step(d.2, target_dims.2));
+                let close = (next.0 - target_dims.0).abs() < 0.5
+                    && (next.1 - target_dims.1).abs() < 0.5
+                    && (next.2 - target_dims.2).abs() < 0.5;
+                if close { target_dims } else { next }
+            }
+            (Some(d), None) if d != target_dims && self.anim_ms > 0 => d,
+            _ => target_dims,
+        };
+        self.cursor_dims_at = (dims != target_dims).then_some(now);
+        self.cursor_dims = Some(dims);
+        let morphing = dims != target_dims;
         let cursor_rect = (cursor_visible && cursor_in).then(|| {
-            let (x, y) = (pos.0.round() as i32, pos.1.round() as i32);
-            let block_w = if wide { cw * 2 } else { cw };
-            match (shape, focused) {
-                (CursorShape::Beam, true) => PxRect { x, y, w: (cw / 8).max(2), h: ch },
-                (CursorShape::Underline, true) => {
-                    let h = (ch / 8).max(2);
-                    PxRect { x, y: y + (ch - h) as i32, w: block_w, h }
-                }
-                _ => PxRect { x, y, w: block_w, h: ch },
+            let (x, y) = (pos.0.round() as i32, (pos.1 + cursor_dy).round() as i32);
+            PxRect {
+                x,
+                y: y + dims.2.round() as i32,
+                w: (dims.0.round() as u32).max(1),
+                h: (dims.1.round() as u32).max(1),
             }
         });
 
@@ -369,6 +649,11 @@ impl Renderer {
         if !full {
             for (r, slot) in self.paint.iter_mut().enumerate() {
                 *slot = grid.dirty.get(r).copied().unwrap_or(false);
+            }
+            for &(top, bot) in &scroll_rows {
+                for slot in self.paint.iter_mut().take(bot).skip(top) {
+                    *slot = true;
+                }
             }
             for rect in [self.last_cursor, cursor_rect].into_iter().flatten() {
                 let top = (rect.y - lay.oy as i32).max(0) as u32 / ch;
@@ -388,9 +673,18 @@ impl Renderer {
                 self.paint_row(buffer, win_w, win_h, grid, &lay, r);
             }
         }
+        let anims = std::mem::take(&mut self.scrolls);
+        for a in &anims {
+            self.paint_scroll(buffer, win_w, win_h, grid, &lay, a);
+        }
+        self.scrolls = anims;
+        if !self.floats.is_empty() {
+            self.draw_shadows(buffer, win_w, win_h, &lay, rows, full);
+        }
 
         if let Some(rect) = cursor_rect {
-            self.draw_cursor(buffer, win_w, win_h, grid, rect, shape, focused, settled && cursor_in);
+            let a8 = (cursor_alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+            self.draw_cursor(buffer, win_w, win_h, grid, rect, shape, focused, settled && cursor_in && !morphing, a8);
         }
         self.last_cursor = cursor_rect;
         self.last_size = (win_w, win_h);
@@ -420,14 +714,38 @@ impl Renderer {
     }
 
     fn paint_row(&mut self, buffer: &mut [u32], win_w: u32, win_h: u32, grid: &Grid, lay: &Layout, r: usize) {
-        let (cw, ch) = (self.cell_w, self.cell_h);
+        let ch = self.cell_h;
         let y0 = lay.oy + r as u32 * ch;
         let y1 = (y0 + ch).min(win_h);
         // a faixa inteira (inclusive margens laterais) volta ao fundo padrao
         fill_rect(buffer, win_w, win_h, 0, y0, win_w, ch, grid.default_bg);
         let cols = lay.cols.min(grid.width);
         let start = r * grid.width;
-        let cells = &grid.cells[start..start + cols];
+        let cursor_col = (grid.cursor.0 == r).then_some(grid.cursor.1);
+        self.paint_cells(buffer, win_w, grid, &grid.cells[start..start + cols], lay.ox, y0 as i32, (y0, y1), cursor_col);
+    }
+
+    /// Pinta uma sequencia de celulas com a origem em `(x0, y)`, recortada nas
+    /// linhas de pixel `clip` (a rolagem suave desenha linhas fora da grade).
+    #[allow(clippy::too_many_arguments)]
+    fn paint_cells(
+        &mut self,
+        buffer: &mut [u32],
+        win_w: u32,
+        grid: &Grid,
+        cells: &[Cell],
+        x0: u32,
+        y: i32,
+        clip: (u32, u32),
+        cursor_col: Option<usize>,
+    ) {
+        let (cw, ch) = (self.cell_w, self.cell_h);
+        // trecho visivel desta linha
+        let vis = (y.max(clip.0 as i32) as u32, ((y + ch as i32).max(0) as u32).min(clip.1));
+        if vis.0 >= vis.1 {
+            return;
+        }
+        let cols = cells.len();
 
         // resolve os atributos uma vez por celula (celulas vizinhas repetem o hl)
         let mut res: Vec<Resolved> = Vec::with_capacity(cols);
@@ -453,15 +771,14 @@ impl Renderer {
                 end += 1;
             }
             if bg != grid.default_bg {
-                let x = lay.ox + c as u32 * cw;
-                fill_rect(buffer, win_w, win_h, x, y0, (end - c) as u32 * cw, ch, bg);
+                let x = x0 + c as u32 * cw;
+                fill_rect(buffer, win_w, vis.1, x, vis.0, (end - c) as u32 * cw, vis.1 - vis.0, bg);
             }
             c = end;
         }
 
-        // 2) glifos (recortados na faixa da linha); o trecho sob o cursor fica
+        // 2) glifos (recortados no trecho visivel); o trecho sob o cursor fica
         // sem ligadura para o caractere da celula aparecer
-        let cursor_col = (grid.cursor.0 == r).then_some(grid.cursor.1);
         let mut c = 0;
         while c < cols {
             let cell = &cells[c];
@@ -469,7 +786,7 @@ impl Renderer {
                 c += 1;
                 continue;
             }
-            let x = lay.ox + c as u32 * cw;
+            let x = x0 + c as u32 * cw;
             let style = Self::style(res[c].bold, res[c].italic);
             let fg = res[c].fg;
             if self.ligatures && ligature_char(cell) {
@@ -488,23 +805,23 @@ impl Renderer {
                         for g in glyphs.iter() {
                             let gx = x as i32 + g.cell as i32 * cw as i32 + g.dx;
                             if let Some(info) = self.glyph_by_id(g.id, style) {
-                                self.draw_info(buffer, win_w, (y0, y1), gx, y0 as i32 + g.dy, info, fg);
+                                self.draw_info(buffer, win_w, vis, gx, y + g.dy, info, fg);
                             }
                         }
                     }
                     None => {
                         for (k, cell) in cells.iter().enumerate().take(end).skip(c) {
-                            let kx = lay.ox + k as u32 * cw;
-                            self.blit(buffer, win_w, (y0, y1), kx, y0, cell.text.first(), fg, style);
+                            let kx = x0 + k as u32 * cw;
+                            self.blit(buffer, win_w, vis, kx, y, cell.text.first(), fg, style);
                         }
                     }
                 }
                 c = end;
                 continue;
             }
-            self.draw_char(buffer, win_w, (y0, y1), x, y0, cell.text.first(), fg, style);
+            self.draw_char(buffer, win_w, vis, x, y, cell.text.first(), fg, style);
             for extra in cell.text.rest() {
-                self.blit(buffer, win_w, (y0, y1), x, y0, extra, fg, style);
+                self.blit(buffer, win_w, vis, x, y, extra, fg, style);
             }
             c += 1;
         }
@@ -514,27 +831,34 @@ impl Renderer {
             if !(a.underline || a.undercurl || a.strikethrough) {
                 continue;
             }
-            let x = lay.ox + c as u32 * cw;
+            let x = x0 + c as u32 * cw;
             let w = if cells[c..].get(1).is_some_and(|n| n.cont) { cw * 2 } else { cw };
             let t = self.line_px;
+            let line_at = |yy: i32| -> Option<u32> {
+                (yy >= vis.0 as i32 && yy < vis.1 as i32).then_some(yy as u32)
+            };
             if a.underline {
-                let uy = (y0 as i32 + self.baseline + t as i32 + 1).min((y1 - t) as i32) as u32;
-                fill_rect(buffer, win_w, y1, x, uy, w, t, a.sp);
+                let uy = (y + self.baseline + t as i32 + 1).min(y + ch as i32 - t as i32);
+                if let Some(uy) = line_at(uy) {
+                    fill_rect(buffer, win_w, vis.1, x, uy, w, t, a.sp);
+                }
             }
             if a.undercurl {
-                self.undercurl(buffer, win_w, (y0, y1), x, w, a.sp);
+                self.undercurl(buffer, win_w, vis, x, y, w, a.sp);
             }
             if a.strikethrough {
-                let sy = (y0 as i32 + self.strike_y).max(y0 as i32) as u32;
-                fill_rect(buffer, win_w, y1, x, sy, w, t, a.fg);
+                if let Some(sy) = line_at(y + self.strike_y) {
+                    fill_rect(buffer, win_w, vis.1, x, sy, w, t, a.fg);
+                }
             }
         }
     }
 
     /// Linha ondulada suave (antisserrilhada), continua entre celulas.
-    fn undercurl(&self, buffer: &mut [u32], win_w: u32, clip: (u32, u32), x0: u32, w: u32, color: u32) {
+    #[allow(clippy::too_many_arguments)]
+    fn undercurl(&self, buffer: &mut [u32], win_w: u32, clip: (u32, u32), x0: u32, y: i32, w: u32, color: u32) {
         let amp = (self.cell_h as f32 / 14.0).max(1.0);
-        let base = clip.0 as f32 + self.baseline as f32 + amp + 1.5;
+        let base = y as f32 + self.baseline as f32 + amp + 1.5;
         let period = self.cell_w as f32;
         for x in x0..(x0 + w).min(win_w) {
             let yf = base + amp * (x as f32 / period * std::f32::consts::TAU).sin();
@@ -561,6 +885,7 @@ impl Renderer {
         shape: CursorShape,
         focused: bool,
         settled: bool,
+        alpha: u32,
     ) {
         let (row, col) = grid.cursor;
         let cell = &grid.cells[row * grid.width + col];
@@ -574,14 +899,16 @@ impl Renderer {
             fill_rect(buffer, win_w, win_h, x + rect.w - 1, y, 1, rect.h, res.fg);
             return;
         }
-        fill_rect(buffer, win_w, win_h, x, y, rect.w, rect.h, res.fg);
+        // piscar com fade: o cursor se mistura ao que esta embaixo
+        blend_rect(buffer, win_w, win_h, x, y, rect.w, rect.h, res.fg, alpha);
         // bloco parado: o caractere aparece "vazado" na cor do fundo
         if shape == CursorShape::Block && settled && !cell.cont && !cell.text.is_blank() {
             let style = Self::style(res.bold, res.italic);
             let clip = (y, (y + rect.h).min(win_h));
-            self.draw_char(buffer, win_w, clip, x, y, cell.text.first(), res.bg, style);
+            let color = mix(res.bg, res.fg, alpha);
+            self.draw_char(buffer, win_w, clip, x, y as i32, cell.text.first(), color, style);
             for extra in cell.text.rest() {
-                self.blit(buffer, win_w, clip, x, y, extra, res.bg, style);
+                self.blit(buffer, win_w, clip, x, y as i32, extra, color, style);
             }
         }
     }
@@ -590,8 +917,9 @@ impl Renderer {
     /// (preenchem a celula sem frestas, em qualquer fonte e zoom); o resto vem
     /// do atlas.
     #[allow(clippy::too_many_arguments)]
-    fn draw_char(&mut self, buffer: &mut [u32], win_w: u32, clip: (u32, u32), x: u32, y: u32, ch: char, color: u32, style: u8) {
-        if !self.draw_geometric(buffer, win_w, clip, x, y, ch, color) {
+    fn draw_char(&mut self, buffer: &mut [u32], win_w: u32, clip: (u32, u32), x: u32, y: i32, ch: char, color: u32, style: u8) {
+        // geometria so com a celula inteira abaixo do topo da janela (y >= 0)
+        if y < 0 || !self.draw_geometric(buffer, win_w, clip, x, y as u32, ch, color) {
             self.blit(buffer, win_w, clip, x, y, ch, color, style);
         }
     }
@@ -632,35 +960,54 @@ impl Renderer {
                     }
                 }
             }
-            // molduras finas/grossas: ─ ━ │ ┃ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼
-            0x2500..=0x2503 | 0x250C | 0x2510 | 0x2514 | 0x2518 | 0x251C | 0x2524 | 0x252C | 0x2534 | 0x253C => {
-                // bracos: (esquerda, direita, cima, baixo)
-                let (l, r, u, d) = match code {
-                    0x2500 | 0x2501 => (true, true, false, false),
-                    0x2502 | 0x2503 => (false, false, true, true),
-                    0x250C => (false, true, false, true),
-                    0x2510 => (true, false, false, true),
-                    0x2514 => (false, true, true, false),
-                    0x2518 => (true, false, true, false),
-                    0x251C => (false, true, true, true),
-                    0x2524 => (true, false, true, true),
-                    0x252C => (true, true, false, true),
-                    0x2534 => (true, true, true, false),
-                    _ => (true, true, true, true),
+            // molduras finas e grossas (U+2500..254B, meias linhas U+2574..257F):
+            // cada braco com o peso proprio; as juncoes ficam solidas
+            0x2500..=0x2503 | 0x250C..=0x254B | 0x2574..=0x257F => {
+                let Some([l, r, u, d]) = box_arms(code) else {
+                    return false;
                 };
-                let t = if code == 0x2501 || code == 0x2503 { self.line_px * 2 } else { self.line_px };
-                let lx = x0 + (cw - t.min(cw)) / 2;
-                let ly = y0 + (chh - t.min(chh)) / 2;
-                let hx0 = if l { x0 } else { lx };
-                let hx1 = if r { x0 + cw } else { lx + t };
-                if l || r {
-                    fill_rect(buffer, win_w, clip.1, hx0, ly.max(clip.0), hx1 - hx0, t, color);
+                let weight = |w: u8| match w {
+                    0 => 0,
+                    1 => self.line_px,
+                    _ => (self.line_px * 2).max(2),
+                };
+                let (tl, tr, tu, td) = (weight(l), weight(r), weight(u), weight(d));
+                let th = tl.max(tr); // espessura da faixa horizontal no centro
+                let tv = tu.max(td);
+                let mid_x = x0 + cw / 2;
+                let mid_y = y0 + chh / 2;
+                // os bracos horizontais cobrem a largura da faixa vertical (e vice-versa)
+                let cover_x0 = mid_x.saturating_sub(tv.max(th) / 2 + tv.max(th) % 2);
+                let cover_x1 = mid_x + tv.max(th) / 2;
+                let cover_y0 = mid_y.saturating_sub(th.max(tv) / 2 + th.max(tv) % 2);
+                let cover_y1 = mid_y + th.max(tv) / 2;
+                let hband = |t: u32| y0 + (chh - t.min(chh)) / 2;
+                let vband = |t: u32| x0 + (cw - t.min(cw)) / 2;
+                let mut hline = |xa: u32, xb: u32, t: u32| {
+                    let y = hband(t);
+                    if y + t > clip.0 && y < clip.1 {
+                        let top = y.max(clip.0);
+                        fill_rect(buffer, win_w, clip.1, xa, top, xb.saturating_sub(xa), y + t - top, color);
+                    }
+                };
+                if l > 0 {
+                    hline(x0, if u + d > 0 { cover_x1 } else { mid_x + tl / 2 }, tl);
                 }
-                let vy0 = if u { y0 } else { ly };
-                let vy1 = if d { y0 + chh } else { ly + t };
-                if u || d {
-                    let top = vy0.max(clip.0);
-                    fill_rect(buffer, win_w, clip.1, lx, top, t, vy1.saturating_sub(top), color);
+                if r > 0 {
+                    hline(if u + d > 0 { cover_x0 } else { mid_x.saturating_sub(tr / 2 + tr % 2) }, x0 + cw, tr);
+                }
+                let mut vline = |ya: u32, yb: u32, t: u32| {
+                    let x = vband(t);
+                    let top = ya.max(clip.0);
+                    if yb > top {
+                        fill_rect(buffer, win_w, clip.1, x, top, t, yb - top, color);
+                    }
+                };
+                if u > 0 {
+                    vline(y0, if l + r > 0 { cover_y1 } else { mid_y + tu / 2 }, tu);
+                }
+                if d > 0 {
+                    vline(if l + r > 0 { cover_y0 } else { mid_y.saturating_sub(td / 2 + td % 2) }, y0 + chh, td);
                 }
             }
             // cantos arredondados: ╭ ╮ ╯ ╰ (arco antisserrilhado)
@@ -724,13 +1071,13 @@ impl Renderer {
         win_w: u32,
         clip: (u32, u32),
         x0: u32,
-        y0: u32,
+        y0: i32,
         ch: char,
         fg: u32,
         style: u8,
     ) {
         if let Some(info) = self.glyph(ch, style) {
-            self.draw_info(buffer, win_w, clip, x0 as i32, y0 as i32, info, fg);
+            self.draw_info(buffer, win_w, clip, x0 as i32, y0, info, fg);
         }
     }
 
@@ -942,6 +1289,43 @@ fn shape_text(entry: &FontEntry, px: f32, text: &str) -> Option<Rc<[Shaped]>> {
     changed.then(|| glyphs.into())
 }
 
+/// Bracos de um caractere de moldura: [esquerda, direita, cima, baixo],
+/// com peso 0 (nenhum), 1 (fino) ou 2 (grosso). Linhas tracejadas ficam com a fonte.
+fn box_arms(code: u32) -> Option<[u8; 4]> {
+    const TABLE: [[u8; 4]; 0x4C] = [
+        [1, 1, 0, 0], [2, 2, 0, 0], [0, 0, 1, 1], [0, 0, 2, 2], // ─ ━ │ ┃
+        [9, 9, 9, 9], [9, 9, 9, 9], [9, 9, 9, 9], [9, 9, 9, 9], // tracejados
+        [9, 9, 9, 9], [9, 9, 9, 9], [9, 9, 9, 9], [9, 9, 9, 9],
+        [0, 1, 0, 1], [0, 2, 0, 1], [0, 1, 0, 2], [0, 2, 0, 2], // ┌ ┍ ┎ ┏
+        [1, 0, 0, 1], [2, 0, 0, 1], [1, 0, 0, 2], [2, 0, 0, 2], // ┐ ┑ ┒ ┓
+        [0, 1, 1, 0], [0, 2, 1, 0], [0, 1, 2, 0], [0, 2, 2, 0], // └ ┕ ┖ ┗
+        [1, 0, 1, 0], [2, 0, 1, 0], [1, 0, 2, 0], [2, 0, 2, 0], // ┘ ┙ ┚ ┛
+        [0, 1, 1, 1], [0, 2, 1, 1], [0, 1, 2, 1], [0, 1, 1, 2], // ├ ┝ ┞ ┟
+        [0, 1, 2, 2], [0, 2, 2, 1], [0, 2, 1, 2], [0, 2, 2, 2], // ┠ ┡ ┢ ┣
+        [1, 0, 1, 1], [2, 0, 1, 1], [1, 0, 2, 1], [1, 0, 1, 2], // ┤ ┥ ┦ ┧
+        [1, 0, 2, 2], [2, 0, 2, 1], [2, 0, 1, 2], [2, 0, 2, 2], // ┨ ┩ ┪ ┫
+        [1, 1, 0, 1], [2, 1, 0, 1], [1, 2, 0, 1], [2, 2, 0, 1], // ┬ ┭ ┮ ┯
+        [1, 1, 0, 2], [2, 1, 0, 2], [1, 2, 0, 2], [2, 2, 0, 2], // ┰ ┱ ┲ ┳
+        [1, 1, 1, 0], [2, 1, 1, 0], [1, 2, 1, 0], [2, 2, 1, 0], // ┴ ┵ ┶ ┷
+        [1, 1, 2, 0], [2, 1, 2, 0], [1, 2, 2, 0], [2, 2, 2, 0], // ┸ ┹ ┺ ┻
+        [1, 1, 1, 1], [2, 1, 1, 1], [1, 2, 1, 1], [2, 2, 1, 1], // ┼ ┽ ┾ ┿
+        [1, 1, 2, 1], [1, 1, 1, 2], [1, 1, 2, 2], [2, 1, 2, 1], // ╀ ╁ ╂ ╃
+        [1, 2, 2, 1], [2, 1, 1, 2], [1, 2, 1, 2], [2, 2, 2, 1], // ╄ ╅ ╆ ╇
+        [2, 2, 1, 2], [2, 1, 2, 2], [1, 2, 2, 2], [2, 2, 2, 2], // ╈ ╉ ╊ ╋
+    ];
+    const HALF: [[u8; 4]; 12] = [
+        [1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1], // ╴ ╵ ╶ ╷
+        [2, 0, 0, 0], [0, 0, 2, 0], [0, 2, 0, 0], [0, 0, 0, 2], // ╸ ╹ ╺ ╻
+        [1, 2, 0, 0], [0, 0, 1, 2], [2, 1, 0, 0], [0, 0, 2, 1], // ╼ ╽ ╾ ╿
+    ];
+    let arms = match code {
+        0x2500..=0x254B => TABLE[(code - 0x2500) as usize],
+        0x2574..=0x257F => HALF[(code - 0x2574) as usize],
+        _ => return None,
+    };
+    (arms[0] != 9).then_some(arms)
+}
+
 /// Mistura `fg` sobre `bg` com alfa 0..=255, em inteiros (sem f32 por pixel).
 #[inline(always)]
 fn mix(fg: u32, bg: u32, a: u32) -> u32 {
@@ -952,6 +1336,24 @@ fn mix(fg: u32, bg: u32, a: u32) -> u32 {
     let g = (fg & 0x0000_ff00) * a + (bg & 0x0000_ff00) * inv + 0x0000_8000;
     let g = ((g + ((g >> 8) & 0x0000_ff00)) >> 8) & 0x0000_ff00;
     rb | g
+}
+
+/// Como `fill_rect`, misturando a cor com o que ja esta pintado (alfa 0..=255).
+#[allow(clippy::too_many_arguments)]
+fn blend_rect(buffer: &mut [u32], win_w: u32, win_h: u32, x0: u32, y0: u32, w: u32, h: u32, color: u32, alpha: u32) {
+    if alpha >= 255 {
+        return fill_rect(buffer, win_w, win_h, x0, y0, w, h, color);
+    }
+    if alpha == 0 {
+        return;
+    }
+    let x_end = (x0 + w).min(win_w) as usize;
+    for y in y0..(y0 + h).min(win_h) {
+        let row = y as usize * win_w as usize;
+        for px in &mut buffer[row + x0 as usize..row + x_end.max(x0 as usize)] {
+            *px = mix(color, *px, alpha);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1052,7 +1454,7 @@ mod tests {
         grid.cursor = (0, cursor_col);
         let (w, h) = (r.cell_w * 16, r.cell_h * 2);
         let mut buffer = vec![0u32; (w * h) as usize];
-        r.render(&mut buffer, w, h, &mut grid, false, true, Instant::now(), true);
+        r.render(&mut buffer, w, h, &mut grid, 0.0, true, Instant::now(), true);
         buffer[..(w * r.cell_h) as usize].to_vec()
     }
 
@@ -1073,18 +1475,18 @@ mod tests {
             }
             let (w, h) = (r.cell_w * cols as u32, r.cell_h * rows as u32);
             let mut buffer = vec![0u32; (w * h) as usize];
-            r.render(&mut buffer, w, h, &mut grid, true, true, Instant::now(), true);
+            r.render(&mut buffer, w, h, &mut grid, 1.0, true, Instant::now(), true);
             let n = 200;
             let start = Instant::now();
             for _ in 0..n {
-                r.render(&mut buffer, w, h, &mut grid, true, true, Instant::now(), true);
+                r.render(&mut buffer, w, h, &mut grid, 1.0, true, Instant::now(), true);
             }
             let full = start.elapsed().as_secs_f64() * 1000.0 / n as f64;
             // quadro tipico: o cursor anda uma celula e repinta a linha dele
             let start = Instant::now();
             for i in 0..n * 10 {
                 grid.cursor = (5, i % cols);
-                r.render(&mut buffer, w, h, &mut grid, true, true, Instant::now(), false);
+                r.render(&mut buffer, w, h, &mut grid, 1.0, true, Instant::now(), false);
             }
             let partial = start.elapsed().as_secs_f64() * 1000.0 / (n * 10) as f64;
             println!("BENCH_LIG: ligaduras={ligatures} tela inteira {full:.3} ms, uma linha {partial:.4} ms ({w}x{h})");

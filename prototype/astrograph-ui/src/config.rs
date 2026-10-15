@@ -10,6 +10,7 @@ pub struct Config {
     pub window: WindowCfg,
     pub font: FontCfg,
     pub cursor: CursorCfg,
+    pub scroll: ScrollCfg,
 }
 
 #[derive(Deserialize, Clone)]
@@ -53,6 +54,7 @@ impl Default for Config {
             window: WindowCfg::default(),
             font: FontCfg::default(),
             cursor: CursorCfg::default(),
+            scroll: ScrollCfg::default(),
         }
     }
 }
@@ -72,7 +74,7 @@ impl Default for FontCfg {
     fn default() -> Self {
         FontCfg {
             size: 18.0,
-            line_height: 1.0,
+            line_height: 1.2,
             regular: None,
             bold: None,
             italic: None,
@@ -83,6 +85,19 @@ impl Default for FontCfg {
             ],
             ligatures: true,
         }
+    }
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct ScrollCfg {
+    /// Duracao da rolagem suave por pixel (0 desliga).
+    pub animation_ms: u64,
+}
+
+impl Default for ScrollCfg {
+    fn default() -> Self {
+        ScrollCfg { animation_ms: 160 }
     }
 }
 

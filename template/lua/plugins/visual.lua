@@ -103,7 +103,8 @@ return {
   {
     "sphamba/smear-cursor.nvim",
     event = "VeryLazy",
-    cond = function() return not (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) end,
+    -- via SSH cada quadro vira trafego; na UI do Astrograph o cursor ja desliza nativo
+    cond = function() return not (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) and vim.g.astrograph_gui == nil end,
     opts = {
       -- rápido e sem "borracha": combina com as animações de 60 fps
       stiffness = 0.8,

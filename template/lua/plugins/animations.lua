@@ -18,11 +18,18 @@ return {
 
       -- Base das animações. 60 fps acompanha a taxa de atualização dos terminais;
       -- 120 dobrava os redraws sem diferença visível (e tremia no Windows Terminal).
-      opts.animate = { fps = 60, duration = { step = 5, total = 160 }, easing = "outQuad" }
+      -- Na UI do Astrograph o quadro custa centesimos de ms: 120 fps.
+      opts.animate = {
+        fps = vim.g.astrograph_gui and 120 or 60,
+        duration = { step = 5, total = 160 },
+        easing = "outQuad",
+      }
 
       -- Scroll suave: passo curto, easing "out" para começar forte e frear no fim
+      -- Na UI do Astrograph (Rust) a rolagem e por pixel e nativa: a versao em
+      -- Lua (linha a linha) fica desligada para nao animar duas vezes.
       opts.scroll = {
-        enabled = true,
+        enabled = vim.g.astrograph_gui == nil,
         animate = { duration = { step = 8, total = 140 }, easing = "outCubic" },
         animate_repeat = { delay = 120, duration = { step = 5, total = 60 }, easing = "linear" },
       }

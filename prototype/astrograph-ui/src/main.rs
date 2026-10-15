@@ -39,6 +39,8 @@ const ZOOM_MAX: f32 = 48.0;
 const ANIM_FRAME: Duration = Duration::from_millis(7);
 /// Se o Neovim nao desenhar nada ate aqui, a janela aparece mesmo assim.
 const SHOW_TIMEOUT: Duration = Duration::from_millis(600);
+/// Duracao do fade do cursor ao piscar.
+const BLINK_FADE_MS: f32 = 180.0;
 
 #[derive(Clone, Copy)]
 enum UserEvent {
@@ -89,6 +91,30 @@ impl Handler for UiHandler {
                 }
             }
             "astrograph_clipboard_copy" => self.copy(&args),
+            "astrograph_scroll" => {
+                let n = |i: usize| args.get(i).and_then(|v| v.as_i64()).unwrap_or(0);
+                let (top, bot, left, right) = (n(0).max(0), n(1).max(0), n(2).max(0), n(3).max(0));
+                if std::env::var_os("DEBUG_SCROLL").is_some() {
+                    eprintln!("WINSCROLL {top}..{bot} x {left}..{right} rows={}", n(4));
+                }
+                self.back.lock().unwrap().capture_scroll(
+                    top as usize,
+                    bot as usize,
+                    left as usize,
+                    right as usize,
+                    n(4),
+                );
+            }
+            "astrograph_floats" => {
+                let floats = parse_floats(&args);
+                let mut front = self.front.lock().unwrap();
+                if front.floats != floats {
+                    front.floats = floats;
+                    front.floats_changed = true;
+                    drop(front);
+                    let _ = self.proxy.send_event(UserEvent::Redraw);
+                }
+            }
             _ => {}
         }
     }
@@ -151,6 +177,29 @@ impl UiHandler {
     }
 }
 
+/// `[[linha, coluna, largura, altura, zindex, winblend], ...]` vindo do Lua.
+fn parse_floats(args: &[Value]) -> Vec<grid::FloatRect> {
+    let num = |v: Option<&Value>| v.and_then(|v| v.as_i64()).unwrap_or(0);
+    args.first()
+        .and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|item| {
+                    let f = item.as_array()?;
+                    Some(grid::FloatRect {
+                        row: num(f.first()).max(0) as usize,
+                        col: num(f.get(1)).max(0) as usize,
+                        width: num(f.get(2)).max(0) as usize,
+                        height: num(f.get(3)).max(0) as usize,
+                        zindex: num(f.get(4)),
+                        blend: num(f.get(5)).clamp(0, 100) as u8,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn nvim_task(
     back: Arc<Mutex<Grid>>,
     front: Arc<Mutex<Grid>>,
@@ -165,7 +214,10 @@ async fn nvim_task(
     };
     let nvim_bin = std::env::var("NVIM_BIN").unwrap_or_else(|_| "nvim".to_string());
     let (nvim, io_handler, _child) = match create::new_child_cmd(
-        Command::new(&nvim_bin).arg("--embed").arg("--headless"),
+        // so `--embed` (sem `--headless`): o Neovim espera o `ui_attach` para ler a
+        // config, entao tudo que o `setup_ui` define vale desde o inicio. O
+        // `--cmd` garante o aviso de UI nativa antes de qualquer plugin.
+        Command::new(&nvim_bin).args(["--embed", "--cmd", "let g:astrograph_gui = 'astrograph-ui'"]),
         handler,
     )
     .await
@@ -188,16 +240,41 @@ async fn nvim_task(
     // vale desde o inicio e a config do usuario o respeita
     setup_ui(&nvim).await;
 
+    // conecta ja com o tamanho real da janela: a tela inicial e montada uma vez
+    // so, do tamanho certo (com um tamanho provisorio o dashboard nascia
+    // centralizado para outra altura e deslocado)
+    let mut size = (INITIAL_COLS as i64, INITIAL_ROWS as i64);
+    let mut pending = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(UiCommand::Resize(cols, rows))) => {
+                size = (cols, rows);
+                break;
+            }
+            Ok(Some(other)) => pending.push(other),
+            Ok(None) | Err(_) => break,
+        }
+    }
+
     let mut opts = UiAttachOptions::new();
     opts.set_linegrid_external(true);
     opts.set_rgb(true);
-    if let Err(err) = nvim.ui_attach(INITIAL_COLS as i64, INITIAL_ROWS as i64, &opts).await {
+    if let Err(err) = nvim.ui_attach(size.0, size.1, &opts).await {
         eprintln!("ASTROGRAPH_UI: ui_attach falhou: {err:?}");
         let _ = proxy.send_event(UserEvent::Quit);
         return;
     }
 
-    while let Some(cmd) = rx.recv().await {
+    let mut queued = pending.into_iter();
+    loop {
+        let cmd = match queued.next() {
+            Some(cmd) => cmd,
+            None => match rx.recv().await {
+                Some(cmd) => cmd,
+                None => break,
+            },
+        };
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
@@ -231,6 +308,81 @@ vim.g.clipboard = {
 }
 vim.o.title = true
 vim.o.titlestring = "%{expand('%:t') !=# '' ? expand('%:t') . ' — ' : ''}%{fnamemodify(getcwd(), ':t')}"
+
+-- a UI desenha cursor deslizando e rolagem por pixel: a config desliga as
+-- versoes em Lua (smear-cursor, scroll do snacks) para nao animar duas vezes
+vim.g.astrograph_gui = 'astrograph-ui'
+
+-- janelas flutuantes com borda -> sombra na UI. So notifica quando muda.
+local last = ''
+local function border_side(b, i)
+  local v = b[i]
+  if type(v) == 'table' then v = v[1] end
+  return v ~= nil and v ~= ''
+end
+local function push()
+  local out, key = {}, {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+    if ok and cfg.relative ~= '' and not cfg.hide and type(cfg.border) == 'table' and #cfg.border > 0 then
+      local b = cfg.border
+      local top, right, bottom, left = border_side(b, 2), border_side(b, 4), border_side(b, 6), border_side(b, 8)
+      if top or right or bottom or left then
+        local pos = vim.api.nvim_win_get_position(win)
+        local h = vim.api.nvim_win_get_height(win) + (top and 1 or 0) + (bottom and 1 or 0)
+        local w = vim.api.nvim_win_get_width(win) + (left and 1 or 0) + (right and 1 or 0)
+        local item = { pos[1], pos[2], w, h, cfg.zindex or 50, vim.wo[win].winblend }
+        out[#out + 1] = item
+        key[#key + 1] = table.concat(item, ',')
+      end
+    end
+  end
+  local k = table.concat(key, ';')
+  if k ~= last then
+    last = k
+    vim.rpcnotify(chan, 'astrograph_floats', out)
+  end
+end
+local scheduled = false
+local function soon()
+  if scheduled then return end
+  scheduled = true
+  vim.schedule(function()
+    scheduled = false
+    pcall(push)
+  end)
+end
+local group = vim.api.nvim_create_augroup('astrograph_ui_floats', { clear = true })
+
+-- rolagem por pixel: avisa a UI quantas linhas de tela a janela rolou, antes
+-- do redesenho (o WinScrolled roda antes de o Neovim desenhar o quadro)
+vim.api.nvim_create_autocmd('WinScrolled', {
+  group = group,
+  callback = function()
+    for id, ev in pairs(vim.v.event) do
+      local win = tonumber(id)
+      local delta = type(ev) == 'table' and ev.topline or 0
+      if win and delta ~= 0 and vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_win_get_config(win).relative == '' then
+        local info = vim.fn.getwininfo(win)[1]
+        local new_top = info.topline
+        local old_top = new_top - delta
+        local a, b = math.min(old_top, new_top), math.max(old_top, new_top)
+        -- linhas de tela (quebra de linha e dobras contam)
+        local ok, h = pcall(vim.api.nvim_win_text_height, win, { start_row = a - 1, end_row = b - 2 })
+        local rows = ok and h.all or math.abs(delta)
+        if delta < 0 then rows = -rows end
+        local top = info.winrow - 1 + (info.winbar or 0)
+        vim.rpcnotify(chan, 'astrograph_scroll', top, top + info.height, info.wincol - 1, info.wincol - 1 + info.width, rows)
+      end
+    end
+  end,
+})
+vim.api.nvim_create_autocmd(
+  { 'WinNew', 'WinClosed', 'WinResized', 'WinScrolled', 'VimResized', 'SafeState', 'BufWinEnter', 'WinEnter' },
+  { group = group, callback = soon }
+)
+vim.api.nvim_create_autocmd('OptionSet', { group = group, pattern = 'winblend', callback = soon })
 "#;
     let channel = match nvim.get_api_info().await {
         Ok(info) => info.first().and_then(|v| v.as_i64()).unwrap_or(1),
@@ -260,8 +412,11 @@ struct App {
     bench: bool,
     proxy: EventLoopProxy<UserEvent>,
     base_font: f32,
-    cursor_on: bool,
-    next_blink: Instant,
+    /// Inicio do ciclo de piscar (antes disso o cursor fica aceso).
+    blink_origin: Instant,
+    /// Opacidade do cursor no ultimo quadro desenhado.
+    drawn_alpha: f32,
+    bench_flip: bool,
     last_cursor: (usize, usize),
     anim_next: Option<Instant>,
     focused: bool,
@@ -274,6 +429,9 @@ struct App {
     redraw_pending: bool,
     close_at: Option<Instant>,
     last_redraw: Instant,
+    /// SPIKE_SCROLL: quadros com rolagem em andamento e maior deslocamento.
+    scroll_frames: u32,
+    scroll_max: f32,
 }
 
 impl App {
@@ -288,7 +446,7 @@ impl App {
             grid,
             tx,
             base_font: cfg.font.size,
-            next_blink: now + Duration::from_millis(cfg.cursor.blink_ms.max(100)),
+            blink_origin: now + Duration::from_millis(cfg.cursor.blink_ms.max(100)),
             cfg,
             window: None,
             context: None,
@@ -304,7 +462,8 @@ impl App {
             first_paint: None,
             bench: std::env::var("SPIKE_BENCH").is_ok(),
             proxy,
-            cursor_on: true,
+            drawn_alpha: 1.0,
+            bench_flip: false,
             last_cursor: (usize::MAX, 0),
             anim_next: None,
             focused: true,
@@ -316,6 +475,8 @@ impl App {
             redraw_pending: false,
             close_at: None,
             last_redraw: now,
+            scroll_frames: 0,
+            scroll_max: 0.0,
         }
     }
 
@@ -325,8 +486,33 @@ impl App {
 
     /// Cursor aceso e pausa no piscar: digitar ou mover nunca deixa o cursor sumido.
     fn wake_cursor(&mut self) {
-        self.cursor_on = true;
-        self.next_blink = Instant::now() + Duration::from_millis(self.blink_ms() * 2);
+        self.blink_origin = Instant::now() + Duration::from_millis(self.blink_ms());
+    }
+
+    /// Opacidade do cursor agora e quando ela volta a mudar. O piscar e um fade
+    /// suave (como no macOS), nao um liga/desliga.
+    fn cursor_alpha(&self, now: Instant) -> (f32, Option<Instant>) {
+        if !self.cfg.cursor.blink || !self.focused {
+            return (1.0, None);
+        }
+        if now < self.blink_origin {
+            return (1.0, Some(self.blink_origin));
+        }
+        let on = self.blink_ms() as f32;
+        let period = on * 2.0;
+        let fade = BLINK_FADE_MS.min(on / 2.0);
+        let t = (now.duration_since(self.blink_origin).as_secs_f32() * 1000.0) % period;
+        let ease = |x: f32| x * x * (3.0 - 2.0 * x);
+        let after = |ms: f32| Some(now + Duration::from_secs_f32(ms.max(0.0) / 1000.0));
+        if t < on - fade {
+            (1.0, after(on - fade - t))
+        } else if t < on {
+            (1.0 - ease((t - (on - fade)) / fade), Some(now + ANIM_FRAME))
+        } else if t < period - fade {
+            (0.0, after(period - fade - t))
+        } else {
+            (ease((t - (period - fade)) / fade), Some(now + ANIM_FRAME))
+        }
     }
 
     fn request_redraw(&mut self) {
@@ -383,6 +569,7 @@ impl App {
         let (Some(nw), Some(nh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) else {
             return;
         };
+        let pre_alpha = self.cursor_alpha(Instant::now()).0;
         let (Some(surface), Some(renderer)) = (self.surface.as_mut(), self.renderer.as_mut()) else {
             return;
         };
@@ -393,10 +580,12 @@ impl App {
         }
 
         let now = Instant::now();
-        let bench_full = self.bench && self.frames < 240;
+        // bench: so mede depois da abertura (o fade de entrada repinta tudo)
+        let bench_warm = self.bench && self.start.elapsed() < Duration::from_millis(1500);
+        let bench_full = self.bench && !bench_warm && self.frames < 240;
         if self.bench && !bench_full {
             // fase incremental do bench: so o cursor muda a cada quadro
-            self.cursor_on = !self.cursor_on;
+            self.bench_flip = !self.bench_flip;
         }
         let render_start = Instant::now();
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
@@ -411,13 +600,23 @@ impl App {
             if let Some(title) = grid.title.take() {
                 window.set_title(if title.is_empty() { &self.cfg.window.title } else { &title });
             }
-            if grid.cursor != self.last_cursor {
+            let moved = grid.cursor != self.last_cursor;
+            if moved {
                 self.last_cursor = grid.cursor;
-                self.cursor_on = true;
-                self.next_blink = now + Duration::from_millis(self.cfg.cursor.blink_ms.max(100) * 2);
+                self.blink_origin = now + Duration::from_millis(self.cfg.cursor.blink_ms.max(100));
             }
-            let visible = self.cursor_on || !self.focused;
-            renderer.render(&mut buffer, w, h, &mut grid, visible, self.focused, now, full)
+            let alpha = if self.bench && !bench_full {
+                if self.bench_flip { 1.0 } else { 0.0 }
+            } else if moved {
+                1.0
+            } else {
+                pre_alpha
+            };
+            // primeiro quadro do Neovim e a tela vazia de antes da config: sem
+            // cursor solto no canto enquanto o conteudo nao chega
+            let alpha = if grid.generation < 2 { 0.0 } else { alpha };
+            self.drawn_alpha = alpha;
+            renderer.render(&mut buffer, w, h, &mut grid, alpha, self.focused, now, full)
         };
         if !spans.is_empty() {
             let rects: Vec<Rect> = spans
@@ -429,20 +628,33 @@ impl App {
             buffer.present_with_damage(&rects).expect("present");
         }
         let elapsed = render_start.elapsed();
-        if full {
+        if bench_warm {
+            // aquecimento do bench: nao conta
+        } else if full {
             self.render_full += elapsed;
         } else {
             self.render_partial += elapsed;
         }
         self.anim_next = renderer.animating(now).then(|| now + ANIM_FRAME);
+        let offset = renderer.scroll_offset();
+        if offset > 0.0 {
+            self.scroll_frames += 1;
+            self.scroll_max = self.scroll_max.max(offset);
+        }
 
-        self.frames += 1;
         if self.first_paint.is_none() {
             let elapsed = self.start.elapsed();
             self.first_paint = Some(elapsed);
             println!("FIRST_PAINT: {} ms desde o inicio", elapsed.as_millis());
         }
-        if self.bench {
+        if bench_warm {
+            self.redraw_pending = true;
+            window.request_redraw();
+        } else {
+            self.frames += 1;
+        }
+
+        if self.bench && !bench_warm {
             if self.frames == 480 {
                 println!(
                     "BENCH: tela inteira {:.3} ms/quadro, so o que mudou {:.3} ms/quadro ({}x{})",
@@ -572,6 +784,12 @@ impl ApplicationHandler<UserEvent> for App {
             Renderer::new(&self.cfg.font, self.cfg.cursor.animation_ms).expect("renderer");
         renderer.set_size(self.base_font * scale);
         renderer.set_padding((self.cfg.window.padding.max(0.0) * scale as f64).round() as u32);
+        renderer.set_scroll_ms(self.cfg.scroll.animation_ms);
+        // tamanho da grade ja agora: o Neovim conecta com ele
+        let size = window.inner_size();
+        let lay = renderer.layout(size.width, size.height);
+        self.last_grid = (lay.cols, lay.rows);
+        let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, lay.rows as i64));
         self.renderer = Some(renderer);
         window.set_cursor(CursorIcon::Text);
         self.window = Some(window);
@@ -586,10 +804,23 @@ impl ApplicationHandler<UserEvent> for App {
                 if self.shown {
                     self.request_redraw();
                 } else if self.window.is_some() {
+                    // a cor inicial ja e a do tema Astrograph: aparece no primeiro
+                    // quadro, e o conteudo entra com o fade do dashboard
                     self.show();
                 }
             }
-            UserEvent::Quit => event_loop.exit(),
+            UserEvent::Quit => {
+                if std::env::var("SPIKE_SCROLL").is_ok() {
+                    let ok = self.scroll_frames >= 4 && self.scroll_max > 0.0;
+                    println!(
+                        "SCROLL_OK: {} (quadros animados={}, deslocamento max={:.0}px)",
+                        if ok { "sim" } else { "nao" },
+                        self.scroll_frames,
+                        self.scroll_max
+                    );
+                }
+                event_loop.exit()
+            }
         }
     }
 
@@ -605,13 +836,14 @@ impl ApplicationHandler<UserEvent> for App {
                 soonest(deadline);
             }
         }
-        if self.cfg.cursor.blink && self.focused && self.shown {
-            if now >= self.next_blink {
-                self.cursor_on = !self.cursor_on;
-                self.next_blink = now + Duration::from_millis(self.blink_ms());
+        if self.shown {
+            let (alpha, next) = self.cursor_alpha(now);
+            if (alpha - self.drawn_alpha).abs() > 0.004 {
                 self.request_redraw();
             }
-            soonest(self.next_blink);
+            if let Some(next) = next {
+                soonest(next);
+            }
         }
         if let Some(t) = self.anim_next {
             if now >= t {
@@ -909,7 +1141,11 @@ fn main() {
         }
         cfg
     };
-    let back = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
+    let back = Arc::new(Mutex::new({
+        let mut g = Grid::new(INITIAL_COLS, INITIAL_ROWS);
+        g.record_scrolls = cfg.scroll.animation_ms > 0;
+        g
+    }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<UiCommand>();
 
@@ -933,6 +1169,8 @@ fn main() {
         || std::env::var("SPIKE_WIDE").is_ok()
         || std::env::var("SPIKE_CLIP").is_ok()
         || std::env::var("SPIKE_KEYS").is_ok()
+        || std::env::var("SPIKE_SCROLL").is_ok()
+        || std::env::var("SPIKE_FLOATS").is_ok()
     {
         spawn_smoke(Arc::clone(&grid), tx.clone(), event_loop.create_proxy());
     }
@@ -946,13 +1184,39 @@ fn main() {
 fn spawn_smoke(grid: Arc<Mutex<Grid>>, tx: UnboundedSender<UiCommand>, proxy: EventLoopProxy<UserEvent>) {
     let has = |name: &str| std::env::var(name).is_ok();
     let (input, wide, clip, keys) = (has("SPIKE_INPUT"), has("SPIKE_WIDE"), has("SPIKE_CLIP"), has("SPIKE_KEYS"));
+    let (scroll, floats) = (has("SPIKE_SCROLL"), has("SPIKE_FLOATS"));
     std::thread::spawn(move || {
         let send = |k: &str| {
             let _ = tx.send(UiCommand::Keys(k.to_string()));
         };
         let screen = || grid.lock().unwrap().to_text();
         std::thread::sleep(Duration::from_millis(4000));
-        if clip {
+        if scroll {
+            // arquivo longo, desce meia tela e volta: o App conta os quadros animados
+            match std::env::var("SPIKE_SCROLL_FILE") {
+                Ok(file) => send(&format!(":e {file}<CR>")),
+                Err(_) => send(":enew<CR>:call setline(1, map(range(1, 400), '\"linha \" . v:val'))<CR>gg"),
+            }
+            std::thread::sleep(Duration::from_millis(600));
+            if let Ok(pre) = std::env::var("SPIKE_SCROLL_PRE") {
+                send(&pre);
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            send("<C-d>");
+            std::thread::sleep(Duration::from_millis(500));
+            if std::env::var("DEBUG_SCROLL").is_ok() {
+                println!("--- TELA ---
+{}--- FIM ---", screen());
+            }
+            send("<C-u>");
+            std::thread::sleep(Duration::from_millis(500));
+        } else if floats {
+            send(":lua vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, {relative='editor', row=3, col=8, width=30, height=5, border='rounded'})<CR>");
+            std::thread::sleep(Duration::from_millis(800));
+            let fl = grid.lock().unwrap().floats.clone();
+            let ok = fl.iter().any(|f| f.row == 3 && f.col == 8 && f.width == 32 && f.height == 7);
+            println!("FLOATS_OK: {} {:?}", if ok { "sim" } else { "nao" }, fl);
+        } else if clip {
             send(":enew<CR>:call setline(1, 'APROVEITADO')<CR>ggV\"+y");
             std::thread::sleep(Duration::from_millis(900));
             let got = arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default();

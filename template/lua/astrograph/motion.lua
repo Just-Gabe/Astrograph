@@ -56,7 +56,8 @@ local function animate(duration, on_frame, on_done)
     pcall(timer.close, timer)
     if on_done then on_done() end
   end
-  timer:start(0, 16, function()
+  -- 60 fps no terminal; ~120 na UI do Astrograph (quadro custa centesimos de ms)
+  timer:start(0, vim.g.astrograph_gui and 8 or 16, function()
     if pending or stopped then return end
     pending = true
     vim.schedule(function()

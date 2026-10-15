@@ -20,8 +20,8 @@ padding = 10
 [font]
 # Tamanho em pixels da EM (tamanho "nominal" da fonte).
 size = 18.0
-# Multiplicador de altura de linha (0.8 a 3.0).
-line_height = 1.0
+# Multiplicador de altura de linha (0.8 a 3.0). 1.2 da respiro ao texto.
+line_height = 1.2
 # Fonte por estilo: caminho absoluto ou nome de arquivo (procura em
 # C:\Windows\Fonts e na pasta de fontes do usuario). Se omitido, usa
 # JetBrainsMono Nerd Font Mono.
@@ -42,3 +42,8 @@ blink = true
 blink_ms = 530
 # Deslize do cursor entre posicoes, em ms (0 desliga).
 animation_ms = 80
+
+[scroll]
+# Rolagem suave por pixel: o texto desliza e desacelera, em vez de pular de
+# linha em linha. Duracao em ms (0 desliga).
+animation_ms = 160
