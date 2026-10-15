@@ -2,7 +2,7 @@
 name = "astrograph-ui"
 version = "0.0.1"
 edition = "2021"
-description = "Spike: UI em Rust do Astrograph sobre Neovim embutido"
+description = "Astrograph: editor com agentes de IA, UI em Rust sobre o Neovim"
 publish = false
 
 [dependencies]
@@ -18,3 +18,12 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 arboard = "3"
 rustybuzz = "0.20.1"
+
+[build-dependencies]
+embed-resource = "2.5"
+
+[profile.release]
+# executavel menor e um pouco mais rapido (o instalador baixa este arquivo)
+strip = true
+lto = "thin"
+codegen-units = 4

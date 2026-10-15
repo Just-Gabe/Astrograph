@@ -1,0 +1,45 @@
+# Compila o app Astrograph (UI em Rust) no Windows e publica no GitHub Releases.
+# O instalador (install.ps1) baixa `astrograph-windows-x64.exe` do release mais novo.
+#
+# Publicar: crie uma tag `v*` (ex.: git tag v0.1.0 && git push origin v0.1.0)
+# ou rode o workflow manualmente informando a tag.
+name: Release do app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag do release (ex.: v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: prototype/astrograph-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-ui
+      - name: Testes
+        run: cargo test --release
+      - name: Compilar
+        run: cargo build --release
+      - name: Preparar o executável
+        shell: pwsh
+        run: Copy-Item target/release/astrograph-ui.exe astrograph-windows-x64.exe
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Astrograph ${{ github.event.inputs.tag || github.ref_name }}
+          files: prototype/astrograph-ui/astrograph-windows-x64.exe
+          fail_on_unmatched_files: true

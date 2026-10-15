@@ -1,3 +1,6 @@
+// release: app de janela, sem console (o debug mantem o console para logs)
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! UI em Rust do Astrograph sobre um Neovim embutido.
 //!
 //! A UI roda no thread principal (winit). Um runtime tokio num thread separado
@@ -213,11 +216,16 @@ async fn nvim_task(
         last_copy: Arc::new(Mutex::new(None)),
     };
     let nvim_bin = std::env::var("NVIM_BIN").unwrap_or_else(|_| "nvim".to_string());
+    // so `--embed` (sem `--headless`): o Neovim espera o `ui_attach` para ler a
+    // config, entao tudo que o `setup_ui` define vale desde o inicio. O `--cmd`
+    // garante o aviso de UI nativa antes de qualquer plugin.
+    let mut cmd = Command::new(&nvim_bin);
+    cmd.args(["--embed", "--cmd", "let g:astrograph_gui = 'astrograph-ui'"]);
+    // sem janela de console para o nvim (nem para os processos que ele abre)
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let (nvim, io_handler, _child) = match create::new_child_cmd(
-        // so `--embed` (sem `--headless`): o Neovim espera o `ui_attach` para ler a
-        // config, entao tudo que o `setup_ui` define vale desde o inicio. O
-        // `--cmd` garante o aviso de UI nativa antes de qualquer plugin.
-        Command::new(&nvim_bin).args(["--embed", "--cmd", "let g:astrograph_gui = 'astrograph-ui'"]),
+        &mut cmd,
         handler,
     )
     .await

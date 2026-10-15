@@ -1,4 +1,4 @@
-﻿# Astrograph — instalador para Windows (uma linha)
+# Astrograph — instalador para Windows (uma linha)
 #
 #   irm https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.ps1 | iex
 #
@@ -8,9 +8,14 @@
 #   3. (Opcional) aponta a fonte do Windows Terminal para a Nerd Font
 #   4. Clona o Astrograph em %LOCALAPPDATA%\Astrograph
 #   5. Liga a config: %LOCALAPPDATA%\nvim  ->  Astrograph\template (com backup do antigo)
-#   6. Baixa os plugins do Neovim (Lazy) + ferramentas do Mason
+#   6. Instala o app Astrograph (UI em Rust): atalho no menu Iniciar e o comando `astrograph`
+#   7. Baixa os plugins do Neovim (Lazy) + ferramentas do Mason
 #
-# É idempotente: pode rodar de novo sem medo.
+# É idempotente: o que já existe na máquina (programas, fonte, clone) não é
+# baixado de novo; rodar de novo só atualiza.
+#
+# Arquivo salvo SEM BOM: com `irm | iex`, o BOM gruda no `#` da 1ª linha e o
+# PowerShell tenta executar o comentário como comando.
 
 #Requires -Version 5.1
 $ErrorActionPreference = 'Stop'
@@ -28,23 +33,51 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
   throw 'winget não encontrado. Instale o "App Installer" pela Microsoft Store e rode o script de novo.'
 }
 
-# --- 1. Pacotes (winget) ---------------------------------------------------
+# --- 1. Pacotes (winget): só o que falta ------------------------------------
+function Refresh-Path {
+  $env:Path = ([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+               [Environment]::GetEnvironmentVariable('Path', 'User'))
+}
+
+# Versão do Neovim instalado (0.0 se não houver)
+function Nvim-Version {
+  $cmd = Get-Command nvim -ErrorAction SilentlyContinue
+  if (-not $cmd) { return [version]'0.0' }
+  $line = (& $cmd.Source --version 2>$null | Select-Object -First 1)
+  if ($line -match 'v(\d+)\.(\d+)\.?(\d*)') {
+    $patch = if ($Matches[3]) { $Matches[3] } else { '0' }
+    return [version]"$($Matches[1]).$($Matches[2]).$patch"
+  }
+  return [version]'0.0'
+}
+
 $packages = @(
-  'Neovim.Neovim',              # editor
-  'Git.Git',                    # obrigatório
-  'BurntSushi.ripgrep.MSVC',    # live grep (<Leader>fw)
-  'sharkdp.fd',                 # busca de arquivos (<Leader>ff)
-  'BrechtSanders.WinLibs.POSIX.UCRT' # gcc para os parsers do Treesitter
+  @{ id = 'Neovim.Neovim';                    cmd = 'nvim'; why = 'editor' },
+  @{ id = 'Git.Git';                          cmd = 'git';  why = 'obrigatório' },
+  @{ id = 'BurntSushi.ripgrep.MSVC';          cmd = 'rg';   why = 'busca de texto' },
+  @{ id = 'sharkdp.fd';                       cmd = 'fd';   why = 'busca de arquivos' },
+  @{ id = 'BrechtSanders.WinLibs.POSIX.UCRT'; cmd = 'gcc';  why = 'parsers do Treesitter' }
 )
+Refresh-Path
 foreach ($pkg in $packages) {
-  Info "winget: $pkg"
-  winget install --id $pkg -e --silent `
+  $have = Get-Command $pkg.cmd -ErrorAction SilentlyContinue
+  if ($pkg.cmd -eq 'nvim' -and $have -and (Nvim-Version) -lt [version]'0.11') {
+    Info "Neovim $(Nvim-Version) é antigo (precisa de 0.11+): atualizando"
+    winget upgrade --id $pkg.id -e --silent `
+      --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Null
+    continue
+  }
+  if ($have) {
+    Info "$($pkg.cmd) já instalado ($($pkg.why))"
+    continue
+  }
+  Info "Instalando $($pkg.id) ($($pkg.why))"
+  winget install --id $pkg.id -e --silent `
     --accept-package-agreements --accept-source-agreements --disable-interactivity | Out-Null
 }
 
 # Atualiza o PATH da sessão para já usar nvim/git/rg/fd/gcc
-$env:Path = ([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-             [Environment]::GetEnvironmentVariable('Path', 'User'))
+Refresh-Path
 
 # --- 2. Nerd Font (por usuário, sem admin) ---------------------------------
 $fontDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
@@ -52,7 +85,21 @@ $fontKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
 New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
 New-Item -Path $fontKey -Force | Out-Null
 
-if (Test-Path (Join-Path $fontDir 'JetBrainsMonoNerdFont-Regular.ttf')) {
+# Já instalada (para o usuário ou para todos, em qualquer variante: Mono, NL…)?
+function Has-NerdFont {
+  foreach ($dir in @($fontDir, (Join-Path $env:WINDIR 'Fonts'))) {
+    if (Get-ChildItem $dir -Filter 'JetBrainsMono*NerdFont*-Regular.ttf' -ErrorAction SilentlyContinue | Select-Object -First 1) {
+      return $true
+    }
+  }
+  foreach ($key in @($fontKey, 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Fonts')) {
+    $props = Get-ItemProperty $key -ErrorAction SilentlyContinue
+    if ($props -and ($props.PSObject.Properties.Name -match 'JetBrainsMono.*Nerd Font')) { return $true }
+  }
+  return $false
+}
+
+if (Has-NerdFont) {
   Info 'Nerd Font JetBrainsMono já instalada'
 } else {
   Info 'Baixando a Nerd Font JetBrainsMono...'
@@ -62,7 +109,12 @@ if (Test-Path (Join-Path $fontDir 'JetBrainsMonoNerdFont-Regular.ttf')) {
   if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
   Get-ChildItem $tmp -Recurse -Include '*.ttf','*.otf' | ForEach-Object {
-    Copy-Item $_.FullName (Join-Path $fontDir $_.Name) -Force
+    $dest = Join-Path $fontDir $_.Name
+    # uma fonte em uso não pode ser sobrescrita ("seção mapeada"): se o arquivo
+    # já existe, fica o que está lá
+    if (-not (Test-Path $dest)) {
+      try { Copy-Item $_.FullName $dest -Force } catch { Warn "Fonte $($_.Exception.Message)"; return }
+    }
     $face = [IO.Path]::GetFileNameWithoutExtension($_.Name)
     New-ItemProperty -Path $fontKey -Name "$face (TrueType)" -Value $_.Name -PropertyType String -Force | Out-Null
   }
@@ -121,6 +173,82 @@ if (Test-Path $Config) {
 cmd /c mklink /J "$Config" (Join-Path $Root 'template') | Out-Null
 Info "Ligado: $Config -> $Root\template"
 
+# --- 5b. App Astrograph (UI em Rust) ---------------------------------------
+# O Astrograph é a janela própria (Rust) com o Neovim como motor. Baixa o
+# executável do GitHub Releases só quando sai uma versão nova; sem release
+# publicado, compila a partir do código se houver Rust (cargo) na máquina.
+$BinDir   = Join-Path $Root 'bin'
+$AppExe   = Join-Path $BinDir 'astrograph.exe'
+$AppStamp = Join-Path $BinDir 'astrograph.version'
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+
+function Install-AppFile($src) {
+  try {
+    Copy-Item $src $AppExe -Force
+    return $true
+  } catch {
+    Warn 'Não consegui trocar o app (ele está aberto?). Feche o Astrograph e rode o instalador de novo.'
+    return $false
+  }
+}
+
+$installed = if (Test-Path $AppStamp) { (Get-Content $AppStamp -Raw).Trim() } else { '' }
+$release = $null
+try {
+  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest' `
+    -Headers @{ 'User-Agent' = 'astrograph-installer' } -TimeoutSec 15
+} catch { $release = $null }
+$asset = if ($release) { $release.assets | Where-Object { $_.name -eq 'astrograph-windows-x64.exe' } | Select-Object -First 1 } else { $null }
+
+if ($asset) {
+  if ((Test-Path $AppExe) -and $installed -eq $release.tag_name) {
+    Info "App Astrograph já está na versão $($release.tag_name)"
+  } else {
+    Info "Baixando o app Astrograph $($release.tag_name)..."
+    $tmpExe = Join-Path $env:TEMP 'astrograph-download.exe'
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpExe -UseBasicParsing
+    if (Install-AppFile $tmpExe) { Set-Content $AppStamp $release.tag_name; Info 'App Astrograph instalado' }
+    Remove-Item $tmpExe -ErrorAction SilentlyContinue
+  }
+} elseif (Get-Command cargo -ErrorAction SilentlyContinue) {
+  $commit = (git -C $Root rev-parse --short HEAD 2>$null)
+  if ((Test-Path $AppExe) -and $installed -eq "src-$commit") {
+    Info 'App Astrograph já compilado desta versão'
+  } else {
+    Info 'Compilando o app Astrograph (Rust; ~2 min na primeira vez)...'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    cargo build --release --manifest-path (Join-Path $Root 'prototype\astrograph-ui\Cargo.toml') 2>&1 | Out-Null
+    $ErrorActionPreference = $prevEap
+    $built = Join-Path $Root 'prototype\astrograph-ui\target\release\astrograph-ui.exe'
+    if ((Test-Path $built) -and (Install-AppFile $built)) { Set-Content $AppStamp "src-$commit"; Info 'App Astrograph compilado e instalado' }
+    else { Warn 'Não consegui compilar o app; o Astrograph segue funcionando no terminal (nvim).' }
+  }
+} else {
+  Warn 'App Astrograph ainda sem versão publicada e sem Rust para compilar; use o nvim no terminal por enquanto.'
+}
+
+if (Test-Path $AppExe) {
+  # atalho no menu Iniciar (com o ícone do app)
+  $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Astrograph.lnk'
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    $sc = $shell.CreateShortcut($lnk)
+    $sc.TargetPath = $AppExe
+    $sc.WorkingDirectory = $env:USERPROFILE
+    $sc.IconLocation = "$AppExe,0"
+    $sc.Description = 'Astrograph: editor com agentes de IA'
+    $sc.Save()
+    Info 'Atalho "Astrograph" no menu Iniciar'
+  } catch { Warn "Não consegui criar o atalho do menu Iniciar ($($_.Exception.Message))" }
+  # comando `astrograph` nos terminais novos
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  if (-not (($userPath -split ';') -contains $BinDir)) {
+    [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $BinDir), 'User')
+    Info 'Comando "astrograph" disponível nos terminais novos'
+  }
+}
+
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) ------------------------
 if (Get-Command nvim -ErrorAction SilentlyContinue) {
   Info 'Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)...'
@@ -158,10 +286,6 @@ $agentDefs = @(
 $agentModels = @('qwen2.5-coder:7b', 'qwen3:8b', 'llama3.1:8b')
 
 function Test-Bin($b) { [bool](Get-Command $b -ErrorAction SilentlyContinue) }
-function Refresh-Path {
-  $env:Path = ([Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-               [Environment]::GetEnvironmentVariable('Path', 'User'))
-}
 
 # Checklist TUI: ↑/↓ navega · espaço marca · enter confirma · a=todos · q/esc cancela
 function Read-AgentMenu {

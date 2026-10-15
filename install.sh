@@ -44,7 +44,13 @@ ARCH="$(uname -m)"
 
 # --- 1. Dependências do sistema -------------------------------------------
 info "Sistema: $OS ($ARCH)"
-if [ "$OS" = "Darwin" ]; then
+# só chama o gerenciador de pacotes (apt update, brew...) se faltar algo
+missing=""
+for b in git rg curl unzip cc; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
+command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 || missing="$missing fd"
+if [ -z "$missing" ]; then
+  info "Dependências já instaladas (git, ripgrep, fd, curl, unzip, compilador C)"
+elif [ "$OS" = "Darwin" ]; then
   if ! command -v brew >/dev/null 2>&1; then
     warn "Homebrew não encontrado. Instale em https://brew.sh e rode de novo."
     exit 1
@@ -68,9 +74,10 @@ elif [ "$OS" = "Linux" ]; then
   else
     warn "Gerenciador de pacotes não reconhecido. Instale manualmente: git, ripgrep, fd, gcc, curl, unzip."
   fi
-else
+elif [ "$OS" != "Linux" ]; then
   warn "Sistema não suportado: $OS"; exit 1
 fi
+[ -n "$missing" ] && info "Faltava:$missing"
 
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
