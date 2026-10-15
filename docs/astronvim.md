@@ -56,6 +56,16 @@ Medido no Windows 11 (veja [Performance](performance)).
 | Interface | em inglês | em português (atalhos, tela inicial, diagnóstico, chat) |
 | Linha de comando | clássica, com "Press ENTER" | ui2 do Neovim 0.12: destaque ao digitar, sem interrupções |
 
+## Plugins substituídos por código próprio
+
+| Plugin do AstroNvim | Substituto | Por quê |
+| --- | --- | --- |
+| nvim-highlight-colors | `astronvim.decor` | 2,6 ms por evento de rolagem; o nosso usa o provedor de decoração nativo (zero autocmds ao rolar) |
+| todo-comments.nvim | `astronvim.decor` | mesmo tipo de trabalho; juntos num motor só, com cache por linha |
+
+O critério foi medir antes: plugins que pesavam pouco (autopairs, which-key,
+heirline) ficaram, porque reescrever não traria ganho que você sentisse.
+
 ## O que ficou como está, de propósito
 
 - **neo-tree** e **toggleterm**: só carregam quando usados (custo zero no boot).

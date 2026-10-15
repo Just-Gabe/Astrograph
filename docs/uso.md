@@ -52,6 +52,8 @@ Ao abrir o `nvim` sem arquivo aparece a tela inicial. Cada item tem uma tecla:
 | `\|` / `\` | Dividir janela na vertical / horizontal |
 | `Ctrl` + `h` `j` `k` `l` | Ir para a janela da esquerda/baixo/cima/direita |
 | `]b` / `[b` | Próximo / anterior buffer |
+| `dd` | Apagar linha (a linha desce e some) |
+| `]T` / `[T` | Próximo / anterior TODO |
 
 ## Completação
 
@@ -80,6 +82,7 @@ a primeira sugestão em cinza na própria linha (ghost text).
 | `<Leader>fk` | Atalhos |
 | `<Leader>ft` | Temas |
 | `<Leader>fu` | Histórico de desfazer |
+| `<Leader>fT` | Buscar TODOs no projeto |
 
 ## Código (`<Leader>l`)
 
@@ -134,6 +137,7 @@ Para instalar o servidor de uma linguagem: `<Leader>pm` (Mason) ou
 | `<Leader>un` | Numeração de linhas |
 | `<Leader>uZ` | Modo zen |
 | `<Leader>ud` | Diagnósticos |
+| `<Leader>uz` / `<Leader>uT` | Destaque de cores / de TODOs |
 
 ## Plugins (`<Leader>p`)
 

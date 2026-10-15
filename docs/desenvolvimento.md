@@ -46,6 +46,7 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 | `commands.lua` | `:Astrograph atualizar / saude / agentes / atalhos / docs` |
 | `health.lua` | `:checkhealth astrograph` |
 | `warmup.lua` | Pré-aquecimento no ocioso (busca, explorador, `fd`/`rg`/`git`) |
+| `motion.lua` | Fade das janelas, explorador deslizante e `dd` animado |
 | `dashboard.lua` | Cena animada da tela inicial e rodapé em português |
 | `plugins/visual.lua` | ui2, bordas arredondadas, ghost text e cursor animado |
 | `art.lua` | Arte gerada por `tools/gen_art.py` (não edite à mão) |
@@ -55,6 +56,8 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 O `core/` é um fork do AstroNvim v6.1.0. As mudanças são pequenas e marcadas com
 comentários `Astrograph:` no código:
 
+- `astronvim.decor` + `plugins/decor.lua`: cores e TODOs próprios, no lugar do
+  nvim-highlight-colors e do todo-comments;
 - `astronvim.executable()`: cache de `vim.fn.executable`;
 - `plugins/_astrocore_autocmds.lua`: arquivo em estágios (`AstroFile` →
   `AstroFileIdle`) e detecção do git sem processo externo;
@@ -95,7 +98,12 @@ python tools/screenshot.py --out docs/img/atalhos.png \
   --file template/lua/polish.lua --step "wait:3000" --step "keys:<Space>" --step "wait:1500"
 ```
 
-Passos aceitos: `wait:<ms>`, `keys:<teclas>`, `cmd:<comando Ex>`, `lua:<código>`.
+Passos aceitos: `wait:<ms>`, `keys:<teclas>`, `cmd:<comando Ex>`, `lua:<código>`
+e `rec:<ms>`, que grava a tela e gera um **GIF animado**:
+
+```bash
+python tools/screenshot.py --out docs/img/abertura.gif --scale 0.6 --step "rec:1600"
+```
 Precisa da JetBrainsMono Nerd Font instalada.
 
 ## Licença

@@ -38,6 +38,25 @@ O que entrou para isso:
   `.editorconfig` para janelas do picker, preview e painéis.
 - **Menu de atalhos** aparece em 150 ms (antes 200 ms).
 
+## Código próprio no lugar de plugins
+
+Cronometrando cada autocmd em uso real, o `nvim-highlight-colors` custava
+**2,6 ms a cada evento de rolagem**, mais que todo o resto junto, e o scroll
+suave dispara dezenas desses eventos. O `todo-comments` fazia um trabalho
+parecido. Os dois foram substituídos por `astronvim.decor`, um motor próprio
+que usa o **provedor de decoração nativo do Neovim** (o mesmo mecanismo do
+Treesitter): o Neovim só pede a decoração das linhas que está redesenhando, e
+cada linha fica em cache pelo próprio texto.
+
+| Cenário | Antes | Depois |
+| --- | --- | --- |
+| Autocmds ao mover o cursor 60× e rolar 4 páginas | 216 ms | **20 ms** |
+| Plugins a baixar e carregar | 2 | 0 |
+
+Mantém cores `#rgb`/`#rrggbb`/`#rrggbbaa`/`rgb()`/`hsl()`, TODO/FIX/HACK/WARN/
+PERF/NOTE/TEST só em comentários (via Treesitter), `]T`/`[T`, `<Leader>fT`,
+`<Leader>uz` (cores) e `<Leader>uT` (TODOs).
+
 ## De onde veio o ganho
 
 O código legado do Vim (plugins de `$VIMRUNTIME`, `syntax`, `ftplugin`) custava
@@ -60,7 +79,7 @@ e `rg` em vários lugares.
 
 - `AstroFile` (na hora): só LSP, completação e Treesitter;
 - `AstroFileIdle` (10 ms depois, quando o arquivo já apareceu): none-ls,
-  TODOs, destaque de cores, breadcrumbs, autotag e autopairs;
+  decoração (cores e TODOs), breadcrumbs, autotag e autopairs;
 - git: detectado procurando a pasta `.git` em Lua (~0,2 ms), sem processo.
 
 **Plugins carregados cedo demais.** O avante carregava em todo primeiro

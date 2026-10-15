@@ -2,7 +2,9 @@
 """Gera a arte "assada" do dashboard do Astrograph.
 
 Produz `template/lua/astrograph/art.lua` com:
-  - o banner `ASTROGRAPH` em 4 larguras (pyfiglet);
+  - o banner `ASTROGRAPH` em 3 tamanhos (pyfiglet): "large" (ANSI Regular,
+    letras sólidas sem as sombras de linha dupla), "thin" (Future, traço fino)
+    e "mini" para terminais muito estreitos;
   - a lua crescente em 2 tamanhos;
   - as posicoes fixas (seed constante) das estrelas para o canvas grande.
 
@@ -23,7 +25,8 @@ import pyfiglet
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "template", "lua", "astrograph", "art.lua")
 
-BANNER_FONTS = ["ansi_shadow", "standard", "slant", "mini"]
+# nome no art.lua -> fonte do pyfiglet
+BANNER_FONTS = {"large": "ansi_regular", "thin": "future", "mini": "mini"}
 WORD = "ASTROGRAPH"
 
 # Lua crescente aprovada no mockup (11 linhas x 11 col).
@@ -78,8 +81,8 @@ def lua_lines(lines: list[str], indent: str = "        ") -> str:
 
 
 def stars() -> list[tuple[int, int, int]]:
-    # usa o banner ansi_shadow para o bounding box
-    banner = FIGLET["ansi_shadow"]
+    # usa o banner grande para o bounding box
+    banner = FIGLET["large"]
     banner_w = max(len(l) for l in banner)
     blocked: set[tuple[int, int]] = set()
     for j in range(MOON_Y, MOON_Y + len(MOON_LARGE)):
@@ -100,15 +103,15 @@ def stars() -> list[tuple[int, int, int]]:
 
 def main() -> None:
     global FIGLET, BANNER_LINES
-    FIGLET = {font: figlet(font) for font in ("ansi_shadow", "standard", "slant", "mini")}
+    FIGLET = {name: figlet(font) for name, font in BANNER_FONTS.items()}
     BANNER_LINES = list(FIGLET.values())
 
     banners = []
-    for font in ("ansi_shadow", "standard", "slant", "mini"):
-        lines = FIGLET[font]
+    for name in BANNER_FONTS:
+        lines = FIGLET[name]
         banners.append(
             "    %s = {\n      width = %d,\n      height = %d,\n      lines = {\n%s,\n      },\n    },"
-            % (font, max(len(l) for l in lines), len(lines), lua_lines(lines))
+            % (name, max(len(l) for l in lines), len(lines), lua_lines(lines))
         )
 
     moon = []
@@ -142,8 +145,8 @@ def main() -> None:
     with io.open(OUT, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(body)
     print("wrote %s" % os.path.normpath(OUT))
-    for name in ("ansi_shadow", "standard", "slant", "mini"):
-        print("  banner %-12s %dx%d" % (name, max(len(l) for l in FIGLET[name]), len(FIGLET[name])))
+    for name in BANNER_FONTS:
+        print("  banner %-6s %dx%d" % (name, max(len(l) for l in FIGLET[name]), len(FIGLET[name])))
 
 
 if __name__ == "__main__":

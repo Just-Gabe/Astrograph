@@ -12,6 +12,8 @@ Uso:
 
 Passos (`--step`, em ordem):
     wait:<ms>     espera (deixa plugins/animações terminarem)
+    rec:<ms>      grava a tela por <ms> (um quadro a cada --interval ms); com
+                  algum `rec`, a saída vira um GIF animado com os quadros
     keys:<teclas> envia teclas (sintaxe do nvim_input, ex.: "<Space>", "<Esc>")
     cmd:<ex>      roda um comando Ex
     lua:<código>  roda Lua
@@ -200,6 +202,7 @@ class Renderer:
         return self.fonts[(bold, italic)]
 
     def render(self, grid, out, title):
+        """Desenha a grade; com `out=None`, devolve a imagem em vez de salvar."""
         pad, bar = 28, 38
         w, h = round(grid.cols * self.cw), grid.rows * self.ch
         W, H = w + pad * 2, h + pad * 2 + bar
@@ -238,6 +241,8 @@ class Renderer:
         mask = Image.new("L", (W, H), 0)
         ImageDraw.Draw(mask).rounded_rectangle([0, 0, W - 1, H - 1], radius=14, fill=255)
         img.paste(frame, (24, 24), mask)
+        if out is None:
+            return img
         img.save(out, optimize=True)
 
     @staticmethod
@@ -248,6 +253,16 @@ class Renderer:
     def shade(cls, v, f):
         r, g, b = cls.rgb(v)
         return (int(r * f), int(g * f), int(b * f))
+
+
+def snapshot(grid):
+    """Cópia leve do estado da grade (para gravar quadros sem desenhar na hora)."""
+    snap = Grid.__new__(Grid)
+    snap.cols, snap.rows = grid.cols, grid.rows
+    snap.cells = [row[:] for row in grid.cells]
+    snap.hl = dict(grid.hl)
+    snap.fg, snap.bg, snap.sp = grid.fg, grid.bg, grid.sp
+    return snap
 
 
 def main():
@@ -261,7 +276,10 @@ def main():
     ap.add_argument("--title", default="nvim — Astrograph")
     ap.add_argument("--step", action="append", default=[])
     ap.add_argument("--nvim", default="nvim")
+    ap.add_argument("--interval", type=int, default=40, help="ms entre quadros no rec")
+    ap.add_argument("--scale", type=float, default=1.0, help="escala do GIF (ex.: 0.6)")
     args = ap.parse_args()
+    frames = []  # instantâneos da grade capturados pelo rec
 
     nv = Nvim([args.nvim, "--embed"] + ([args.file] if args.file else []), args.cwd)
     grid = Grid(args.cols, args.rows)
@@ -277,10 +295,29 @@ def main():
             nv.request("nvim_command", val)
         elif kind == "lua":
             nv.request("nvim_exec_lua", val, [])
+        elif kind == "rec":
+            # só copia a grade durante a gravação (barato); desenha depois
+            end = time.perf_counter() + int(val) / 1000
+            while time.perf_counter() < end:
+                with nv.lock:
+                    frames.append(snapshot(grid))
+                time.sleep(args.interval / 1000)
+            continue
         time.sleep(0.15)
-    time.sleep(0.4)
-    with nv.lock:
-        Renderer(args.font_size).render(grid, args.out, args.title)
+    renderer = Renderer(args.font_size)
+    if frames:
+        images = [renderer.render(f, None, args.title) for f in frames]
+        if args.scale != 1.0:
+            images = [
+                im.resize((int(im.width * args.scale), int(im.height * args.scale)), Image.LANCZOS) for im in images
+            ]
+        images[0].save(
+            args.out, save_all=True, append_images=images[1:], duration=args.interval, loop=0, optimize=True
+        )
+    else:
+        time.sleep(0.4)
+        with nv.lock:
+            renderer.render(grid, args.out, args.title)
     # notificação (sem esperar resposta): o nvim sai antes de responder
     try:
         nv.proc.stdin.write(nv.packer.pack([2, "nvim_command", ["qa!"]]))

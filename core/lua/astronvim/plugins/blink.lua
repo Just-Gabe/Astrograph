@@ -47,19 +47,19 @@ local function get_kind_icon(CTX)
   end
   -- Evaluate highlight provider
   if not hl_provider then
-    local highlight_colors_avail, highlight_colors = pcall(require, "nvim-highlight-colors")
-    if highlight_colors_avail then
+    -- Astrograph: amostra de cor no menu vem da decoração própria (astronvim.decor)
+    local decor_avail, decor = pcall(require, "astronvim.decor")
+    if decor_avail then
       local kinds
       hl_provider = function(ctx)
         if not kinds then kinds = require("blink.cmp.types").CompletionItemKind end
         if ctx.item.kind == kinds.Color then
           local doc = vim.tbl_get(ctx, "item", "documentation")
-          if doc then
-            local color_item = highlight_colors.format(doc, { kind = kinds[kinds.Color] })
-            if color_item and color_item.abbr_hl_group then
-              if color_item.abbr then ctx.kind_icon = color_item.abbr end
-              ctx.kind_hl = color_item.abbr_hl_group
-            end
+          if type(doc) == "table" then doc = doc.value end
+          local hl = type(doc) == "string" and decor.color_hl(doc) or decor.color_hl(ctx.item.label or "")
+          if hl then
+            ctx.kind_icon = "󱓻"
+            ctx.kind_hl = hl
           end
         end
       end

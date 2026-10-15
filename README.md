@@ -5,7 +5,7 @@ com **agentes de IA dentro do editor**, abertura mais rápida e tudo em **portug
 
 📖 **Documentação:** <https://just-gabe.github.io/Astrograph/>
 
-![Tela inicial do Astrograph](docs/img/dashboard.png)
+![Abertura animada do Astrograph](docs/img/abertura.gif)
 
 ## Instalar
 
@@ -44,6 +44,10 @@ rodar `nvim`.
   arredondadas, ghost text na completação e animações a 60 fps.
 - **Resposta imediata**: o que você usa é pré-carregado quando o editor está
   ocioso, e o código aparece sem ruído (sem CodeLens nem `~` por padrão).
+- **Movimento**: janelas com fade, explorador deslizante e `dd` animado (a
+  linha desce e some), sempre sem atrasar a edição.
+- **Código próprio onde importa**: cores e TODOs desenhados pelo motor nativo
+  do Neovim, no lugar de dois plugins; rolar a tela ficou ~10× mais leve.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
   verificado.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.
@@ -56,6 +60,8 @@ rodar `nvim`.
 | ![Agentes](docs/img/agentes.png) | ![Chat](docs/img/chat.png) |
 | **Completação com ghost text** | **Diagnóstico (`:Astrograph saude`)** |
 | ![Completação](docs/img/completar.png) | ![Diagnóstico](docs/img/saude.png) |
+| **Explorador deslizando (`<Leader>e`)** | **`dd`: a linha desce e some** |
+| ![Explorador](docs/img/explorador.gif) | ![Apagar linha](docs/img/apagar-linha.gif) |
 
 ## Primeiros passos
 

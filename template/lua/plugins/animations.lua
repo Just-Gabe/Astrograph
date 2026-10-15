@@ -10,8 +10,11 @@ return {
   {
     "folke/snacks.nvim",
     opts = function(_, opts)
-      -- Via SSH cada quadro vira tráfego de rede: desliga tudo (reative com <Leader>um)
-      if vim.env.SSH_CONNECTION or vim.env.SSH_TTY then vim.g.snacks_animate = false end
+      -- Animações ligadas por padrão. Via SSH cada quadro vira tráfego de rede:
+      -- lá começam desligadas (reative com <Leader>um).
+      if vim.g.snacks_animate == nil then
+        vim.g.snacks_animate = not (vim.env.SSH_CONNECTION or vim.env.SSH_TTY)
+      end
 
       -- Base das animações. 60 fps acompanha a taxa de atualização dos terminais;
       -- 120 dobrava os redraws sem diferença visível (e tremia no Windows Terminal).
@@ -19,12 +22,14 @@ return {
 
       -- Scroll suave: passo curto, easing "out" para começar forte e frear no fim
       opts.scroll = {
+        enabled = true,
         animate = { duration = { step = 8, total = 140 }, easing = "outCubic" },
         animate_repeat = { delay = 120, duration = { step = 5, total = 60 }, easing = "linear" },
       }
 
       -- AstroNvim desliga animação das indent guides; reativamos com easing suave
       opts.indent = vim.tbl_deep_extend("force", opts.indent or {}, {
+        enabled = true,
         animate = { enabled = true, easing = "outQuad", duration = { step = 5, total = 160 } },
       })
 

@@ -37,12 +37,17 @@ Para trocar o tema padrão, edite `colorscheme` em `template/lua/plugins/astroui
 
 ## Tela inicial animada
 
-A tela inicial mostra uma lua crescente, estrelas e o banner ASTROGRAPH com
-gradiente. Ao abrir, a lua aparece em fade e o banner é revelado linha a linha;
-depois as estrelas piscam devagar.
+![Abertura animada]({{ '/img/abertura.gif' | relative_url }})
 
-- O tamanho se adapta à largura do terminal (banner grande, médio, inclinado ou
-  mínimo).
+A tela inicial mostra uma lua crescente, estrelas e o banner ASTROGRAPH com
+gradiente. Ao abrir, a lua aparece em fade, o banner é revelado linha a linha e,
+por último, a linha discreta "Neovim · agentes de IA · em português"; depois as
+estrelas piscam devagar.
+
+- O banner usa letras sólidas e limpas (ANSI Regular), sem as sombras de linha
+  dupla de antes.
+- O tamanho se adapta à largura do terminal: com a lua (≥ 100 colunas), só o
+  traço fino (≥ 44) ou a versão mínima.
 - A entrada roda a 60 fps e é baseada em tempo real: se o editor ficar ocupado
   por um instante, ela pula quadros em vez de pausar. Ela só começa depois que
   os plugins do startup terminam de carregar.
@@ -71,7 +76,28 @@ depois as estrelas piscam devagar.
 A ui2 ainda é experimental no Neovim. Se algo estranho aparecer nas mensagens,
 desligue com `vim.g.astrograph_ui2 = false` no começo do `template/init.lua`.
 
-## Animações da interface
+## Movimento da interface
+
+| O quê | Como |
+| --- | --- |
+| **Janelas flutuantes** (busca, hover, diagnósticos, notificações, chat) | surgem com fade em ~140 ms |
+| **Menus** (completação, atalhos) | fade mais curto, ~90 ms, para não atrasar a digitação |
+| **Explorador lateral** (`<Leader>e`) | abre e fecha deslizando a largura |
+| **Apagar linha** (`dd`) | apaga na hora; a linha apagada desce e some |
+
+![Explorador deslizando]({{ '/img/explorador.gif' | relative_url }})
+
+![Linha apagada descendo e sumindo]({{ '/img/apagar-linha.gif' | relative_url }})
+
+No `dd`, o texto sai do arquivo **na hora**; o que anima é uma cópia da linha
+(com o mesmo destaque de sintaxe), que desce e some por cima do texto real.
+Contagem (`3dd`), registradores (`"add`), `.` e `u` funcionam como sempre.
+Blocos com mais de 30 linhas e dobras fechadas são apagados sem animação.
+
+Todas usam um relógio de tempo real: se o editor engasgar, a animação pula
+quadros em vez de pausar. Ficam em `template/lua/astrograph/motion.lua`.
+
+## Animações do Snacks
 
 Feitas pelo Snacks, no estilo "Claude/opencode": rápidas, suaves e sem
 "quique".
@@ -85,7 +111,7 @@ Feitas pelo Snacks, no estilo "Claude/opencode": rápidas, suaves e sem
 
 | Atalho | O que faz |
 | --- | --- |
-| `<Leader>um` | Liga/desliga **todas** as animações (inclui o cursor animado) |
+| `<Leader>um` | Liga/desliga **todas** as animações (fade, explorador, `dd`, cursor animado) |
 | `<Leader>uM` | Liga/desliga só o scroll suave |
 
 {: .note }

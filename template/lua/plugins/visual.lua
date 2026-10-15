@@ -7,6 +7,7 @@
 --     própria linha, estilo Copilot).
 --   * Cursor animado (smear-cursor): um rastro suave ao pular pelo texto. Segue
 --     o `<Leader>um` das animações e começa desligado via SSH.
+--   * Janelas flutuantes surgem com um fade curto (astrograph.motion).
 --   * Linha do cursor destacada só na janela ativa.
 --   * Menos ruído: sem `~` no fim do buffer, CodeLens desligado por padrão e
 --     uma leve translucidez no menu de completação.
@@ -25,6 +26,9 @@ if vim.g.astrograph_ui2 ~= false then
   if ok and type(ui2.enable) == "function" then pcall(ui2.enable, { enable = true }) end
 end
 
+-- janelas flutuantes surgem com um fade curto (astrograph.motion)
+require("astrograph.motion").setup()
+
 -- cursorline só na janela ativa: menos ruído com várias divisões abertas
 vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter", "WinLeave" }, {
   group = vim.api.nvim_create_augroup("astrograph_cursorline", { clear = true }),
@@ -38,6 +42,17 @@ vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter", "WinLeave" }, {
 
 ---@type LazySpec
 return {
+  {
+    "AstroNvim/astrocore",
+    opts = function(_, opts)
+      local maps = opts.mappings
+      local motion = function() return require "astrograph.motion" end
+      -- `dd` apaga na hora e a linha desce e some (com contagem e registrador)
+      maps.n["dd"] = { function() motion().delete_lines() end, desc = "Apagar linha (animado)" }
+      -- explorador abre e fecha deslizando a largura
+      maps.n["<Leader>e"] = { function() motion().toggle_explorer() end, desc = "Alternar explorador" }
+    end,
+  },
   {
     "AstroNvim/astrolsp",
     optional = true,

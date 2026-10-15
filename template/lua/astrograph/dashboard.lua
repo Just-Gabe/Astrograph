@@ -16,6 +16,10 @@ local MOON_TO = "#c7d2fe"
 local STAR_BRIGHT = "#f9e2af"
 local STAR_DIM = "#6b6b8a"
 local GRAD = { "#7dd3fc", "#818cf8", "#a78bfa", "#c084fc", "#e879f9", "#f472b6" }
+local TAG = "#6b7280" -- linha discreta sob o banner
+
+-- Linha sob o banner: diz o que é, sem disputar atenção com ele
+M.tagline = "Neovim · agentes de IA · em português"
 
 local HL = "Astrograph"
 local started, timers = {}, {}
@@ -53,11 +57,12 @@ end
 --- Composicao de acordo com a largura da janela
 local function choose(cols)
   if cols >= 100 then
-    return { moon = art.moon.large, banner = art.banners.ansi_shadow, gap = 2 }
-  elseif cols >= 74 then
-    return { moon = art.moon.small, banner = art.banners.standard, gap = 2 }
-  elseif cols >= 40 then
-    return { banner = art.banners.slant }
+    return { moon = art.moon.large, banner = art.banners.large, gap = 3, tagline = true }
+  elseif cols >= 44 then
+    -- médio: só o traço fino e a linha discreta (a lua dominaria um banner de 3 linhas)
+    return { banner = art.banners.thin, tagline = true }
+  elseif cols >= 32 then
+    return { banner = art.banners.thin }
   end
   return { banner = art.banners.mini }
 end
@@ -70,6 +75,7 @@ local function define_hl(grad, skip_scene, skip_stars)
       set_fg(HL .. "Grad" .. i, col)
     end
     set_fg(HL .. "Moon", MOON_TO, true)
+    set_fg(HL .. "Tagline", TAG)
   end
   if not skip_stars then
     for i = 1, 3 do
@@ -101,6 +107,12 @@ local function build(layout)
   local height = maxh + 5
   local bx = moon and (mw + (layout.gap or 2)) or 0
   local width = bx + bw
+  -- sem a lua, a linha discreta pode ser mais larga que o banner: centraliza os dois
+  local tag_w = layout.tagline and vim.fn.strdisplaywidth(M.tagline) or 0
+  if not moon and tag_w > bw then
+    bx = math.floor((tag_w - bw) / 2)
+    width = tag_w
+  end
   local my = moon and (2 + math.floor((maxh - mh) / 2)) or 0
   local by = 2 + math.floor((maxh - bh) / 2)
 
@@ -117,6 +129,19 @@ local function build(layout)
   place(grid, bl, bx, by, function(r)
     return HL .. "Grad" .. (r + 1)
   end)
+
+  -- linha discreta centralizada sob o banner
+  if layout.tagline then
+    local text = M.tagline
+    local tw = tag_w
+    local row = by + bh + 1
+    local tx = moon and (bx + math.floor((bw - tw) / 2)) or math.floor((width - tw) / 2)
+    if tx >= 0 and tx + tw <= width and row < height then
+      place(grid, { text }, tx, row, function()
+        return HL .. "Tagline"
+      end)
+    end
+  end
 
   for _, st in ipairs(art.stars) do
     if st.y < height and st.x < width and not grid[st.y + 1][st.x + 1] then
@@ -230,6 +255,7 @@ local function play(buf, grad)
       set_fg(HL .. "Grad" .. i, lerp(BG, grad[i], p))
     end
     set_fg(HL .. "Moon", lerp(MOON_FROM, MOON_TO, math.min(1, v / 0.5)), true)
+    set_fg(HL .. "Tagline", lerp(BG, TAG, math.min(1, math.max(0, (v - 0.55) / 0.45))))
   end
   intro[buf] = true
   frame(0)
