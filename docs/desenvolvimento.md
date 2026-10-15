@@ -94,17 +94,61 @@ tela do sistema. Assim ficam nítidos e iguais em qualquer máquina:
 
 ```bash
 pip install msgpack pillow fonttools
-python tools/screenshot.py --out docs/img/dashboard.png --step "wait:3000"
+
+# Tela inicial (banner) e a animação de abertura
+python tools/screenshot.py --out docs/img/dashboard.png --step "wait:10000"
+python tools/screenshot.py --out docs/img/abertura.gif --scale 0.6 --step "rec:1600"
+
+# Editor com o explorador aberto
+python tools/screenshot.py --out docs/img/editor.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys:<Space>e" --step "wait:1200"
+
+# Menus which-key: raiz (<Space>) e o prefixo de IA (<Space>A)
 python tools/screenshot.py --out docs/img/atalhos.png \
-  --file template/lua/polish.lua --step "wait:3000" --step "keys:<Space>" --step "wait:1500"
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys:<Space>" --step "wait:1500"
+python tools/screenshot.py --out docs/img/agentes.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys:<Space>A" --step "wait:1500"
+
+# Busca de arquivos, saúde e tema claro
+python tools/screenshot.py --out docs/img/busca.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys:<Space>ff" --step "wait:1500"
+python tools/screenshot.py --out docs/img/saude.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "cmd:checkhealth astrograph" --step "wait:1500"
+python tools/screenshot.py --out docs/img/tema-claro.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "cmd:colorscheme astrograph-light" --step "wait:800"
+
+# Linha de comando (deixada aberta), completação do LSP e chat do CodeCompanion
+python tools/screenshot.py --out docs/img/linha-de-comando.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys::Astrograph " --step "wait:800"
+python tools/screenshot.py --out docs/img/completar.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "keys:ovim.api." --step "wait:1200" --step "keys:<C-Space>" --step "wait:1000"
+python tools/screenshot.py --out docs/img/chat.png \
+  --file template/lua/astrograph/agents.lua --step "wait:10000" --step "cmd:CodeCompanionChat" --step "wait:2000"
+
+# GIFs das animações: o explorador deslizando e o `dd` colapsando a linha
+python tools/screenshot.py --out docs/img/explorador.gif \
+  --file template/lua/astrograph/motion.lua --scale 0.5 --interval 30 \
+  --step "wait:10000" \
+  --step "lua:vim.defer_fn(function() require('astrograph.motion').toggle_explorer() end, 220)" \
+  --step "rec:560"
+python tools/screenshot.py --out docs/img/apagar-linha.gif \
+  --file template/lua/astrograph/agents.lua --scale 0.5 --interval 20 \
+  --step "wait:10000" --step "keys:26G" --step "wait:300" \
+  --step "lua:vim.defer_fn(function() require('astrograph.motion').delete_lines() end, 350)" \
+  --step "rec:900"
 ```
 
 Passos aceitos: `wait:<ms>`, `keys:<teclas>`, `cmd:<comando Ex>`, `lua:<código>`
-e `rec:<ms>`, que grava a tela e gera um **GIF animado**:
+e `rec:<ms>`, que grava a tela e gera um **GIF animado**.
 
-```bash
-python tools/screenshot.py --out docs/img/abertura.gif --scale 0.6 --step "rec:1600"
-```
+O primeiro passo é sempre um `wait:10000`: dá tempo de o servidor de linguagem
+(`lua_ls`) terminar de carregar o workspace, para os prints não saírem com o
+"Loading workspace" na barra de status.
+
+As animações de abertura e de exclusão duram ~160 ms, e o `rec` só começa depois
+do passo anterior; por isso os GIFs disparam a ação já dentro da gravação, com
+`lua:vim.defer_fn(function() ... end, <atraso ms>)`.
+
 Precisa da JetBrainsMono Nerd Font instalada.
 
 ## Licença
