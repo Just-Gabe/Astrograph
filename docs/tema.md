@@ -83,16 +83,22 @@ desligue com `vim.g.astrograph_ui2 = false` no começo do `template/init.lua`.
 | **Janelas flutuantes** (busca, hover, diagnósticos, notificações, chat) | surgem com fade em ~140 ms |
 | **Menus** (completação, atalhos) | fade mais curto, ~90 ms, para não atrasar a digitação |
 | **Explorador lateral** (`<Leader>e`) | abre e fecha deslizando a largura |
-| **Apagar linha** (`dd`) | apaga na hora; a linha apagada desce e some |
+| **Apagar linha** (`dd`) | apaga na hora; a linha colapsa dentro dela mesma e some |
 
 ![Explorador deslizando]({{ '/img/explorador.gif' | relative_url }})
 
-![Linha apagada descendo e sumindo]({{ '/img/apagar-linha.gif' | relative_url }})
+![Linha apagada colapsando]({{ '/img/apagar-linha.gif' | relative_url }})
 
 No `dd`, o texto sai do arquivo **na hora**; o que anima é uma cópia da linha
-(com o mesmo destaque de sintaxe), que desce e some por cima do texto real.
+no mesmo lugar, que achata em direção à base (`▄` → `▂` → `▁`) mantendo as
+cores da sintaxe e some, em ~160 ms.
 Contagem (`3dd`), registradores (`"add`), `.` e `u` funcionam como sempre.
 Blocos com mais de 30 linhas e dobras fechadas são apagados sem animação.
+
+No explorador, a árvore é desenhada uma vez já na largura final e a janela só
+revela o que está pronto: os nomes não são cortados ("rea…") durante o
+deslize. Apertar `<Leader>e` no meio da animação a interrompe em vez de
+empilhar outra.
 
 Todas usam um relógio de tempo real: se o editor engasgar, a animação pula
 quadros em vez de pausar. Ficam em `template/lua/astrograph/motion.lua`.

@@ -13,6 +13,23 @@ Medido no Windows 11 com `nvim --startuptime` e o profile do lazy.nvim
 | Abrir o editor | ~392 ms | **~256 ms** (−35%) |
 | Primeiro arquivo: caminho crítico | ~230 ms | **~59 ms** (−74%) |
 
+## Área de transferência sem espera
+
+Com a área de transferência do sistema ligada (padrão do AstroNvim), o Neovim
+executava o `win32yank`/`pbcopy`/`xclip` **a cada cópia** e esperava: todo `dd`,
+`yy` ou `x` pagava esse custo.
+
+| | Antes | Depois |
+| --- | --- | --- |
+| `dd` | ~11 ms | **0,8 ms** |
+| Primeiro `dd` da sessão | ~65 ms | **~6 ms** |
+
+`astrograph.clipboard` manda o texto ao sistema com atraso agrupado (várias
+cópias viram uma) e na hora em que alguém de fora pode precisar dele: ao sair
+da janela e ao fechar o Neovim. Colar usa a cópia em memória enquanto ninguém
+pode ter copiado nada fora, o que também preserva o tipo (linha inteira ou
+trecho). Desligue com `vim.g.astrograph_clipboard = false`.
+
 ## Resposta imediata
 
 Tempo da tecla até a janela aparecer, com o editor aberto há alguns segundos
@@ -37,6 +54,12 @@ O que entrou para isso:
 - **Janelas flutuantes mais leves**: o core não recalcula dobras nem procura
   `.editorconfig` para janelas do picker, preview e painéis.
 - **Menu de atalhos** aparece em 150 ms (antes 200 ms).
+
+## Sem polling em segundo plano
+
+O explorador (neo-tree) consultava a largura da janela a cada 50 ms, para
+sempre, enquanto aberto. Agora o redesenho vem do evento nativo `WinResized`:
+nada roda enquanto você não muda a largura.
 
 ## Código próprio no lugar de plugins
 

@@ -5,6 +5,7 @@
 --   :Astrograph agentes     mostra os agentes de IA: instalado, login e chat (ACP)
 --   :Astrograph configurar  instala as pontes do chat e faz os logins que faltam
 --   :Astrograph login [ag]  abre o login de um agente (claude, opencode, codex, gemini)
+--   :Astrograph agente [ag] escolhe o agente de todo o modo agentic (fica salvo)
 --   :Astrograph atalhos     lista todos os atalhos (busca)
 --   :Astrograph docs        abre a documentação no navegador
 
@@ -124,7 +125,9 @@ function M.agentes()
         local chat = not item.acp and "chat: falta a ponte"
           or agents.legacy_acp(a) and "chat ok (ponte antiga)"
           or "chat ok"
-        lines[#lines + 1] = ("  ✓ %-12s %s · %s"):format(a.label, login, chat)
+        local cur = agents.current()
+        local mark = cur and cur.bin == a.bin and "●" or "✓"
+        lines[#lines + 1] = ("  %s %-12s %s · %s"):format(mark, a.label, login, chat)
         todo = todo or item.login == false or not item.acp or agents.legacy_acp(a)
       end
     end
@@ -133,6 +136,7 @@ function M.agentes()
       info.local_model and (" (" .. info.local_model .. ")") or (info.ollama and " (sem modelo)" or " (fora do ar)")
     )
     lines[#lines + 1] = ""
+    lines[#lines + 1] = "● agente atual (troque com <Leader>Ag ou :Astrograph agente)"
     lines[#lines + 1] = todo and "Rode :Astrograph configurar para resolver o que falta."
       or "<Leader>Ac chat · <Leader>Al terminal do agente · <Leader>AE avante"
     notify(table.concat(lines, "\n"), todo and vim.log.levels.WARN or vim.log.levels.INFO)
@@ -240,6 +244,13 @@ local subcommands = {
   agentes = M.agentes,
   configurar = M.configurar,
   login = M.login,
+  agente = function(name)
+    if name and name ~= "" then
+      require("astrograph.agents").set_current(name)
+    else
+      require("astrograph.agents").pick()
+    end
+  end,
   atalhos = M.atalhos,
   docs = M.docs,
 }
@@ -257,9 +268,9 @@ function M.setup()
     fn(rest)
   end, {
     nargs = "*",
-    desc = "Astrograph: atualizar, saude, agentes, configurar, login, atalhos, docs",
+    desc = "Astrograph: atualizar, saude, agentes, agente, configurar, login, atalhos, docs",
     complete = function(lead, line)
-      if line:match "^%S+%s+login%s+" then
+      if line:match "^%S+%s+login%s+" or line:match "^%S+%s+agente%s+" then
         local bins = vim.tbl_map(function(a) return a.bin end, require("astrograph.agents").agents)
         return vim.tbl_filter(function(c) return c:find(lead, 1, true) == 1 end, bins)
       end

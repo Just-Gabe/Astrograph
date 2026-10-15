@@ -74,6 +74,13 @@ git -C $env:LOCALAPPDATA\Astrograph status   # Windows
 O `lazy-lock.json` é descartado automaticamente; outras alterações você decide
 se guarda (`git stash`) ou descarta.
 
+## Colar trouxe um texto antigo
+
+A cópia em memória vale até o terminal perder o foco. Se você copiou algo em
+outro programa sem sair da janela do terminal (raro), use `"+p` depois de
+trocar de janela, ou desligue o recurso com `vim.g.astrograph_clipboard = false`
+no topo do `template/init.lua`.
+
 ## Animações travando ou pesadas
 
 `<Leader>um` desliga todas as animações; `<Leader>uM` só o scroll suave. Via

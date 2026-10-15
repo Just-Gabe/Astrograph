@@ -16,6 +16,7 @@ local M = {}
 ---@field cmd string        # comando base para o terminal / interação CLI
 ---@field login string      # comando interativo de login
 ---@field adapter string    # adapter ACP do CodeCompanion
+---@field avante string     # provedor ACP do avante
 ---@field acp_bin string    # binário que fala ACP (ponte para o chat)
 ---@field acp_args? string[]
 ---@field acp_npm? string   # pacote npm da ponte, quando ela é separada do CLI
@@ -29,6 +30,7 @@ M.agents = {
     cmd = "claude",
     login = "claude auth login",
     adapter = "claude_code",
+    avante = "claude-code",
     acp_bin = "claude-agent-acp",
     acp_npm = "@agentclientprotocol/claude-agent-acp",
     npm = "@anthropic-ai/claude-code",
@@ -39,6 +41,7 @@ M.agents = {
     cmd = "opencode",
     login = "opencode auth login",
     adapter = "opencode",
+    avante = "opencode",
     acp_bin = "opencode",
     acp_args = { "acp" },
     npm = "opencode-ai",
@@ -49,6 +52,7 @@ M.agents = {
     cmd = "codex",
     login = "codex login",
     adapter = "codex",
+    avante = "codex",
     acp_bin = "codex-acp",
     acp_npm = "@agentclientprotocol/codex-acp",
     npm = "@openai/codex",
@@ -59,6 +63,7 @@ M.agents = {
     cmd = "gemini",
     login = "gemini",
     adapter = "gemini_cli",
+    avante = "gemini-cli",
     acp_bin = "gemini",
     acp_args = { "--experimental-acp" },
     npm = "@google/gemini-cli",
@@ -386,6 +391,125 @@ function M.available()
     if M.has(a.bin) then out[#out + 1] = a end
   end
   return out
+end
+
+---------------------------------------------------------------------------
+-- Agente atual: uma escolha só, salva e aplicada em todo o modo agentic
+---------------------------------------------------------------------------
+--
+-- Terminal (<Leader>Al/AT), chat do CodeCompanion (<Leader>Ac), edição inline do
+-- avante (<Leader>AE) e a interação CLI usam o mesmo agente. A escolha fica no
+-- config.json do Astrograph e vale entre sessões. Trocar o agente no chat (`ga`)
+-- também muda o agente de todo o resto.
+
+---Grava chaves no config.json, mantendo as que já existem.
+---@param patch table
+---@return boolean ok
+function M.write_config(patch)
+  local data = vim.tbl_extend("force", M.read_config(), patch)
+  local ok = pcall(vim.fn.mkdir, M.config_dir(), "p")
+  local ok_json, json = pcall(vim.json.encode, data)
+  ok = ok and ok_json and pcall(vim.fn.writefile, { json }, M.config_path())
+  if not ok then
+    vim.notify(
+      ("Não consegui salvar a escolha em %s (vale só nesta sessão)"):format(M.config_path()),
+      vim.log.levels.WARN,
+      { title = "Astrograph" }
+    )
+  end
+  return ok
+end
+
+---@param bin string
+---@return AstrographAgent?
+function M.by_bin(bin)
+  for _, a in ipairs(M.agents) do
+    if a.bin == bin then return a end
+  end
+end
+
+---Agente atual: o escolhido (se ainda estiver instalado) ou o primeiro disponível.
+---@return AstrographAgent?
+local session_choice ---@type string? escolha desta sessão (se o arquivo falhar)
+
+function M.current()
+  local chosen = session_choice or M.read_config().agent
+  local a = type(chosen) == "string" and M.by_bin(chosen) or nil
+  if a and M.has(a.bin) then return a end
+  return M.available()[1]
+end
+
+---Aplica o agente nos plugins que já estão carregados (sem reiniciar).
+---@param a AstrographAgent
+function M.apply(a)
+  if package.loaded["codecompanion"] then
+    local ok, cfg = pcall(require, "codecompanion.config")
+    if ok and cfg.interactions then
+      if M.has_acp(a) and cfg.interactions.chat then cfg.interactions.chat.adapter = a.adapter end
+      if cfg.interactions.cli then cfg.interactions.cli.agent = a.bin end
+    end
+  end
+  if package.loaded["avante"] and a.avante and M.has_acp(a) then
+    pcall(function() require("avante.api").switch_provider(a.avante) end)
+  end
+end
+
+---Troca o agente de todo o modo agentic e salva a escolha.
+---@param bin string
+---@param opts? { quiet?: boolean }
+---@return boolean ok
+function M.set_current(bin, opts)
+  local a = M.by_bin(bin)
+  if not (a and M.has(a.bin)) then
+    vim.notify(("Agente não instalado: %s"):format(bin), vim.log.levels.WARN, { title = "Astrograph" })
+    return false
+  end
+  local before = M.current()
+  session_choice = a.bin
+  M.write_config { agent = a.bin }
+  M.apply(a)
+  vim.api.nvim_exec_autocmds("User", { pattern = "AstrographAgentChanged", data = { agent = a.bin } })
+  if not (opts and opts.quiet) and (not before or before.bin ~= a.bin) then
+    local extra = M.has_acp(a) and "" or " (chat indisponível: rode :Astrograph configurar)"
+    vim.notify(("Agente: %s%s"):format(a.label, extra), vim.log.levels.INFO, { title = "Astrograph" })
+  end
+  return true
+end
+
+---Seletor do agente atual (lista os instalados, marcando o atual).
+function M.pick()
+  local list = M.available()
+  if #list == 0 then
+    vim.notify("Nenhum agente instalado. Rode :Astrograph configurar.", vim.log.levels.WARN, { title = "Astrograph" })
+    return
+  end
+  local cur = M.current()
+  vim.ui.select(list, {
+    prompt = "Agente de IA (vale para terminal, chat e edição)",
+    format_item = function(a) return (cur and cur.bin == a.bin and "● " or "  ") .. a.label end,
+  }, function(a)
+    if a then M.set_current(a.bin) end
+  end)
+end
+
+---Liga a troca vinda do chat: escolher outro agente com `ga` muda o agente central.
+function M.setup()
+  vim.api.nvim_create_autocmd("User", {
+    pattern = "CodeCompanionChatAdapter",
+    group = vim.api.nvim_create_augroup("astrograph_agent_sync", { clear = true }),
+    desc = "Sincronizar o agente central com o chat",
+    callback = function(ev)
+      local name = vim.tbl_get(ev, "data", "adapter", "name")
+      if not name then return end
+      for _, a in ipairs(M.agents) do
+        if a.adapter == name then
+          local cur = M.current()
+          if not cur or cur.bin ~= a.bin then M.set_current(a.bin) end
+          return
+        end
+      end
+    end,
+  })
 end
 
 return M

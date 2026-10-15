@@ -2,7 +2,7 @@
 --
 --   * janelas flutuantes e menus surgem com um fade curto;
 --   * o explorador lateral abre e fecha deslizando a largura;
---   * `dd` apaga na hora e a linha apagada desce e some (uma "cópia fantasma").
+--   * `dd` apaga na hora e a linha apagada colapsa verticalmente nela mesma e some.
 --
 -- Busca, hover do LSP, diagnósticos, notificações, menu de atalhos e chat
 -- aparecem em ~140 ms, desacelerando no fim (outCubic), em vez de "estalar" na
@@ -37,7 +37,6 @@ M.skip_ft = {
 }
 
 local function ease_out_cubic(x) return 1 - (1 - x) ^ 3 end
-local function ease_in_out_sine(x) return -(math.cos(math.pi * x) - 1) / 2 end
 
 local function enabled() return vim.g.snacks_animate ~= false and not (vim.env.SSH_CONNECTION or vim.env.SSH_TTY) end
 
@@ -103,8 +102,20 @@ end
 ---------------------------------------------------------------------------
 -- Explorador lateral: abre e fecha deslizando a largura
 ---------------------------------------------------------------------------
+--
+-- O neo-tree mede a largura da janela a cada desenho e, por padrão, ainda a
+-- consulta a cada 50 ms para redesenhar quando ela muda. Durante um deslize
+-- isso cortava os nomes para a largura do momento ("rea…") e eles só voltavam
+-- depois. Aqui:
+--   * durante o deslize, o neo-tree "enxerga" a largura final: a árvore é
+--     desenhada uma vez, completa, e a janela só revela o que já está pronto;
+--   * o polling de 50 ms é desligado (resize_timer_interval = -1) e trocado pelo
+--     evento nativo WinResized: só redesenha quando a largura muda de verdade.
 
 M.explorer_duration = 0.16
+
+local sliding = {} ---@type table<integer, integer> janela -> largura interna fixa
+local explorer_anim ---@type fun()? animação em curso (cancelável)
 
 ---@return integer?
 local function explorer_win()
@@ -114,27 +125,77 @@ local function explorer_win()
   end
 end
 
+local function inner_width(win)
+  local info = vim.fn.getwininfo(win)[1]
+  return info and (info.width - info.textoff) or vim.api.nvim_win_get_width(win)
+end
+
+local patched = false
+local function patch_neotree()
+  if patched then return end
+  local ok, utils = pcall(require, "neo-tree.utils")
+  if not ok then return end
+  patched = true
+  local orig = utils.get_inner_win_width
+  utils.get_inner_win_width = function(winid)
+    local fixed = winid and sliding[winid]
+    if fixed then return fixed end
+    return orig(winid)
+  end
+  -- redesenho por evento (no lugar do polling de 50 ms)
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = vim.api.nvim_create_augroup("astrograph_neotree_resize", { clear = true }),
+    desc = "Redesenhar o explorador quando a largura muda",
+    callback = function()
+      local wins = vim.v.event.windows or {}
+      local ok_m, manager = pcall(require, "neo-tree.sources.manager")
+      if not ok_m then return end
+      for _, win in ipairs(wins) do
+        if vim.api.nvim_win_is_valid(win) and not sliding[win] then
+          pcall(manager._for_each_state, nil, function(state)
+            if state.winid == win then
+              local w = inner_width(win)
+              if state.win_width ~= w then
+                state.win_width = w
+                require("neo-tree.ui.renderer").redraw(state)
+              end
+            end
+          end)
+        end
+      end
+    end,
+  })
+end
+
 ---@param win integer
 ---@param from integer
 ---@param to integer
+---@param fixed_inner integer largura interna que o neo-tree "enxerga" no deslize
 ---@param on_done? fun()
-local function slide_width(win, from, to, on_done)
+local function slide_width(win, from, to, fixed_inner, on_done)
+  if explorer_anim then explorer_anim() end
+  sliding[win] = fixed_inner
   pcall(vim.api.nvim_win_set_width, win, from)
-  animate(M.explorer_duration, function(x)
+  explorer_anim = animate(M.explorer_duration, function(x)
     if not vim.api.nvim_win_is_valid(win) then return false end
     local w = math.floor(from + (to - from) * ease_out_cubic(x) + 0.5)
     pcall(vim.api.nvim_win_set_width, win, math.max(1, w))
-  end, on_done)
+  end, function()
+    sliding[win] = nil
+    explorer_anim = nil
+    if on_done then on_done() end
+  end)
 end
 
 ---Chamado quando o explorador abre: cresce da borda até a largura dele.
 function M.explorer_opened()
+  patch_neotree()
   if not enabled() then return end
   local win = explorer_win()
   if not win or vim.w[win].astrograph_slid then return end
   vim.w[win].astrograph_slid = true
   local target = vim.api.nvim_win_get_width(win)
-  if target > 2 then slide_width(win, 1, target) end
+  if target > 2 then slide_width(win, 1, target, inner_width(win)) end
 end
 
 ---Alterna o explorador; ao fechar, encolhe antes de sumir.
@@ -149,35 +210,95 @@ function M.toggle_explorer()
     return
   end
   local width = vim.api.nvim_win_get_width(win)
-  slide_width(win, width, 1, function()
+  slide_width(win, width, 1, inner_width(win), function()
     vim.schedule(function() pcall(vim.cmd, "Neotree close") end)
   end)
 end
 
 ---------------------------------------------------------------------------
--- dd: a linha apagada desce e some
+-- dd: a linha apagada colapsa dentro dela mesma e some
 ---------------------------------------------------------------------------
 
-M.delete_duration = 0.2
+M.delete_duration = 0.16
 M.delete_max_lines = 30
 
----Desenha a "cópia fantasma" das linhas apagadas e anima: desce 2 linhas
----enquanto some com fade.
+local ghost_ns = vim.api.nvim_create_namespace "astrograph_motion_ghost"
+
+-- estágios do colapso: texto original -> metade de baixo -> fina -> mais fina
+local STAGES = { false, "▄", "▂", "▁" }
+
+---Destaque (grupo) de cada caractere das linhas, lido da árvore do Treesitter
+---que o buffer original já tem pronta (sem novo parse).
+---@return (string|false)[][] por linha, um grupo por caractere
+local function line_highlights(buf, first, last, lines)
+  local out = {}
+  for i, line in ipairs(lines) do
+    local bytes = {}
+    out[i] = { bytes = bytes, line = line }
+  end
+  local ok, parser = pcall(vim.treesitter.get_parser, buf, nil, { error = false })
+  if not ok or not parser then return out end
+  local lang = parser:lang()
+  local query = vim.treesitter.query.get(lang, "highlights")
+  local tree = parser:parse({ first, last + 1 }) and parser:trees()[1]
+  if not (query and tree) then return out end
+  for id, node in query:iter_captures(tree:root(), buf, first, last + 1) do
+    local sr, sc, er, ec = node:range()
+    local name = "@" .. query.captures[id] .. "." .. lang
+    for row = math.max(sr, first), math.min(er, last) do
+      local item = out[row - first + 1]
+      if item then
+        local from = row == sr and sc or 0
+        local to = row == er and ec or #item.line
+        for b = from + 1, to do
+          item.bytes[b] = name
+        end
+      end
+    end
+  end
+  return out
+end
+
+---Monta a linha do estágio (`glyph` = false mantém o texto) e os trechos de cor.
+local function build_frame(hl_lines, glyph, tabstop)
+  local text, marks = {}, {}
+  for i, item in ipairs(hl_lines) do
+    local parts, runs, col = {}, {}, 0
+    local b = 1
+    local line = item.line
+    while b <= #line do
+      local ch = vim.fn.strcharpart(line:sub(b), 0, 1)
+      if ch == "" then break end
+      local hl = item.bytes[b]
+      local out
+      if ch == "\t" then
+        out = string.rep("\u{00A0}", tabstop)
+      elseif ch == " " then
+        out = "\u{00A0}" -- não transparente: o texto de baixo não vaza pelos espaços
+      else
+        out = glyph or ch
+      end
+      parts[#parts + 1] = out
+      if hl and ch ~= " " and ch ~= "\t" then
+        local last = runs[#runs]
+        if last and last.hl == hl and last.e == col then
+          last.e = col + #out
+        else
+          runs[#runs + 1] = { s = col, e = col + #out, hl = hl }
+        end
+      end
+      col = col + #out
+      b = b + #ch
+    end
+    text[i] = table.concat(parts)
+    marks[i] = runs
+  end
+  return text, marks
+end
+
+---A linha apagada colapsa verticalmente dentro dela mesma e some.
 local function ghost(win, snap)
   local buf = vim.api.nvim_create_buf(false, true)
-  -- com transparência, o Neovim deixa o texto de baixo aparecer pelos espaços
-  -- da janela (letras se misturam no fade). Espaço não separável (U+00A0) fica
-  -- em branco mas não é transparente.
-  local nbsp = "\u{00A0}"
-  local tab = string.rep(" ", snap.tabstop)
-  local lines = {}
-  for i, line in ipairs(snap.lines) do
-    lines[i] = (line:gsub("\t", tab):gsub(" ", nbsp))
-  end
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  -- destaque de sintaxe direto pelo treesitter (sem disparar LSP/autocmds de filetype)
-  local lang = snap.ft ~= "" and vim.treesitter.language.get_lang(snap.ft) or nil
-  if lang then pcall(vim.treesitter.start, buf, lang) end
   local win_h = vim.api.nvim_win_get_height(win)
   local height = math.max(1, math.min(snap.height, win_h - snap.row))
   local ok, ghost_win = pcall(vim.api.nvim_open_win, buf, false, {
@@ -200,17 +321,31 @@ local function ghost(win, snap)
   vim.w[ghost_win].astrograph_motion = true -- o fade de entrada não se aplica
   vim.wo[ghost_win].winhighlight = "Normal:Normal,NormalFloat:Normal"
   vim.wo[ghost_win].wrap = snap.wrap
-  vim.wo[ghost_win].list = false -- não desenhar o U+00A0 como `␣`
-  vim.wo[ghost_win].winblend = 0
+  vim.wo[ghost_win].list = false
   if snap.leftcol > 0 then
     vim.api.nvim_win_call(ghost_win, function() vim.fn.winrestview { leftcol = snap.leftcol } end)
   end
-  local max_drop = math.max(0, math.min(2, win_h - snap.row - height))
+
+  local stage = 0
+  local function show(n)
+    if n == stage then return end
+    stage = n
+    local text, marks = build_frame(snap.hl, STAGES[n], snap.tabstop)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
+    vim.api.nvim_buf_clear_namespace(buf, ghost_ns, 0, -1)
+    for row, runs in ipairs(marks) do
+      for _, r in ipairs(runs) do
+        pcall(vim.api.nvim_buf_set_extmark, buf, ghost_ns, row - 1, r.s, { end_col = r.e, hl_group = r.hl })
+      end
+    end
+  end
+  show(1)
+
   animate(M.delete_duration, function(x)
     if not (vim.api.nvim_win_is_valid(ghost_win) and vim.api.nvim_win_is_valid(win)) then return false end
-    local drop = math.floor(max_drop * ease_in_out_sine(x) + 0.5)
-    pcall(vim.api.nvim_win_set_config, ghost_win, { relative = "win", win = win, row = snap.row + drop, col = snap.textoff })
-    pcall(function() vim.wo[ghost_win].winblend = math.floor(100 * ease_out_cubic(x) + 0.5) end)
+    -- 4 estágios iguais; o fade acelera no fim (snappy, mas sem corte seco)
+    show(math.min(#STAGES, math.floor(x * #STAGES) + 1))
+    pcall(function() vim.wo[ghost_win].winblend = math.floor(100 * x * x + 0.5) end)
   end, function()
     vim.schedule(function()
       pcall(vim.api.nvim_win_close, ghost_win, true)
@@ -219,8 +354,8 @@ local function ghost(win, snap)
   end)
 end
 
----`dd` com animação: apaga na hora (o conteúdo nunca espera a animação) e
----mostra as linhas apagadas descendo e sumindo. Mantém contagem e registrador.
+---`dd` com animação: apaga na hora (o conteúdo nunca espera a animação) e a
+---linha apagada colapsa dentro dela mesma. Mantém contagem e registrador.
 function M.delete_lines()
   local count, reg = vim.v.count1, vim.v.register
   local win = vim.api.nvim_get_current_win()
@@ -236,13 +371,13 @@ function M.delete_lines()
     local last = math.min(lnum + count - 1, vim.fn.line "$")
     local info = vim.fn.getwininfo(win)[1]
     local ok_h, text_h = pcall(vim.api.nvim_win_text_height, win, { start_row = lnum - 1, end_row = last - 1 })
+    local lines = vim.api.nvim_buf_get_lines(0, lnum - 1, last, false)
     snap = {
-      lines = vim.api.nvim_buf_get_lines(0, lnum - 1, last, false),
+      hl = line_highlights(0, lnum - 1, last - 1, lines),
       row = vim.fn.winline() - 1,
       textoff = info.textoff,
       width = info.width - info.textoff,
       height = ok_h and text_h.all or (last - lnum + 1),
-      ft = vim.bo.filetype,
       wrap = vim.wo[win].wrap,
       tabstop = vim.bo.tabstop,
       leftcol = vim.fn.winsaveview().leftcol,
@@ -251,7 +386,6 @@ function M.delete_lines()
   vim.cmd(('normal! "%s%ddd'):format(reg, count))
   if snap then ghost(win, snap) end
 end
-
 
 function M.setup()
   local group = vim.api.nvim_create_augroup("astrograph_motion", { clear = true })

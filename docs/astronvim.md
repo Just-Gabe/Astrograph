@@ -62,6 +62,8 @@ Medido no Windows 11 (veja [Performance](performance)).
 | --- | --- | --- |
 | nvim-highlight-colors | `astronvim.decor` | 2,6 ms por evento de rolagem; o nosso usa o provedor de decoração nativo (zero autocmds ao rolar) |
 | todo-comments.nvim | `astronvim.decor` | mesmo tipo de trabalho; juntos num motor só, com cache por linha |
+| provedor de área de transferência do Neovim | `astrograph.clipboard` | executava um programa a cada cópia (~11 ms por `dd`); agora 0,8 ms |
+| polling de largura do neo-tree | evento `WinResized` | timer de 50 ms rodando sempre; cortava os nomes no deslize |
 
 O critério foi medir antes: plugins que pesavam pouco (autopairs, which-key,
 heirline) ficaram, porque reescrever não traria ganho que você sentisse.

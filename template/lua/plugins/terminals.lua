@@ -1,10 +1,10 @@
 -- Launcher de agentes-CLI em terminal flutuante (Snacks).
 --
--- Roda o TUI nativo do agente (claude/opencode/codex/gemini) no root do projeto.
--- Os keymaps existem sempre; o picker lista só os agentes presentes no PATH
--- (nenhum custo de detecção no boot).
+-- Roda o TUI nativo do agente atual (claude/opencode/codex/gemini) no root do
+-- projeto. O agente é o mesmo do chat e da edição inline: troque com
+-- :Astrograph agente ou <Leader>Ag (nenhum custo de detecção no boot).
 --
---   <Leader>Al  lançar agente-CLI (picker)   <Leader>AT  alternar o último terminal
+--   <Leader>Al  abrir o agente atual         <Leader>AT  alternar o terminal dele
 --   <Leader>A.  enviar o arquivo atual ao agente
 
 local M = {}
@@ -33,33 +33,23 @@ local function open_agent(a)
   last.buf = term.buf
 end
 
----Lançar um agente (picker se houver mais de um).
+---Abre o terminal do agente atual (o escolhido em :Astrograph agente / <Leader>Ag).
 function M.launch()
-  local present = require("astrograph.agents").available()
-  if #present == 0 then
-    vim.notify("Astrograph: nenhum agente-CLI no PATH (claude/opencode/codex/gemini)", vim.log.levels.WARN)
+  local a = require("astrograph.agents").current()
+  if not a then
+    vim.notify("Astrograph: nenhum agente instalado. Rode :Astrograph configurar.", vim.log.levels.WARN)
     return
   end
-  if #present == 1 then
-    open_agent(present[1])
-    return
-  end
-  vim.ui.select(present, {
-    prompt = "Agente:",
-    format_item = function(a) return a.label end,
-  }, function(choice)
-    if choice then open_agent(choice) end
-  end)
+  open_agent(a)
 end
 
----Alternar o último terminal de agente (ou lançar, se não houver).
+---Alterna o terminal do agente atual (abre se ainda não existir).
 function M.toggle()
-  if not last.cmd then
-    M.launch()
-    return
-  end
+  local a = require("astrograph.agents").current()
+  if not a then return M.launch() end
+  if last.cmd ~= a.cmd then return M.launch() end
   pcall(function()
-    require("snacks").terminal.toggle(last.cmd, { cwd = require("astrograph.agents").root(), win = win_opts() })
+    require("snacks").terminal.toggle(a.cmd, { cwd = require("astrograph.agents").root(), win = win_opts() })
   end)
 end
 
@@ -87,6 +77,7 @@ return {
     keys = {
       { "<Leader>Al", M.launch, desc = "Abrir agente no terminal" },
       { "<Leader>AT", M.toggle, desc = "Alternar terminal do agente" },
+      { "<Leader>Ag", function() require("astrograph.agents").pick() end, desc = "Escolher agente (vale para tudo)" },
       { "<Leader>A.", M.send, desc = "Enviar arquivo atual ao agente" },
     },
   },

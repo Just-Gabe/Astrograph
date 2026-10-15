@@ -76,13 +76,19 @@ return {
         or (vim.env.GEMINI_API_KEY and "gemini")
         or (url and "astrograph_local")
         or "anthropic"
-      -- Chat: o primeiro agente com a ponte ACP instalada (usa o login do CLI);
+      -- Chat: o agente atual (o mesmo do terminal e da edição inline, escolhido em
+      -- :Astrograph agente); sem a ponte ACP dele, o primeiro agente que tiver;
       -- senão o mesmo adapter HTTP.
       local chat_default = http_default
-      for _, a in ipairs(agents.agents) do
-        if agents.has(a.bin) and agents.has_acp(a) then
-          chat_default = a.adapter
-          break
+      local current = agents.current()
+      if current and agents.has_acp(current) then
+        chat_default = current.adapter
+      else
+        for _, a in ipairs(agents.agents) do
+          if agents.has(a.bin) and agents.has_acp(a) then
+            chat_default = a.adapter
+            break
+          end
         end
       end
 
@@ -114,7 +120,7 @@ return {
       end
       opts.interactions.cli = vim.tbl_deep_extend("force", opts.interactions.cli or {}, {
         agents = cli,
-        agent = present[1] and present[1].bin or nil,
+        agent = current and current.bin or (present[1] and present[1].bin) or nil,
       })
 
       return opts

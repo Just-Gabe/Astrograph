@@ -29,5 +29,11 @@ vim.keymap.set("t", "<Esc><Esc>", [[<C-\><C-n>]], { desc = "Sair do modo termina
 -- :Astrograph atualizar | saude | agentes | configurar | login | atalhos | docs
 require("astrograph.commands").setup()
 
+-- Área de transferência assíncrona: copiar não espera o win32yank/pbcopy/xclip
+require("astrograph.clipboard").setup()
+
+-- Agente central: trocar o agente no chat (`ga`) troca o de todo o modo agentic
+require("astrograph.agents").setup()
+
 -- Pré-aquecimento no ocioso: a 1ª busca/explorador tão rápidos quanto os seguintes
 require("astrograph.warmup").setup()

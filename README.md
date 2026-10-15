@@ -45,7 +45,9 @@ rodar `nvim`.
 - **Resposta imediata**: o que você usa é pré-carregado quando o editor está
   ocioso, e o código aparece sem ruído (sem CodeLens nem `~` por padrão).
 - **Movimento**: janelas com fade, explorador deslizante e `dd` animado (a
-  linha desce e some), sempre sem atrasar a edição.
+  linha colapsa e some), sempre sem atrasar a edição.
+- **Um agente para tudo**: escolha com `<Leader>Ag` e terminal, chat e edição
+  inline passam a usar o mesmo agente; a escolha fica salva.
 - **Código próprio onde importa**: cores e TODOs desenhados pelo motor nativo
   do Neovim, no lugar de dois plugins; rolar a tela ficou ~10× mais leve.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
@@ -60,7 +62,7 @@ rodar `nvim`.
 | ![Agentes](docs/img/agentes.png) | ![Chat](docs/img/chat.png) |
 | **Completação com ghost text** | **Diagnóstico (`:Astrograph saude`)** |
 | ![Completação](docs/img/completar.png) | ![Diagnóstico](docs/img/saude.png) |
-| **Explorador deslizando (`<Leader>e`)** | **`dd`: a linha desce e some** |
+| **Explorador deslizando (`<Leader>e`)** | **`dd`: a linha colapsa e some** |
 | ![Explorador](docs/img/explorador.gif) | ![Apagar linha](docs/img/apagar-linha.gif) |
 
 ## Primeiros passos

@@ -68,23 +68,20 @@ return {
       -- extensão (que não executa no Windows); vazio, a ponte usa o CLI embutido.
       opts.acp_providers = opts.acp_providers or {}
       for _, a in ipairs(agents.agents) do
-        if a.adapter == "claude_code" and agents.has(a.bin) and agents.has_acp(a) then
-          opts.acp_providers["claude-code"] = vim.tbl_deep_extend("force", opts.acp_providers["claude-code"] or {}, {
-            command = agents.exe(a.acp_bin),
-            env = { ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = "" },
-          })
-        elseif a.adapter == "gemini_cli" and agents.has(a.bin) then
-          opts.acp_providers["gemini-cli"] =
-            vim.tbl_deep_extend("force", opts.acp_providers["gemini-cli"] or {}, { command = agents.exe(a.bin) })
-        elseif a.adapter == "codex" and agents.has(a.bin) and agents.has_acp(a) then
-          opts.acp_providers["codex"] =
-            vim.tbl_deep_extend("force", opts.acp_providers["codex"] or {}, { command = agents.exe(a.acp_bin) })
+        if agents.has(a.bin) and agents.has_acp(a) then
+          local ext = { command = agents.exe(a.acp_bin) }
+          if a.avante == "claude-code" then ext.env = { ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = "" } end
+          opts.acp_providers[a.avante] = vim.tbl_deep_extend("force", opts.acp_providers[a.avante] or {}, ext)
         end
       end
 
-      -- Provedor: modelo local (Ollama) quando no ar; senão Claude por API (se
-      -- houver chave); senão o Claude Code via ACP; por último a API do Claude.
-      if info.ollama and info.local_model then
+      -- Provedor: o agente atual (o mesmo do terminal e do chat, escolhido em
+      -- :Astrograph agente) via ACP; sem ele, o modelo local (Ollama); depois o
+      -- Claude por API (com chave) ou o Claude Code via ACP.
+      local current = agents.current()
+      if current and current.avante and opts.acp_providers[current.avante] then
+        opts.provider = current.avante
+      elseif info.ollama and info.local_model then
         opts.provider = "ollama"
         opts.providers = {
           ollama = {

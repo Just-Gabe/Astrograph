@@ -54,6 +54,13 @@ return {
     end,
   },
   {
+    "nvim-neo-tree/neo-tree.nvim",
+    optional = true,
+    -- sem polling de largura a cada 50 ms: o redesenho vem do evento WinResized
+    -- (astrograph.motion), e o deslize do explorador não corta os nomes
+    opts = { resize_timer_interval = -1 },
+  },
+  {
     "AstroNvim/astrolsp",
     optional = true,
     -- CodeLens ("N references" entre as linhas) começa desligado: menos ruído

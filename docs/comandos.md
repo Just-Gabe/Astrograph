@@ -14,6 +14,7 @@ nav_order: 5
 | `:Astrograph agentes` | Mostra cada agente de IA: instalado, logado e com o chat pronto |
 | `:Astrograph configurar` | Instala as pontes do chat e faz os logins que faltam |
 | `:Astrograph login [agente]` | Abre o login de um agente (`claude`, `opencode`, `codex`, `gemini`) |
+| `:Astrograph agente [agente]` | Escolhe o agente de todo o modo agentic (fica salvo) |
 | `:Astrograph atalhos` | Busca entre todos os atalhos |
 | `:Astrograph docs` | Abre esta documentação no navegador |
 

@@ -47,6 +47,7 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 | `health.lua` | `:checkhealth astrograph` |
 | `warmup.lua` | Pré-aquecimento no ocioso (busca, explorador, `fd`/`rg`/`git`) |
 | `motion.lua` | Fade das janelas, explorador deslizante e `dd` animado |
+| `clipboard.lua` | Área de transferência sem espera (cópia agrupada, colar da memória) |
 | `dashboard.lua` | Cena animada da tela inicial e rodapé em português |
 | `plugins/visual.lua` | ui2, bordas arredondadas, ghost text e cursor animado |
 | `art.lua` | Arte gerada por `tools/gen_art.py` (não edite à mão) |

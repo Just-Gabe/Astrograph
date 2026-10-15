@@ -52,7 +52,7 @@ Ao abrir o `nvim` sem arquivo aparece a tela inicial. Cada item tem uma tecla:
 | `\|` / `\` | Dividir janela na vertical / horizontal |
 | `Ctrl` + `h` `j` `k` `l` | Ir para a janela da esquerda/baixo/cima/direita |
 | `]b` / `[b` | Próximo / anterior buffer |
-| `dd` | Apagar linha (a linha desce e some) |
+| `dd` | Apagar linha (a linha colapsa e some) |
 | `]T` / `[T` | Próximo / anterior TODO |
 
 ## Completação

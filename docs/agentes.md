@@ -54,6 +54,23 @@ O chat e o terminal usam **o login do próprio CLI**: não é preciso token nem
 chave de API. Só o assistente inline (`<Leader>Aq`) precisa de uma chave
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` ou `GEMINI_API_KEY`) ou do Ollama.
 
+## Um agente para tudo
+
+Você escolhe **um** agente e ele vale para o modo agentic inteiro: terminal
+(`<Leader>Al`/`<Leader>AT`), chat (`<Leader>Ac`), edição inline do avante
+(`<Leader>AE`) e a interação CLI. A escolha fica salva e continua valendo ao
+reabrir o Neovim.
+
+| Como trocar | |
+| --- | --- |
+| `<Leader>Ag` | Escolher o agente numa lista (o atual aparece com ●) |
+| `:Astrograph agente opencode` | Trocar direto pelo nome (`Tab` completa) |
+| `ga` dentro do chat | Trocar o agente do chat também troca o de todo o resto |
+
+A troca vale na hora, sem reiniciar. Sem a ponte do chat instalada para o
+agente escolhido, o terminal já muda e o aviso diz para rodar
+`:Astrograph configurar`.
+
 ## Os três jeitos
 
 | Jeito | Quando usar | Atalho |
@@ -66,8 +83,9 @@ chave de API. Só o assistente inline (`<Leader>Aq`) precisa de uma chave
 
 | Atalho | O que faz |
 | --- | --- |
-| `<Leader>Al` | Abrir agente no terminal (pergunta qual, se houver mais de um) |
-| `<Leader>AT` | Alternar o último terminal de agente |
+| `<Leader>Ag` | Escolher o agente (vale para terminal, chat e edição) |
+| `<Leader>Al` | Abrir o agente atual no terminal |
+| `<Leader>AT` | Alternar o terminal do agente atual |
 | `<Leader>A.` | Enviar o caminho do arquivo atual para o agente |
 | `<Leader>Ac` | Chat (abrir/fechar) |
 | `<Leader>An` | Novo chat |
