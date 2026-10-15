@@ -40,6 +40,7 @@ local st = {
   perms = {}, ---@type table[] permissões na fila (uma na tela por vez)
   asking = false,
   code_win = nil, ---@type integer?
+  conflicts = {}, ---@type table<string, integer> arquivo (norm) -> buffer com conflito enviado ao agente
 }
 
 ---------------------------------------------------------------------------
@@ -156,14 +157,14 @@ local function code_win()
   end
 end
 
-local function same_file(a, b)
-  -- realpath: no Windows o mesmo arquivo chega como GABRIE~1 (8.3) ou nome longo
-  local norm = function(p)
-    p = vim.fn.fnamemodify(p, ":p")
-    return (vim.fs.normalize(vim.uv.fs_realpath(p) or p):lower())
-  end
-  return norm(a) == norm(b)
+---Chave única de um arquivo. realpath: no Windows o mesmo arquivo chega como
+---GABRIE~1 (8.3) ou nome longo.
+local function norm(p)
+  p = vim.fn.fnamemodify(p, ":p")
+  return (vim.fs.normalize(vim.uv.fs_realpath(p) or p):lower())
 end
+
+local function same_file(a, b) return norm(a) == norm(b) end
 
 local function buf_for(path)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -177,6 +178,9 @@ end
 local function show(path, line)
   local w = code_win()
   if not w then return end
+  -- arquivo que o agente ainda vai criar: abrir agora deixaria um buffer vazio
+  -- que vira o aviso "created after editing started" quando ele gravar
+  if not buf_for(path) and not vim.uv.fs_stat(path) then return end
   local ok, buf = pcall(vim.api.nvim_win_call, w, function()
     if not same_file(vim.api.nvim_buf_get_name(0), path) then
       local b = buf_for(path)
@@ -240,17 +244,54 @@ local function preview(diff)
   if w then pcall(vim.api.nvim_win_set_cursor, w, { first + 1, 0 }) end
 end
 
+---Conflito: você tem alterações não salvas e o arquivo mudou no disco. Com o
+---agente ativo, ele recebe o seu diff e junta as duas versões no arquivo; a
+---gravação dele volta como `edited` e é carregada no buffer. Sem agente, só avisa.
+local function conflict(buf, path)
+  local key = norm(path)
+  if st.conflicts[key] then return end -- já enviado; esperando o agente
+  local name = vim.fn.fnamemodify(path, ":~:.")
+  if not st.job then
+    return notify(("%s mudou no disco e você tem alterações não salvas. :w mantém a sua versão, :e! carrega a do disco."):format(name), vim.log.levels.WARN)
+  end
+  local ok, disk = pcall(vim.fn.readfile, path)
+  local mine = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local diff = vim.diff(table.concat(ok and disk or {}, "\n") .. "\n", table.concat(mine, "\n") .. "\n", { ctxlen = 3 })
+  st.conflicts[key] = buf
+  notify(("Conflito em %s enviado ao agente para juntar as versões."):format(name), vim.log.levels.WARN)
+  M.submit {
+    op = "prompt",
+    conflict = key,
+    label = ("**Astrograph:** conflito em %s (alterações suas não salvas × disco), enviado ao agente"):format(name),
+    text = table.concat({
+      ("O arquivo %s mudou no disco enquanto o usuário tinha alterações não salvas no editor."):format(path),
+      "Diff do disco (---) para a versão do editor (+++), ainda não salva:",
+      "```diff",
+      diff ~= "" and diff or "(sem diferenças de conteúdo)",
+      "```",
+      "Junte as duas versões no arquivo do disco, preservando as alterações do usuário e as do disco. Se forem incompatíveis, pergunte antes. Responda em uma frase o que fez.",
+    }, "\n"),
+    files = { path },
+  }
+end
+
 ---Recarrega o arquivo editado e destaca as linhas novas/alteradas.
 local function on_edited(path)
   local before = st.before[path]
   st.before[path] = nil
   local buf = buf_for(path)
   if buf then
-    if vim.bo[buf].modified then
-      notify(("%s tem alterações suas não salvas; o agente editou o arquivo no disco. Use :e! para ver a versão dele."):format(vim.fn.fnamemodify(path, ":~:.")), vim.log.levels.WARN)
-      return
+    local key = norm(path)
+    if st.conflicts[key] and st.turn_conflict == key then
+      -- resposta do agente ao conflito: a versão dele já junta as duas
+      st.conflicts[key] = nil
+      before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      vim.api.nvim_buf_call(buf, function() vim.cmd "silent edit!" end)
+    elseif vim.bo[buf].modified then
+      return conflict(buf, path)
+    else
+      vim.api.nvim_buf_call(buf, function() vim.cmd "checktime" end)
     end
-    vim.api.nvim_buf_call(buf, function() vim.cmd "checktime" end)
   elseif M.follow then
     buf = show(path)
   end
@@ -366,10 +407,19 @@ end
 function handlers.done(ev)
   st.busy = false
   st.perms, st.asking = {}, false
+  -- conflito que o agente não resolveu gravando o arquivo (ex.: perguntou
+  -- algo): deixa de valer, para uma gravação futura não descartar o seu buffer
+  if st.turn_conflict and st.conflicts[st.turn_conflict] then
+    st.conflicts[st.turn_conflict] = nil
+    notify("O agente não gravou a junção; suas alterações seguem no buffer, sem salvar.", vim.log.levels.WARN)
+  end
+  st.turn_conflict = nil
   clear_preview()
   write(("_— fim (%s)_"):format(ev.stop ~= vim.NIL and ev.stop or "?"), "info")
-  if not panel_win() then notify "O agente terminou." end
+  if not panel_win() and #st.queue == 0 then notify "O agente terminou." end
   vim.cmd.redrawstatus()
+  local nxt = table.remove(st.queue, 1)
+  if nxt then M.submit(nxt) end
 end
 
 function handlers.error(ev)
@@ -453,6 +503,7 @@ local function start()
     end,
     on_exit = function(_, code)
       st.job, st.ready, st.busy = nil, false, false
+      st.queue, st.conflicts, st.turn_conflict = {}, {}, nil
       if code ~= 0 then write(("_agente encerrou (código %d)_"):format(code), "info") end
     end,
   })
@@ -468,18 +519,21 @@ end
 function M.stop()
   if st.job then pcall(vim.fn.jobstop, st.job) end
   st.job, st.ready, st.busy = nil, false, false
+  st.queue, st.conflicts, st.turn_conflict = {}, {}, nil
 end
 
 ---Manda um pedido (abre a sessão se preciso).
 ---@param op {op:"prompt", text:string, files?:string[], snippets?:table[]}
 function M.submit(op)
   if not start() then return end
-  if not st.ready then return table.insert(st.queue, op) end
-  clear_changes()
+  -- sessão abrindo ou agente no meio de uma resposta: espera a vez
+  if not st.ready or st.busy then return table.insert(st.queue, op) end
+  if not op.conflict then clear_changes() end
   st.busy = true
   st.last = nil
-  write("**Você:** " .. op.text, "user")
-  send(op)
+  st.turn_conflict = op.conflict
+  write(op.label or ("**Você:** " .. op.text), "user")
+  send { op = "prompt", text = op.text, files = op.files, snippets = op.snippets }
   vim.cmd.redrawstatus()
 end
 
@@ -551,6 +605,27 @@ function M.setup()
     end,
   })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = M.stop })
+  -- Arquivo mudou no disco (agente, terminal, git...): nunca a pergunta que
+  -- trava a tela (W11/W12/W13 "[O]K, (L)oad File"). Sem alteração sua pendente,
+  -- recarrega; com alteração pendente, vira conflito para o agente juntar.
+  vim.api.nvim_create_autocmd("FileChangedShell", {
+    group = group,
+    callback = function(a)
+      local reason, buf, file = vim.v.fcs_reason, a.buf, a.file
+      if reason == "deleted" then
+        vim.v.fcs_choice = ""
+        vim.schedule(function() notify(("%s foi apagado no disco; o buffer continua aberto."):format(vim.fn.fnamemodify(file, ":~:."))) end)
+      elseif reason == "mode" or reason == "time" or not vim.bo[buf].modified then
+        vim.v.fcs_choice = (reason == "mode" or reason == "time") and "" or "reload"
+      else
+        vim.v.fcs_choice = "" -- mantém o seu buffer; o conflito segue para o agente
+        local path = vim.fn.fnamemodify(file, ":p")
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then conflict(buf, path) end
+        end)
+      end
+    end,
+  })
   vim.api.nvim_create_user_command("AstrographAgent", function(o)
     if o.args ~= "" then
       M.open()
