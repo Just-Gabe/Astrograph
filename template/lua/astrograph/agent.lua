@@ -40,7 +40,7 @@ local st = {
   perms = {}, ---@type table[] permissões na fila (uma na tela por vez)
   asking = false,
   code_win = nil, ---@type integer?
-  conflicts = {}, ---@type table<string, integer> arquivo (norm) -> buffer com conflito enviado ao agente
+  conflicts = {}, ---@type table<string, {buf:integer, tick:integer}> arquivo (norm) -> conflito enviado ao agente
 }
 
 ---------------------------------------------------------------------------
@@ -301,7 +301,9 @@ local function conflict(buf, path, why)
   local ok, disk = pcall(vim.fn.readfile, path)
   local mine = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local diff = vim.diff(table.concat(ok and disk or {}, "\n") .. "\n", table.concat(mine, "\n") .. "\n", { ctxlen = 3 })
-  st.conflicts[key] = buf
+  -- changedtick do envio: se o usuário seguir digitando, a junção do agente
+  -- não pode ser carregada por cima (perderia o que foi digitado depois)
+  st.conflicts[key] = { buf = buf, tick = vim.api.nvim_buf_get_changedtick(buf) }
   notify(("Conflito em %s enviado ao agente para juntar as versões."):format(name), vim.log.levels.WARN)
   M.submit {
     op = "prompt",
@@ -326,7 +328,13 @@ local function on_edited(path)
   local buf = buf_for(path)
   if buf then
     local key = norm(path)
-    if st.conflicts[key] and st.turn_conflict == key then
+    local pending = st.conflicts[key]
+    if pending and st.turn_conflict == key and vim.api.nvim_buf_get_changedtick(buf) ~= pending.tick then
+      -- o usuário digitou depois do envio: a junção do agente não tem isso.
+      -- Não carrega por cima; o conflito reabre com o estado atual (fila).
+      st.conflicts[key], st.turn_conflict = nil, nil
+      return conflict(buf, path)
+    elseif pending and st.turn_conflict == key then
       -- resposta do agente ao conflito: a versão dele já junta as duas
       st.conflicts[key] = nil
       before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)

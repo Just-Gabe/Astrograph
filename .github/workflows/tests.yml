@@ -1,0 +1,38 @@
+# Testes do agente nativo: Lua (Neovim headless, cada teste isolado e com
+# tempo-limite) e a ponte ACP em Rust (agente falso).
+name: Testes
+
+on:
+  push:
+    branches: [main, "epic/**"]
+  pull_request:
+
+jobs:
+  lua:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Testes do agente (Lua)
+        run: nvim --clean --headless -l template/tests/run.lua
+
+  rust-agent:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: prototype/astrograph-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-agent
+      - name: Testes da ponte ACP
+        run: cargo test
