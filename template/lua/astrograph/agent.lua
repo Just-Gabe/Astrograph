@@ -157,7 +157,11 @@ local function code_win()
 end
 
 local function same_file(a, b)
-  local norm = function(p) return (vim.fs.normalize(vim.fn.fnamemodify(p, ":p")):lower()) end
+  -- realpath: no Windows o mesmo arquivo chega como GABRIE~1 (8.3) ou nome longo
+  local norm = function(p)
+    p = vim.fn.fnamemodify(p, ":p")
+    return (vim.fs.normalize(vim.uv.fs_realpath(p) or p):lower())
+  end
   return norm(a) == norm(b)
 end
 
@@ -310,6 +314,10 @@ end
 ---Troca a linha da ferramenta no painel (ou cria). O painel só cresce, então
 ---o número da linha guardado continua valendo.
 local function set_tool_line(id, text)
+  -- títulos podem trazer quebras (ex.: comando de terminal com várias linhas):
+  -- a linha da ferramenta precisa ser uma só, para ser trocada no lugar
+  text = text:gsub("%s+$", ""):gsub("%s*[\r\n]+%s*", " ⏎ ")
+  if vim.fn.strchars(text) > 120 then text = vim.fn.strcharpart(text, 0, 119) .. "…" end
   local buf = ensure_buf()
   local row = id and st.tools[id]
   if row and row < vim.api.nvim_buf_line_count(buf) then
@@ -376,17 +384,23 @@ next_permission = function()
   if st.asking or #st.perms == 0 then return end
   local ev = table.remove(st.perms, 1)
   st.asking = true
-  local diffs = type(ev.diffs) == "table" and ev.diffs or {}
-  for _, d in ipairs(diffs) do
-    preview(d)
-  end
-  if #diffs == 0 and M.follow and type(ev.locations) == "table" and ev.locations[1] then
-    local l = ev.locations[1]
-    if type(l.path) == "string" then show(l.path, l.line ~= vim.NIL and l.line or nil) end
-  end
+  local title = type(ev.title) == "string" and ev.title or "ação"
+  -- a parte visual é opcional: se falhar, a pergunta tem que aparecer mesmo
+  -- assim (senão o agente fica esperando uma resposta que nunca vem)
+  local ok, err = pcall(function()
+    local diffs = type(ev.diffs) == "table" and ev.diffs or {}
+    for _, d in ipairs(diffs) do
+      preview(d)
+    end
+    if #diffs == 0 and M.follow and type(ev.locations) == "table" and ev.locations[1] then
+      local l = ev.locations[1]
+      if type(l.path) == "string" then show(l.path, l.line ~= vim.NIL and l.line or nil) end
+    end
+    set_tool_line(ev.tool ~= vim.NIL and ev.tool or nil, ("  ? %s — aguardando você"):format(title))
+  end)
+  if not ok then pcall(write, ("**Erro interno:** %s"):format(err), "error") end
   local opts = type(ev.options) == "table" and ev.options or {}
-  local title = ev.title ~= vim.NIL and ev.title or "ação"
-  set_tool_line(ev.tool ~= vim.NIL and ev.tool or nil, ("  ? %s — aguardando você"):format(title))
+  title = vim.trim(title):gsub("%s*[\r\n]+%s*", " ⏎ ")
   vim.ui.select(opts, {
     prompt = ("O agente quer: %s"):format(title),
     format_item = function(o) return o.name end,
