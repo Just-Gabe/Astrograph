@@ -80,7 +80,7 @@ return {
               end
             end
             astro.set_mappings(m)
-            vim.defer_fn(function() step(i + 1) end, 0)
+            vim.defer_fn(function() step(i + 1) end, 30)
           end
           step(1)
         end
@@ -88,7 +88,9 @@ return {
           pattern = "VeryLazy",
           once = true,
           desc = "Register external-tool terminal mappings",
-          callback = function() vim.schedule(optional_maps) end,
+          -- depois da animacao de entrada da tela inicial (~450ms): cada
+          -- `executable()` de um binario ausente trava ~20ms no Windows
+          callback = function() vim.defer_fn(optional_maps, 700) end,
         })
         maps.n["<Leader>tf"] = { "<Cmd>ToggleTerm direction=float<CR>", desc = "Terminal flutuante" }
         maps.n["<Leader>th"] =

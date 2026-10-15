@@ -43,6 +43,9 @@ depois as estrelas piscam devagar.
 
 - O tamanho se adapta à largura do terminal (banner grande, médio, inclinado ou
   mínimo).
+- A entrada roda a 60 fps e é baseada em tempo real: se o editor ficar ocupado
+  por um instante, ela pula quadros em vez de pausar. Ela só começa depois que
+  os plugins do startup terminam de carregar.
 - As estrelas pausam quando o terminal perde o foco ou a tela inicial não está
   visível, sem gastar CPU em segundo plano.
 - A arte fica em `template/lua/astrograph/art.lua`, gerada por

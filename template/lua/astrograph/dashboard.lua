@@ -62,13 +62,19 @@ local function choose(cols)
   return { banner = art.banners.mini }
 end
 
-local function define_hl(grad)
-  for i, col in ipairs(grad) do
-    set_fg(HL .. "Grad" .. i, col)
+--- Cores finais da cena. `skip_scene`: a entrada ainda esta animando o banner e
+--- a lua; `skip_stars`: as estrelas estao piscando (nao reseta o brilho).
+local function define_hl(grad, skip_scene, skip_stars)
+  if not skip_scene then
+    for i, col in ipairs(grad) do
+      set_fg(HL .. "Grad" .. i, col)
+    end
+    set_fg(HL .. "Moon", MOON_TO, true)
   end
-  set_fg(HL .. "Moon", MOON_TO, true)
-  for i = 1, 3 do
-    set_fg(HL .. "Star" .. i, STAR_BRIGHT)
+  if not skip_stars then
+    for i = 1, 3 do
+      set_fg(HL .. "Star" .. i, STAR_BRIGHT)
+    end
   end
 end
 
@@ -148,59 +154,136 @@ local function build(layout)
   return { { text = texts, align = "center" } }, gradient(#bl)
 end
 
---- Animacao de entrada: lua em fade + banner revelado linha a linha
-local function play(grad)
-  local animate = _G.Snacks and Snacks.animate
-  if not animate then
-    return
+-- Buffers do dashboard com a animacao de entrada em andamento e o ultimo
+-- gradiente montado (o snacks pode redesenhar a cena no meio da animacao).
+local intro, latest = {}, {}
+
+-- O relogio da entrada so comeca depois do `VeryLazy`: antes disso o editor
+-- ainda esta carregando plugins e o inicio da animacao seria "consumido" sem
+-- aparecer. Reabrir o dashboard depois (<Leader>h) anima na hora.
+local ready = vim.g.astrograph_very_lazy == true
+local waiting = {}
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  once = true,
+  group = vim.api.nvim_create_augroup("AstrographDashboardReady", { clear = true }),
+  callback = function()
+    vim.g.astrograph_very_lazy = true
+    vim.defer_fn(function()
+      ready = true
+      for _, fn in ipairs(waiting) do
+        fn()
+      end
+      waiting = {}
+    end, 30)
+  end,
+})
+
+local function when_ready(fn)
+  if ready then
+    fn()
+  else
+    waiting[#waiting + 1] = fn
   end
-  for i = 1, #grad do
-    set_fg(HL .. "Grad" .. i, BG)
+end
+
+local function ease_out_quad(x)
+  return 1 - (1 - x) * (1 - x)
+end
+
+--- Timer de quadros baseado em tempo real. `on_frame(segundos)` roda no loop
+--- principal; se o editor estiver ocupado, o quadro seguinte nao e enfileirado
+--- (sem rajadas atrasadas) e a animacao pula para o ponto certo no tempo, em
+--- vez de "pausar". Retorna uma funcao que para o timer.
+local function frame_clock(interval, on_frame)
+  local timer = vim.uv.new_timer()
+  local t0, pending, stopped = vim.uv.hrtime(), false, false
+  local function stop()
+    if stopped then
+      return
+    end
+    stopped = true
+    pcall(timer.stop, timer)
+    pcall(timer.close, timer)
   end
-  set_fg(HL .. "Moon", MOON_FROM, true)
-  pcall(animate, 0, 1, function(v)
+  timer:start(0, interval, function()
+    if pending or stopped then
+      return
+    end
+    pending = true
+    vim.schedule(function()
+      pending = false
+      if not stopped then
+        on_frame((vim.uv.hrtime() - t0) / 1e9, stop)
+      end
+    end)
+  end)
+  return stop
+end
+
+--- Animacao de entrada: lua em fade + banner revelado linha a linha (~60 fps)
+local function play(buf, grad)
+  local duration = 0.45
+  local function frame(v)
     for i = 1, #grad do
       local p = math.min(1, math.max(0, (v - (i - 1) * 0.12) / 0.4))
       set_fg(HL .. "Grad" .. i, lerp(BG, grad[i], p))
     end
     set_fg(HL .. "Moon", lerp(MOON_FROM, MOON_TO, math.min(1, v / 0.5)), true)
-  end, { duration = 400, easing = "outQuad" })
+  end
+  intro[buf] = true
+  frame(0)
+  when_ready(function()
+    frame_clock(16, function(secs, stop)
+      local x = math.min(1, secs / duration)
+      if not vim.api.nvim_buf_is_valid(buf) then
+        x = 1
+      end
+      frame(ease_out_quad(x))
+      if x < 1 then
+        return
+      end
+      stop()
+      intro[buf] = nil
+      -- o layout pode ter mudado durante a entrada (resize): cores finais certas
+      if latest[buf] and latest[buf] ~= grad then
+        for i, col in ipairs(latest[buf]) do
+          set_fg(HL .. "Grad" .. i, col)
+        end
+      end
+    end)
+  end)
 end
 
 local focused = true
 vim.api.nvim_create_autocmd({ "FocusLost", "FocusGained" }, {
   group = vim.api.nvim_create_augroup("AstrographDashboardFocus", { clear = true }),
-  callback = function(ev) focused = ev.event == "FocusGained" end,
+  callback = function(ev)
+    focused = ev.event == "FocusGained"
+  end,
 })
 
---- Twinkle continuo das estrelas (~6 Hz) enquanto o dashboard estiver na tela.
---- Pausa (sem redesenhar nada) quando o terminal perde o foco ou o dashboard
---- nao esta visivel em nenhuma janela; cada `nvim_set_hl` forca um redraw.
+--- Brilho continuo das estrelas (~15 Hz, baseado em tempo) enquanto o dashboard
+--- estiver na tela. Pausa sem redesenhar nada quando o terminal perde o foco ou
+--- o dashboard nao esta visivel; cada `nvim_set_hl` forca um redraw.
 local function twinkle(buf)
-  local timer = vim.uv.new_timer()
-  local t = 0
-  timer:start(0, 160, vim.schedule_wrap(function()
-    if not focused or (vim.api.nvim_buf_is_valid(buf) and vim.fn.bufwinid(buf) == -1) then
-      return
-    end
+  timers[buf] = frame_clock(66, function(secs, stop)
     if not vim.api.nvim_buf_is_valid(buf) or vim.g.snacks_animate == false then
       for i = 1, 3 do
         set_fg(HL .. "Star" .. i, STAR_BRIGHT)
       end
-      pcall(timer.stop, timer)
-      pcall(timer.close, timer)
-      if timers[buf] == timer then
-        timers[buf] = nil
-      end
+      stop()
+      timers[buf] = nil
       return
     end
-    t = t + 1
+    if not focused or vim.fn.bufwinid(buf) == -1 then
+      return
+    end
     for i = 1, 3 do
-      local w = 0.5 + 0.5 * math.sin(t * 0.58 + i * 2.1)
+      local w = 0.5 + 0.5 * math.sin(secs * 3.6 + i * 2.1)
       set_fg(HL .. "Star" .. i, lerp(STAR_DIM, STAR_BRIGHT, w))
     end
-  end))
-  timers[buf] = timer
+  end)
 end
 
 --- Liga a animacao uma unica vez por buffer do dashboard
@@ -215,11 +298,9 @@ local function start(buf, grad)
     group = aug,
     once = true,
     callback = function()
-      started[buf] = nil
-      local timer = timers[buf]
-      if timer then
-        pcall(timer.stop, timer)
-        pcall(timer.close, timer)
+      started[buf], intro[buf], latest[buf] = nil, nil, nil
+      if timers[buf] then
+        timers[buf]()
         timers[buf] = nil
       end
     end,
@@ -227,7 +308,7 @@ local function start(buf, grad)
   if vim.g.snacks_animate == false then
     return
   end
-  play(grad)
+  play(buf, grad)
   twinkle(buf)
 end
 
@@ -255,9 +336,15 @@ function M.scene(self)
   local ok, items = pcall(function()
     local layout = choose(vim.o.columns)
     local built, grad = build(layout)
-    define_hl(grad)
-    if self and self.buf and vim.api.nvim_buf_is_valid(self.buf) then
-      start(self.buf, grad)
+    local buf = self and self.buf
+    if buf then
+      latest[buf] = grad
+    end
+    -- durante a entrada (e com as estrelas piscando) as cores sao da animacao:
+    -- um redesenho do snacks nao pode resetar tudo para o estado final
+    define_hl(grad, buf and intro[buf], buf and timers[buf] ~= nil)
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      start(buf, grad)
     end
     return built
   end)
