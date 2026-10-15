@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 winit = "0.30"
 softbuffer = "0.4"
+nvim-rs = { version = "0.9", features = ["use_tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "sync", "time"] }
+async-trait = "0.1"
