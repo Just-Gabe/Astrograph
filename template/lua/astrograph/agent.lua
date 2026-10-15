@@ -244,16 +244,60 @@ local function preview(diff)
   if w then pcall(vim.api.nvim_win_set_cursor, w, { first + 1, 0 }) end
 end
 
----Conflito: você tem alterações não salvas e o arquivo mudou no disco. Com o
----agente ativo, ele recebe o seu diff e junta as duas versões no arquivo; a
----gravação dele volta como `edited` e é carregada no buffer. Sem agente, só avisa.
-local function conflict(buf, path)
-  local key = norm(path)
-  if st.conflicts[key] then return end -- já enviado; esperando o agente
+---Modo agêntico: o agente nativo está com a sessão aberta. Fora dele, o
+---Astrograph resolve o que é seguro e o resto vai para o usuário decidir.
+local function agentic() return st.job ~= nil end
+
+local why_text = {
+  disk = "mudou no disco enquanto o usuário tinha alterações não salvas no editor",
+  save = "mudou no disco depois que o usuário o abriu; ele tentou salvar e a gravação foi suspensa para não apagar a versão do disco",
+  recover = "tinha texto não salvo de uma sessão do editor que fechou de forma abrupta (recuperado do arquivo de swap)",
+}
+local why_label = { disk = "alterações suas não salvas × disco", save = "gravação suspensa: o disco mudou", recover = "texto recuperado do swap × disco" }
+
+---Fora do modo agêntico, o conflito é seu: escolher no menu (não trava a tela).
+local function ask_user(buf, path, why)
   local name = vim.fn.fnamemodify(path, ":~:.")
-  if not st.job then
-    return notify(("%s mudou no disco e você tem alterações não salvas. :w mantém a sua versão, :e! carrega a do disco."):format(name), vim.log.levels.WARN)
+  local choices = {
+    { id = "mine", text = "Manter a minha versão (gravar por cima do disco)" },
+    { id = "disk", text = "Carregar a versão do disco (descartar a minha)" },
+    { id = "diff", text = "Comparar as duas (diff) e decidir depois" },
+    { id = "later", text = "Decidir depois" },
+  }
+  local prompt = why == "recover" and ("%s: texto recuperado de uma sessão que fechou sem salvar, diferente do disco"):format(name)
+    or ("%s mudou no disco e você tem alterações não salvas"):format(name)
+  vim.ui.select(choices, { prompt = prompt, format_item = function(c) return c.text end }, function(c)
+    if not (c and vim.api.nvim_buf_is_valid(buf)) then return end
+    if c.id == "mine" then
+      vim.api.nvim_buf_call(buf, function() vim.cmd "silent write!" end)
+    elseif c.id == "disk" then
+      vim.api.nvim_buf_call(buf, function() vim.cmd "silent edit!" end)
+    elseif c.id == "diff" then
+      -- a versão do disco num split ao lado, em modo diff (precisa de janela)
+      local w = code_win()
+      if w then vim.api.nvim_set_current_win(w) end
+      vim.api.nvim_win_set_buf(0, buf)
+      vim.cmd "diffthis"
+      vim.cmd("vertical new | setlocal buftype=nofile bufhidden=wipe | silent read ++edit " .. vim.fn.fnameescape(path) .. " | 1delete _ | diffthis")
+      vim.api.nvim_buf_set_name(0, "disco: " .. name)
+    end
+  end)
+end
+
+---Conflito entre o buffer (com alterações não salvas) e o disco. No modo
+---agêntico o agente recebe o diff e junta as duas versões no arquivo; a
+---gravação dele volta como `edited` e é carregada no buffer. Fora dele, o
+---usuário escolhe.
+---@param why? "disk"|"save"|"recover"
+local function conflict(buf, path, why)
+  why = why or "disk"
+  local key = norm(path)
+  if st.conflicts[key] then -- já enviado; esperando o agente
+    if why == "save" then notify("O agente ainda está juntando as versões deste arquivo. :w! grava por cima.", vim.log.levels.WARN) end
+    return
   end
+  local name = vim.fn.fnamemodify(path, ":~:.")
+  if not agentic() then return ask_user(buf, path, why) end
   local ok, disk = pcall(vim.fn.readfile, path)
   local mine = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local diff = vim.diff(table.concat(ok and disk or {}, "\n") .. "\n", table.concat(mine, "\n") .. "\n", { ctxlen = 3 })
@@ -262,9 +306,9 @@ local function conflict(buf, path)
   M.submit {
     op = "prompt",
     conflict = key,
-    label = ("**Astrograph:** conflito em %s (alterações suas não salvas × disco), enviado ao agente"):format(name),
+    label = ("**Astrograph:** conflito em %s (%s), enviado ao agente"):format(name, why_label[why]),
     text = table.concat({
-      ("O arquivo %s mudou no disco enquanto o usuário tinha alterações não salvas no editor."):format(path),
+      ("O arquivo %s %s."):format(path, why_text[why]),
       "Diff do disco (---) para a versão do editor (+++), ainda não salva:",
       "```diff",
       diff ~= "" and diff or "(sem diferenças de conteúdo)",
@@ -624,6 +668,78 @@ function M.setup()
           if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].modified then conflict(buf, path) end
         end)
       end
+    end,
+  })
+  -- Carimbo do disco (data + tamanho) de cada buffer, para saber no `:w` se o
+  -- arquivo mudou desde que foi lido. O nvim pergunta "(y/n)" nesse caso e o
+  -- "y" apagaria a outra versão; aqui a gravação vira conflito.
+  local function stamp(path)
+    local s = vim.uv.fs_stat(path)
+    return s and ("%d.%d:%d"):format(s.mtime.sec, s.mtime.nsec, s.size) or nil
+  end
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost", "FileChangedShellPost" }, {
+    group = group,
+    callback = function(a)
+      local name = vim.api.nvim_buf_get_name(a.buf)
+      if name ~= "" and vim.bo[a.buf].buftype == "" then vim.b[a.buf].astrograph_disk = stamp(name) end
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWritePre", {
+    group = group,
+    callback = function(a)
+      local name = vim.api.nvim_buf_get_name(a.buf)
+      -- :w! grava por cima de propósito; :w outro-arquivo não é este caso
+      if vim.v.cmdbang == 1 or name == "" or vim.bo[a.buf].buftype ~= "" or not same_file(a.match, name) then return end
+      local known, now = vim.b[a.buf].astrograph_disk, stamp(name)
+      if known and now and known ~= now then
+        local path = vim.fn.fnamemodify(name, ":p")
+        if not vim.bo[a.buf].modified then
+          -- nada seu a gravar: gravar desfaria a mudança do disco; recarrega
+          vim.schedule(function() vim.api.nvim_buf_call(a.buf, function() vim.cmd "silent edit!" end) end)
+          error("Astrograph: o arquivo mudou no disco e não havia alteração sua; carreguei a versão do disco", 0)
+        end
+        vim.schedule(function() conflict(a.buf, path, "save") end)
+        error("Astrograph: o arquivo mudou no disco desde que foi aberto; gravação suspensa para não apagar a outra versão (:w! grava por cima)", 0)
+      end
+    end,
+  })
+  -- Swap existente (E325 "ATTENTION"): o seguro o Astrograph resolve sozinho;
+  -- texto não salvo de uma sessão que caiu vai para o agente no modo agêntico
+  -- e para o usuário (a pergunta normal do nvim) fora dele.
+  vim.api.nvim_create_autocmd("SwapExists", {
+    group = group,
+    callback = function(a)
+      local swap = vim.v.swapname
+      local ok, info = pcall(vim.fn.swapinfo, swap)
+      if not ok or type(info) ~= "table" or info.error then return end -- swap ilegível: pergunta normal
+      local file = vim.fn.fnamemodify(a.file, ":p")
+      local name = vim.fn.fnamemodify(file, ":~:.")
+      local pid = tonumber(info.pid) or 0
+      local same_host = not info.host or info.host == "" or info.host == vim.uv.os_gethostname()
+      -- mesma checagem do nvim (os_getpriority; o uv.kill(pid, 0) falha no Windows)
+      local alive = pid > 0 and (not same_host or vim.uv.os_getpriority(pid) ~= nil)
+      if alive then
+        -- outro Neovim aberto: vale a regra do próprio nvim (W325, ignora o swap);
+        -- se os dois gravarem, o :w deste vira conflito em vez de apagar o outro
+        return
+      elseif info.dirty == 0 then
+        vim.v.swapchoice = "d" -- sobra de uma sessão sem nada pendente
+      elseif agentic() then
+        vim.v.swapchoice = "r"
+        vim.schedule(function()
+          vim.fn.delete(swap) -- recuperado: o swap antigo não serve mais
+          local buf = buf_for(file)
+          if not buf then return end
+          local okd, disk = pcall(vim.fn.readfile, file)
+          if okd and vim.deep_equal(disk, vim.api.nvim_buf_get_lines(buf, 0, -1, false)) then
+            vim.bo[buf].modified = false
+            notify(("%s: o swap não tinha nada além do que já está no disco; removido."):format(name))
+          else
+            conflict(buf, file, "recover")
+          end
+        end)
+      end
+      -- fora do modo agêntico, swap com texto não salvo: a pergunta do nvim (usuário decide)
     end,
   })
   vim.api.nvim_create_user_command("AstrographAgent", function(o)
