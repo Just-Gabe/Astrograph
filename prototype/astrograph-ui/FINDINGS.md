@@ -68,3 +68,55 @@ Proximo passo: Fase 1 (issue #9) - promover a crate a UI de produto (dirty
 tracking, cursor completo, mouse/clipboard, medicao de fonte por `guifont`),
 antes de atacar as fases 2 (distribuicao) e 3 (absorver bootstrap/plugins de
 `core/`, aposentando o AstroNvim).
+
+## Revisao da fase 1: desempenho e design (2026-10-15)
+
+Principio: o que funciona bem na primeira vez tem que funcionar bem n vezes.
+
+### Correcoes
+
+| Problema | Causa | Correcao |
+|----------|-------|----------|
+| `AB你 好 CD` | a grade avancava 2 colunas no caractere largo **e** gravava a celula `""` que o Neovim manda | cada celula do protocolo ocupa uma coluna; `""` vira metade direita |
+| Quadros pela metade | redesenho a cada lote `redraw`, nao no `flush` | grade de trabalho + publicacao so no `flush` (so linhas alteradas) |
+| Clipboard nao copiava | valores string no `g:clipboard` sao executados como **shell** | funcoes Lua: `rpcnotify` (copiar, sem esperar) e `rpcrequest` (colar) |
+| `<` sumia, `Ctrl+Seta`/F-keys nao chegavam | traducao de teclas incompleta | `<lt>`, modificadores em teclas especiais, F1–F12, AltGr |
+| Fechar a janela perdia edicoes | `CloseRequested` saia na hora | pede `:confirm qa`; a janela fecha quando o Neovim sai |
+| Neovim saia e a janela ficava | fim do `io_handler` ignorado | fim do Neovim fecha a UI |
+| Glifos sumindo apos muito uso | atlas cheio cacheava "sem glifo" para sempre | atlas cheio e limpo e o glifo e refeito |
+| Caractere largo cortado ao meio | fundo da celula seguinte pintado depois do glifo | cada linha em 3 passadas: fundos, glifos, decoracoes |
+| Janela maior que a tela | tamanho fixo da config | limitada a area util do monitor, centralizada |
+
+### Numeros (release, 1280x750)
+
+| Metrica | Antes | Depois |
+|---------|-------|--------|
+| Quadro com a tela inteira | 1,03 ms | 0,94 ms |
+| Quadro tipico (digitar, piscar, mover o cursor) | 1,03 ms (tela inteira) | **0,027 ms** (~38x menos) |
+| Quadros por lote `redraw` | 1 por lote | 1 por `flush` |
+| Copiar `"+y` | (nao funcionava) | notificacao, sem processo externo |
+
+- Repintura incremental: `buffer.age()` diz se o quadro anterior foi
+  preservado; se sim, so as linhas sujas (e as do cursor) sao pintadas e
+  enviadas com `present_with_damage`.
+- Mistura de cor em inteiros (vermelho e azul numa multiplicacao), cache de
+  glifos ASCII em vetor (sem hash), atributos resolvidos uma vez por trecho.
+- A superficie so e redimensionada quando o tamanho muda.
+- Com o cursor deslizando, quadros a ~144 Hz so durante os 80 ms do
+  movimento; parado, o loop dorme ate o proximo piscar.
+- "Primeira pintura" agora mede a janela **aparecendo ja com o conteudo do
+  Neovim** (~300 ms, o tempo de inicio da config); antes media uma janela vazia
+  aos ~50 ms seguida do conteudo. Sem flash: a janela nasce invisivel e com a
+  barra de titulo na cor do tema; se o Neovim demorar mais de 600 ms, ela
+  aparece mesmo assim.
+
+### Design
+
+- Barra de titulo, borda e fundo numa cor so (a do tema), cantos arredondados:
+  a janela parece uma peca unica, como no macOS.
+- Margem de 10 px ao redor do texto, com a sobra (menor que uma celula)
+  dividida entre os lados.
+- Texto com peso "cheio" (gama 1/1.15 na cobertura), mais proximo do macOS.
+- Cursor deslizando com ease-out; aceso enquanto voce digita ou move.
+- Blocos e molduras desenhados como geometria; cantos `╭╮╯╰` com arco
+  antisserrilhado.

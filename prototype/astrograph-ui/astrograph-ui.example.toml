@@ -13,6 +13,9 @@
 width = 1280
 height = 800
 title = "Astrograph"
+# Margem (pixels logicos) entre a borda da janela e o texto.
+padding = 10
+# A janela nunca passa do tamanho da tela; abre centralizada.
 
 [font]
 # Tamanho em pixels da EM (tamanho "nominal" da fonte).
@@ -31,4 +34,7 @@ fallback = ["seguiemj.ttf", "seguisym.ttf", "malgun.ttf"]
 
 [cursor]
 blink = true
-blink_ms = 500
+# Piscar comeca so depois de uma pausa: digitando, o cursor fica aceso.
+blink_ms = 530
+# Deslize do cursor entre posicoes, em ms (0 desliga).
+animation_ms = 80

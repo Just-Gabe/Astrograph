@@ -18,6 +18,8 @@ pub struct WindowCfg {
     pub width: f64,
     pub height: f64,
     pub title: String,
+    /// Margem (pixels logicos) entre a borda da janela e o texto.
+    pub padding: f64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -39,6 +41,8 @@ pub struct FontCfg {
 pub struct CursorCfg {
     pub blink: bool,
     pub blink_ms: u64,
+    /// Duracao do deslize do cursor entre posicoes (0 desliga).
+    pub animation_ms: u64,
 }
 
 impl Default for Config {
@@ -57,6 +61,7 @@ impl Default for WindowCfg {
             width: 1280.0,
             height: 800.0,
             title: "Astrograph".to_string(),
+            padding: 10.0,
         }
     }
 }
@@ -82,7 +87,8 @@ impl Default for CursorCfg {
     fn default() -> Self {
         CursorCfg {
             blink: true,
-            blink_ms: 500,
+            blink_ms: 530,
+            animation_ms: 80,
         }
     }
 }
