@@ -181,6 +181,14 @@ return {
           maps.n["<Leader>Ap"] = { "<cmd>CodeCompanionActions<cr>", desc = "Ações (adapter/modelo)" }
           maps.v["<Leader>Ap"] = { "<cmd>CodeCompanionActions<cr>", desc = "Ações (adapter/modelo)" }
           maps.v["<Leader>Aa"] = { "<cmd>CodeCompanionChat Add<cr>", desc = "Adicionar seleção ao chat" }
+          -- agente nativo (astrograph-agent): vê o agente trabalhar no próprio código
+          local agent = function() return require "astrograph.agent" end
+          maps.n["<Leader>Ae"] = { function() agent().ask() end, desc = "Pedir ao agente (nativo)" }
+          maps.v["<Leader>Ae"] = { function() agent().ask() end, desc = "Pedir ao agente sobre a seleção" }
+          maps.n["<Leader>Ao"] = { function() agent().toggle() end, desc = "Painel do agente" }
+          maps.n["<Leader>Ak"] = { function() agent().cancel() end, desc = "Interromper o agente" }
+          maps.n["<Leader>Aw"] = { function() agent().pick_mode() end, desc = "Modo do agente" }
+          maps.n["<Leader>Av"] = { function() agent().toggle_follow() end, desc = "Seguir o agente (liga/desliga)" }
         end,
       },
     },

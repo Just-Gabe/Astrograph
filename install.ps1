@@ -147,7 +147,14 @@ if (Test-Path $wtSettings) {
 }
 
 # --- 4. Clonar/atualizar o Astrograph --------------------------------------
-if (Test-Path (Join-Path $Root '.git')) {
+$appOpen = Get-Process -Name 'astrograph' -ErrorAction SilentlyContinue |
+  Where-Object { $_.Path -and $_.Path.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase) }
+if ($appOpen) {
+  # o app aberto segura arquivos da config; o pull trocaria só parte deles e a
+  # config ficaria misturada (ex.: "module 'polish' not found"). Não fecha à
+  # força: pode haver arquivo sem salvar.
+  Warn 'O Astrograph está aberto: pulei a atualização. Feche o app e rode o instalador de novo.'
+} elseif (Test-Path (Join-Path $Root '.git')) {
   Info "Atualizando $Root"
   # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
   # alteração o pull falha e a instalação continua velha sem avisar
@@ -179,54 +186,60 @@ Info "Ligado: $Config -> $Root\template"
 # publicado, compila a partir do código se houver Rust (cargo) na máquina.
 $BinDir   = Join-Path $Root 'bin'
 $AppExe   = Join-Path $BinDir 'astrograph.exe'
-$AppStamp = Join-Path $BinDir 'astrograph.version'
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-function Install-AppFile($src) {
-  try {
-    Copy-Item $src $AppExe -Force
-    return $true
-  } catch {
-    Warn 'Não consegui trocar o app (ele está aberto?). Feche o Astrograph e rode o instalador de novo.'
-    return $false
-  }
+# o rustup instala em ~\.cargo\bin, mas nem sempre põe a pasta no PATH
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+  $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+  if (Test-Path (Join-Path $cargoBin 'cargo.exe')) { $env:Path = "$cargoBin;$env:Path" }
 }
+$hasCargo = [bool](Get-Command cargo -ErrorAction SilentlyContinue)
 
-$installed = if (Test-Path $AppStamp) { (Get-Content $AppStamp -Raw).Trim() } else { '' }
 $release = $null
 try {
   $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest' `
     -Headers @{ 'User-Agent' = 'astrograph-installer' } -TimeoutSec 15
 } catch { $release = $null }
-$asset = if ($release) { $release.assets | Where-Object { $_.name -eq 'astrograph-windows-x64.exe' } | Select-Object -First 1 } else { $null }
+$commit = (git -C $Root rev-parse --short HEAD 2>$null)
 
-if ($asset) {
-  if ((Test-Path $AppExe) -and $installed -eq $release.tag_name) {
-    Info "App Astrograph já está na versão $($release.tag_name)"
-  } else {
-    Info "Baixando o app Astrograph $($release.tag_name)..."
-    $tmpExe = Join-Path $env:TEMP 'astrograph-download.exe'
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmpExe -UseBasicParsing
-    if (Install-AppFile $tmpExe) { Set-Content $AppStamp $release.tag_name; Info 'App Astrograph instalado' }
-    Remove-Item $tmpExe -ErrorAction SilentlyContinue
+# Instala um executável do Astrograph: baixa do release quando a versão mudou;
+# sem release com esse arquivo, compila do código se houver Rust.
+function Install-Binary($label, $exeName, $assetName, $crate, $builtName) {
+  $exe   = Join-Path $BinDir $exeName
+  $stamp = Join-Path $BinDir ([IO.Path]::ChangeExtension($exeName, '.version'))
+  $installed = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { '' }
+  $place = {
+    param($src)
+    try { Copy-Item $src $exe -Force; $true }
+    catch { Warn "Não consegui trocar o $label (está aberto?). Feche o Astrograph e rode o instalador de novo."; $false }
   }
-} elseif (Get-Command cargo -ErrorAction SilentlyContinue) {
-  $commit = (git -C $Root rev-parse --short HEAD 2>$null)
-  if ((Test-Path $AppExe) -and $installed -eq "src-$commit") {
-    Info 'App Astrograph já compilado desta versão'
-  } else {
-    Info 'Compilando o app Astrograph (Rust; ~2 min na primeira vez)...'
+  $asset = if ($release) { $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1 } else { $null }
+  if ($asset) {
+    if ((Test-Path $exe) -and $installed -eq $release.tag_name) { Info "$label já está na versão $($release.tag_name)"; return }
+    Info "Baixando o $label $($release.tag_name)..."
+    $tmp = Join-Path $env:TEMP "astrograph-download-$exeName"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -UseBasicParsing
+    if (& $place $tmp) { Set-Content $stamp $release.tag_name; Info "$label instalado" }
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+  } elseif ($hasCargo) {
+    if ((Test-Path $exe) -and $installed -eq "src-$commit") { Info "$label já compilado desta versão"; return }
+    Info "Compilando o $label (Rust; ~2 min na primeira vez)..."
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    cargo build --release --manifest-path (Join-Path $Root 'prototype\astrograph-ui\Cargo.toml') 2>&1 | Out-Null
+    cargo build --release --manifest-path (Join-Path $Root "prototype\$crate\Cargo.toml") 2>&1 | Out-Null
     $ErrorActionPreference = $prevEap
-    $built = Join-Path $Root 'prototype\astrograph-ui\target\release\astrograph-ui.exe'
-    if ((Test-Path $built) -and (Install-AppFile $built)) { Set-Content $AppStamp "src-$commit"; Info 'App Astrograph compilado e instalado' }
-    else { Warn 'Não consegui compilar o app; o Astrograph segue funcionando no terminal (nvim).' }
+    $built = Join-Path $Root "prototype\$crate\target\release\$builtName"
+    if ((Test-Path $built) -and (& $place $built)) { Set-Content $stamp "src-$commit"; Info "$label compilado e instalado" }
+    else { Warn "Não consegui compilar o $label." }
+  } else {
+    Warn "$label ainda sem versão publicada e sem Rust para compilar."
   }
-} else {
-  Warn 'App Astrograph ainda sem versão publicada e sem Rust para compilar; use o nvim no terminal por enquanto.'
 }
+
+Install-Binary 'app Astrograph' 'astrograph.exe' 'astrograph-windows-x64.exe' 'astrograph-ui' 'astrograph-ui.exe'
+# ponte com os agentes (Claude Code, opencode...): usada por <Leader>Ae no editor
+Install-Binary 'agente nativo' 'astrograph-agent.exe' 'astrograph-agent-windows-x64.exe' 'astrograph-agent' 'astrograph-agent.exe'
+if (-not (Test-Path $AppExe)) { Warn 'Sem o app, o Astrograph segue funcionando no terminal (nvim).' }
 
 if (Test-Path $AppExe) {
   # atalho no menu Iniciar (com o ícone do app)

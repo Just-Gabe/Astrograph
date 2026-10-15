@@ -16,3 +16,5 @@ lazy-lock.json.bak
 
 # Python (tools/)
 __pycache__/
+# executáveis instalados (app e agente nativo)
+/bin/

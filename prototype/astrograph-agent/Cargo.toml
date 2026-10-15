@@ -1,0 +1,15 @@
+[package]
+name = "astrograph-agent"
+version = "0.0.1"
+edition = "2021"
+description = "Astrograph: cliente ACP (Claude Code, opencode, ...) que o Neovim usa como ponte para os agentes"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "sync", "time", "fs"] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 4

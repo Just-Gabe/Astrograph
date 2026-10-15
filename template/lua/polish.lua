@@ -39,6 +39,10 @@ require("astrograph.agents").setup()
 -- segundo plano e indicador do agente trabalhando
 require("astrograph.agentic").setup()
 
+-- Agente nativo (astrograph-agent, Rust/ACP): segue o agente pelos arquivos,
+-- mostra o diff antes de editar e destaca o que mudou depois
+require("astrograph.agent").setup()
+
 -- Pré-aquecimento no ocioso: a 1ª busca/explorador tão rápidos quanto os seguintes
 require("astrograph.warmup").setup()
 

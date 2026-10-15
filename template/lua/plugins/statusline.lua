@@ -75,10 +75,14 @@ return {
         status.component.fill(),
         status.component.cmd_info(),
         status.component.fill(),
-        { -- agente trabalhando (chat/ações do CodeCompanion)
+        { -- agente trabalhando (agente nativo ou chat/ações do CodeCompanion)
           provider = function()
-            local ok, agentic = pcall(require, "astrograph.agentic")
-            local text = ok and agentic.status() or ""
+            local native = package.loaded["astrograph.agent"]
+            local text = native and native.status() or ""
+            if text == "" then
+              local ok, agentic = pcall(require, "astrograph.agentic")
+              text = ok and agentic.status() or ""
+            end
             return text ~= "" and (text .. "  ") or ""
           end,
           hl = { fg = "normal" },
