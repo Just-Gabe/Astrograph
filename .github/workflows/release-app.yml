@@ -47,6 +47,10 @@ jobs:
         run: |
           Copy-Item target/release/astrograph-ui.exe astrograph-windows-x64.exe
           Copy-Item ../astrograph-agent/target/release/astrograph-agent.exe astrograph-agent-windows-x64.exe
+          # o install.ps1 confere cada download contra este arquivo
+          Get-FileHash astrograph-windows-x64.exe, astrograph-agent-windows-x64.exe -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content -Encoding ascii SHA256SUMS.txt
       - name: Publicar
         uses: softprops/action-gh-release@v2
         with:
@@ -55,4 +59,5 @@ jobs:
           files: |
             prototype/astrograph-ui/astrograph-windows-x64.exe
             prototype/astrograph-ui/astrograph-agent-windows-x64.exe
+            prototype/astrograph-ui/SHA256SUMS.txt
           fail_on_unmatched_files: true

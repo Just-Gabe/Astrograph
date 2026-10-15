@@ -48,12 +48,17 @@ p:kill(9); p:wait()
 vim.cmd "bwipeout!"
 vim.fn.delete(swap)
 
--- sessão que caiu com texto, modo agêntico: recupera e manda ao agente
+-- sessão que caiu com texto, modo agêntico: recupera (sem a pergunta E325).
+-- Arquivo que o agente não tocou nesta sessão: o conflito vai para o menu
+-- (com a opção de pedir ao agente), não sozinho para ele.
 local d3 = H.workdir { ["c.txt"] = "c1\nc2" }
 p, swap = holder(d3 .. "/c.txt", true)
 p:kill(9); p:wait()
+local menus_before = #H.menus
 H.ok(open(d3 .. "/c.txt"), "abriu sem pergunta (recuperação)")
 H.eq(H.lines(), "TEXTO NAO SALVO|c2", "texto recuperado")
-H.ok(ag._state.turn_conflict or #ag._state.queue > 0, "conflito enviado ao agente")
+H.eq(#H.menus, menus_before + 1, "conflito do texto recuperado no menu")
+H.ok(H.menus[#H.menus]:find("recuperado", 1, true), "menu explica a recuperação")
+H.eq(next(ag._state.conflicts), nil, "nada foi sozinho para o agente")
 ag._state.job = nil
 H.done()

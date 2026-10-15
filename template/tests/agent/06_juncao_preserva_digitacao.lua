@@ -10,11 +10,12 @@ local function scenario(name)
   local f = dir .. "/" .. name
   vim.cmd.edit(f)
   local b = vim.api.nvim_get_current_buf()
+  H.event(ag, { ev = "tool", id = name, title = "Read", kind = "read", status = "completed", locations = { { path = f } } })
   vim.api.nvim_buf_set_lines(b, 0, 1, false, { "UM DO USUARIO" })
   H.disk_write(f, { "um", "dois", "linha do agente" })
   vim.cmd "checktime"
-  vim.wait(100)
-  H.ok(ag._state.turn_conflict, "conflito enviado ao agente")
+  vim.wait(2000, function() return ag._state.turn_conflicts[H.key(f)] ~= nil end, 50)
+  H.ok(ag._state.turn_conflicts[H.key(f)], "conflito enviado ao agente")
   return f, b
 end
 
@@ -33,8 +34,9 @@ H.disk_write(f, { "UM DO USUARIO", "dois", "linha do agente" })
 H.event(ag, { ev = "edited", path = f })
 H.ok(H.lines(b):find("DIGITADO DEPOIS DO ENVIO", 1, true), "digitação depois do envio preservada: " .. H.lines(b))
 H.eq(vim.bo[b].modified, true, "buffer continua com as alterações do usuário")
+vim.wait(2000, function() return #ag._state.queue == 1 end, 50)
 H.eq(#ag._state.queue, 1, "conflito reaberto na fila")
 H.event(ag, { ev = "done", stop = "end_turn" })
-H.eq(ag._state.turn_conflict, H.key(f), "conflito reaberto é o turno seguinte")
+H.ok(ag._state.turn_conflicts[H.key(f)], "conflito reaberto é o turno seguinte")
 ag._state.job = nil
 H.done()

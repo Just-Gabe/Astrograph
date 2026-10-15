@@ -214,8 +214,24 @@ try {
 } catch { $release = $null }
 $commit = (git -C $Root rev-parse --short HEAD 2>$null)
 
-# Instala um executável do Astrograph: baixa do release quando a versão mudou;
-# sem release com esse arquivo, compila do código se houver Rust.
+# Hashes publicados no release (SHA256SUMS.txt): todo executável baixado é
+# conferido; sem hash ou hash diferente, o download é recusado.
+$sums = @{}
+if ($release) {
+  $sumsAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' } | Select-Object -First 1
+  if ($sumsAsset) {
+    try {
+      $text = (Invoke-WebRequest -Uri $sumsAsset.browser_download_url -UseBasicParsing -TimeoutSec 15).Content
+      if ($text -is [byte[]]) { $text = [Text.Encoding]::ASCII.GetString($text) }
+      foreach ($line in ($text -split "`r?`n")) {
+        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(\S+)$') { $sums[$Matches[2]] = $Matches[1].ToLower() }
+      }
+    } catch { }
+  }
+}
+
+# Instala um executável do Astrograph: baixa do release quando a versão mudou
+# (conferindo o SHA256); sem release válido, compila do código se houver Rust.
 function Install-Binary($label, $exeName, $assetName, $crate, $builtName) {
   $exe   = Join-Path $BinDir $exeName
   $stamp = Join-Path $BinDir ([IO.Path]::ChangeExtension($exeName, '.version'))
@@ -226,12 +242,22 @@ function Install-Binary($label, $exeName, $assetName, $crate, $builtName) {
     catch { Warn "Não consegui trocar o $label (está aberto?). Feche o Astrograph e rode o instalador de novo."; $false }
   }
   $asset = if ($release) { $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1 } else { $null }
+  if ($asset -and -not $sums[$assetName]) {
+    Warn "O release $($release.tag_name) não traz o hash do $label (SHA256SUMS.txt): não vou baixar sem conferir."
+    $asset = $null
+  }
   if ($asset) {
     if ((Test-Path $exe) -and $installed -eq $release.tag_name) { Info "$label já está na versão $($release.tag_name)"; return }
     Info "Baixando o $label $($release.tag_name)..."
     $tmp = Join-Path $env:TEMP "astrograph-download-$exeName"
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -UseBasicParsing
-    if (& $place $tmp) { Set-Content $stamp $release.tag_name; Info "$label instalado" }
+    $hash = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+    if ($hash -ne $sums[$assetName]) {
+      Warn "O $label baixado não confere com o SHA256 publicado: descartado."
+      Remove-Item $tmp -ErrorAction SilentlyContinue
+      return
+    }
+    if (& $place $tmp) { Set-Content $stamp $release.tag_name; Info "$label instalado (SHA256 conferido)" }
     Remove-Item $tmp -ErrorAction SilentlyContinue
   } elseif ($hasCargo) {
     if ((Test-Path $exe) -and $installed -eq "src-$commit") { Info "$label já compilado desta versão"; return }
