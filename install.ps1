@@ -167,18 +167,30 @@ if ($appOpen) {
 }
 
 # --- 5. Ligar a config -----------------------------------------------------
+$Template = Join-Path $Root 'template'
+$linked = $false
 if (Test-Path $Config) {
   $item = Get-Item $Config -Force
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-    Remove-Item $Config -Force
+    if ((@($item.Target) -join '').TrimEnd('\') -eq $Template.TrimEnd('\')) {
+      $linked = $true
+    } else {
+      # só o link: o Remove-Item numa junction pergunta "tem filhos, apagar?" e,
+      # confirmado, apagaria o conteúdo do destino
+      [IO.Directory]::Delete($Config)
+    }
   } else {
     $backup = "$Config.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     Move-Item $Config $backup
     Info "Config anterior movida para $backup"
   }
 }
-cmd /c mklink /J "$Config" (Join-Path $Root 'template') | Out-Null
-Info "Ligado: $Config -> $Root\template"
+if ($linked) {
+  Info "Config já ligada: $Config -> $Template"
+} else {
+  cmd /c mklink /J "$Config" $Template | Out-Null
+  Info "Ligado: $Config -> $Template"
+}
 
 # --- 5b. App Astrograph (UI em Rust) ---------------------------------------
 # O Astrograph é a janela própria (Rust) com o Neovim como motor. Baixa o
