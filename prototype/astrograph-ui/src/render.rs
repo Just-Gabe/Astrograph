@@ -1,4 +1,6 @@
 //! Renderizacao por CPU com softbuffer e atlas de glifos (ab_glyph).
+//!
+//! Suporta uma cadeia de fontes de fallback (emoji, simbolos, CJK) por glifo.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::config::FontCfg;
 use crate::grid::Grid;
 
-const ATLAS: usize = 1600;
+const ATLAS: usize = 2400;
 
 const DEFAULTS: [(&str, &str, &str); 3] = [
     (
@@ -30,6 +32,11 @@ const DEFAULTS: [(&str, &str, &str); 3] = [
     ),
 ];
 
+struct FontEntry {
+    font: Rc<FontVec>,
+    ratio: f32,
+}
+
 #[derive(Clone, Copy)]
 struct GlyphInfo {
     ax: u32,
@@ -48,10 +55,9 @@ enum CursorShape {
 }
 
 pub struct Renderer {
-    fonts: Vec<Rc<FontVec>>,
+    styles: Vec<FontEntry>,
+    fallbacks: Vec<FontEntry>,
     px: f32,
-    /// Fator para converter tamanho pedido (em px de EM) na escala do ab_glyph.
-    ratio: f32,
     line_height: f32,
     pub cell_w: u32,
     pub cell_h: u32,
@@ -65,11 +71,12 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(cfg: &FontCfg) -> Result<Self, String> {
-        let (fonts, ratio) = resolve_fonts(cfg)?;
+        let styles = resolve_styles(cfg)?;
+        let fallbacks = load_fallbacks(&cfg.fallback);
         let mut renderer = Renderer {
-            fonts,
+            styles,
+            fallbacks,
             px: cfg.size.clamp(6.0, 96.0),
-            ratio,
             line_height: cfg.line_height.clamp(0.8, 3.0),
             cell_w: 1,
             cell_h: 1,
@@ -84,27 +91,29 @@ impl Renderer {
         Ok(renderer)
     }
 
-    fn scale(&self) -> PxScale {
-        PxScale::from(self.px * self.ratio)
+    fn scale_for(&self, entry: &FontEntry) -> PxScale {
+        PxScale::from(self.px * entry.ratio)
     }
 
     fn recompute_metrics(&mut self) {
-        let scaled = self.fonts[0].as_scaled(self.scale());
+        let primary = &self.styles[0];
+        let scaled = primary.font.as_scaled(self.scale_for(primary));
         let ascent = scaled.ascent();
         let descent = scaled.descent();
         if std::env::var("DEBUG_FONT").is_ok() {
             println!(
-                "FONT_DBG: em={:.1}px ratio={:.3} ascent={:.2} descent={:.2} line_gap={:.2} advM={:.2}",
+                "FONT_DBG: em={:.1}px ratio={:.3} ascent={:.2} descent={:.2} line_gap={:.2} advM={:.2} fallbacks={}",
                 self.px,
-                self.ratio,
+                primary.ratio,
                 ascent,
                 descent,
                 scaled.line_gap(),
-                scaled.h_advance(self.fonts[0].glyph_id('M')),
+                scaled.h_advance(primary.font.glyph_id('M')),
+                self.fallbacks.len(),
             );
         }
         self.cell_h = ((ascent - descent + scaled.line_gap()) * self.line_height).ceil() as u32;
-        self.cell_w = scaled.h_advance(self.fonts[0].glyph_id('M')).round() as u32;
+        self.cell_w = scaled.h_advance(primary.font.glyph_id('M')).round() as u32;
         self.cell_w = self.cell_w.max(1);
         self.cell_h = self.cell_h.max(1);
         self.baseline = ascent.round() as i32;
@@ -115,7 +124,7 @@ impl Renderer {
         self.cache.clear();
     }
 
-    /// Ajusta o tamanho da fonte (zoom). Retorna o tamanho efetivo.
+    /// Ajusta o tamanho da fonte (zoom).
     pub fn set_size(&mut self, px: f32) {
         self.px = px.clamp(6.0, 96.0);
         self.recompute_metrics();
@@ -162,9 +171,8 @@ impl Renderer {
             for col in 0..cols {
                 let cell = grid.cells[row * grid.width + col];
                 let mut res = grid.resolve(cell.hl);
-                let is_cursor = cursor_visible
-                    && shape == CursorShape::Block
-                    && (row, col) == grid.cursor;
+                let is_cursor =
+                    cursor_visible && shape == CursorShape::Block && (row, col) == grid.cursor;
                 if is_cursor {
                     std::mem::swap(&mut res.fg, &mut res.bg);
                 }
@@ -282,10 +290,38 @@ impl Renderer {
     }
 
     fn rasterize(&mut self, ch: char, style: u8) -> Option<GlyphInfo> {
-        let font = self.fonts[style as usize].clone();
+        let entry = self.styles[style as usize].font.clone();
+        let ratio = self.styles[style as usize].ratio;
+        if let Some(info) = self.rasterize_with(&entry, ratio, ch) {
+            return Some(info);
+        }
+        let candidates: Vec<(Rc<FontVec>, f32)> = self
+            .fallbacks
+            .iter()
+            .map(|f| (f.font.clone(), f.ratio))
+            .collect();
+        for (i, (font, ratio)) in candidates.into_iter().enumerate() {
+            if let Some(info) = self.rasterize_with(&font, ratio, ch) {
+                if std::env::var("DEBUG_FONT").is_ok() {
+                    eprintln!("FALLBACK: U+{:04X} via fonte #{}", ch as u32, i);
+                }
+                return Some(info);
+            }
+        }
+        if std::env::var("DEBUG_FONT").is_ok() && ch != ' ' {
+            eprintln!("MISSING: U+{:04X} sem glifo (tofu)", ch as u32);
+        }
+        None
+    }
+
+    fn rasterize_with(&mut self, font: &FontVec, ratio: f32, ch: char) -> Option<GlyphInfo> {
+        let id = font.glyph_id(ch);
+        if id.0 == 0 {
+            return None;
+        }
         let glyph = Glyph {
-            id: font.glyph_id(ch),
-            scale: self.scale(),
+            id,
+            scale: PxScale::from(self.px * ratio),
             position: point(0.0, 0.0),
         };
         let outlined = font.outline_glyph(glyph)?;
@@ -375,14 +411,13 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn resolve_fonts(cfg: &FontCfg) -> Result<(Vec<Rc<FontVec>>, f32), String> {
+fn resolve_styles(cfg: &FontCfg) -> Result<Vec<FontEntry>, String> {
     let overrides = [
         cfg.regular.as_deref(),
         cfg.bold.as_deref(),
         cfg.italic.as_deref(),
     ];
-    let mut fonts = Vec::new();
-    let mut ratio = 1.32_f32;
+    let mut styles = Vec::new();
     for (i, (primary, fallback, alt)) in DEFAULTS.iter().enumerate() {
         let mut names: Vec<String> = Vec::new();
         if let Some(name) = overrides[i] {
@@ -391,39 +426,49 @@ fn resolve_fonts(cfg: &FontCfg) -> Result<(Vec<Rc<FontVec>>, f32), String> {
         names.push(primary.to_string());
         names.push(alt.to_string());
         names.push(fallback.to_string());
-        let (font, font_ratio) = load_font(&names)
+        let entry = load_font(&names)
             .ok_or_else(|| format!("nao encontrei nenhuma fonte para o estilo {} ({primary})", i))?;
-        if i == 0 {
-            ratio = font_ratio;
-        }
-        fonts.push(Rc::new(font));
+        styles.push(entry);
     }
-    Ok((fonts, ratio))
+    Ok(styles)
 }
 
-fn load_font(names: &[String]) -> Option<(FontVec, f32)> {
+fn load_fallbacks(names: &[String]) -> Vec<FontEntry> {
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(entry) = load_font(&[name.clone()]) {
+            out.push(entry);
+        }
+    }
+    out
+}
+
+fn load_font(names: &[String]) -> Option<FontEntry> {
     for name in names {
         let direct = Path::new(name);
         if direct.is_absolute() || name.contains('\\') || name.contains('/') {
-            if let Some(font) = read_font(direct) {
-                return Some(font);
+            if let Some(entry) = read_font(direct) {
+                return Some(entry);
             }
         }
         for dir in font_dirs() {
-            if let Some(font) = read_font(&dir.join(name)) {
-                return Some(font);
+            if let Some(entry) = read_font(&dir.join(name)) {
+                return Some(entry);
             }
         }
     }
     None
 }
 
-fn read_font(path: &Path) -> Option<(FontVec, f32)> {
+fn read_font(path: &Path) -> Option<FontEntry> {
     let data = std::fs::read(path).ok()?;
     let font = FontVec::try_from_vec(data.clone()).ok()?;
-    let upem = ttf_parser::Face::parse(&data, 0).ok()?;
-    let units = upem.units_per_em() as f32;
-    let extent = (upem.ascender() as f32 - upem.descender() as f32).abs();
+    let face = ttf_parser::Face::parse(&data, 0).ok()?;
+    let units = face.units_per_em() as f32;
+    let extent = (face.ascender() as f32 - face.descender() as f32).abs();
     let ratio = if units > 0.0 { extent / units } else { 1.32 };
-    Some((font, ratio))
+    Some(FontEntry {
+        font: Rc::new(font),
+        ratio,
+    })
 }

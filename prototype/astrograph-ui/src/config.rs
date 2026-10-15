@@ -29,6 +29,9 @@ pub struct FontCfg {
     pub regular: Option<String>,
     pub bold: Option<String>,
     pub italic: Option<String>,
+    /// Fontes de fallback, tentadas por glifo quando a principal nao tem o
+    /// caractere (emoji, simbolos, CJK). Ordem importa.
+    pub fallback: Vec<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -66,6 +69,11 @@ impl Default for FontCfg {
             regular: None,
             bold: None,
             italic: None,
+            fallback: vec![
+                "seguiemj.ttf".to_string(),
+                "seguisym.ttf".to_string(),
+                "malgun.ttf".to_string(),
+            ],
         }
     }
 }

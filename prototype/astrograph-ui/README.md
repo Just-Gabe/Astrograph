@@ -57,6 +57,8 @@ Resultado: **GO** para a rota R1 (UI em Rust sobre Neovim embutido).
 - Identidade: titulo e icone proprio (estrela do Astrograph).
 - Cursor por modo (bloco/barra/sublinhado) com blink.
 - Caracteres largos (CJK) e mouse (clique + scroll via `nvim_input_mouse`).
+- Fallback de fontes por glifo (emoji, simbolos, CJK), configuravel.
 - Decisao: `wgpu` **nao** e necessario (render por CPU a ~1 ms/frame).
 - Pendente: shaping/ligaduras via `cosmic-text`, clipboard, cursor de mouse,
-  selecao visual com o mouse.
+  selecao visual com o mouse. Fallback CJK completo depende de fonte TTF (os
+  fontes CJK do Windows sao TTC, que o ab_glyph nao carrega).

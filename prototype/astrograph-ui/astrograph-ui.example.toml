@@ -25,6 +25,9 @@ line_height = 1.0
 # regular = "JetBrainsMonoNerdFontMono-Regular.ttf"
 # bold = "JetBrainsMonoNerdFontMono-Bold.ttf"
 # italic = "JetBrainsMonoNerdFontMono-Italic.ttf"
+# Fontes de fallback, tentadas por glifo quando a principal nao tem o
+# caractere (emoji, simbolos, CJK). Ordem importa.
+fallback = ["seguiemj.ttf", "seguisym.ttf", "malgun.ttf"]
 
 [cursor]
 blink = true
