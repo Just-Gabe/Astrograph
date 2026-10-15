@@ -1,0 +1,31 @@
+# Config da UI em Rust do Astrograph.
+#
+# Ordem de busca (o primeiro que existir vence):
+#   1. --config <arquivo> (linha de comando)
+#   2. variavel de ambiente ASTROGRAPH_UI_CONFIG
+#   3. ./astrograph-ui.toml (diretorio atual)
+#   4. astrograph-ui.toml ao lado do executavel
+#   5. %APPDATA%\astrograph\ui.toml
+#
+# Todos os campos sao opcionais; os valores abaixo sao os defaults.
+
+[window]
+width = 1280
+height = 800
+title = "Astrograph"
+
+[font]
+# Tamanho em pixels da EM (tamanho "nominal" da fonte).
+size = 18.0
+# Multiplicador de altura de linha (0.8 a 3.0).
+line_height = 1.0
+# Fonte por estilo: caminho absoluto ou nome de arquivo (procura em
+# C:\Windows\Fonts e na pasta de fontes do usuario). Se omitido, usa
+# JetBrainsMono Nerd Font Mono.
+# regular = "JetBrainsMonoNerdFontMono-Regular.ttf"
+# bold = "JetBrainsMonoNerdFontMono-Bold.ttf"
+# italic = "JetBrainsMonoNerdFontMono-Italic.ttf"
+
+[cursor]
+blink = true
+blink_ms = 500

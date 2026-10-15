@@ -8,11 +8,17 @@ use nvim_rs::Value;
 pub struct Cell {
     pub ch: char,
     pub hl: u64,
+    /// Celula de continuacao de um caractere largo (nao desenha glifo).
+    pub cont: bool,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { ch: ' ', hl: 0 }
+        Cell {
+            ch: ' ',
+            hl: 0,
+            cont: false,
+        }
     }
 }
 
@@ -172,10 +178,34 @@ impl Grid {
                         let text = cell.first().and_then(|v| v.as_str()).unwrap_or(" ");
                         let hl = cell.get(1).and_then(|v| v.as_u64()).unwrap_or(0);
                         let repeat = cell.get(2).and_then(|v| v.as_u64()).unwrap_or(1);
-                        let ch = text.chars().next().unwrap_or(' ');
+                        let mut chars = text.chars();
+                        let ch = chars.next().unwrap_or(' ');
+                        let wide = crate::render::char_width(ch) == 2;
                         for _ in 0..repeat {
-                            self.put(row, col, Cell { ch, hl });
-                            col += 1;
+                            if wide {
+                                self.put(row, col, Cell { ch, hl, cont: false });
+                                self.put(
+                                    row,
+                                    col + 1,
+                                    Cell {
+                                        ch: ' ',
+                                        hl,
+                                        cont: true,
+                                    },
+                                );
+                                col += 2;
+                            } else {
+                                self.put(
+                                    row,
+                                    col,
+                                    Cell {
+                                        ch,
+                                        hl,
+                                        cont: false,
+                                    },
+                                );
+                                col += 1;
+                            }
                         }
                     }
                 }
