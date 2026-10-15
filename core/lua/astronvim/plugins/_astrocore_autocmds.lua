@@ -129,6 +129,9 @@ return {
           event = "FileType",
           desc = "Ensure editorconfig settings take highest precedence",
           callback = function(args)
+            -- Astrograph: buffers internos (picker, preview, painéis) não têm
+            -- .editorconfig; a busca subia a árvore de pastas a cada janela aberta.
+            if vim.bo[args.buf].buftype ~= "" then return end
             if if_nil(vim.b.editorconfig, vim.g.editorconfig) then
               local editorconfig_avail, editorconfig = pcall(require, "editorconfig")
               if editorconfig_avail then editorconfig.config(args.buf) end

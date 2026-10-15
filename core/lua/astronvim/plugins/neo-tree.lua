@@ -68,8 +68,8 @@ return {
     local astro, get_icon = require "astrocore", require("astroui").get_icon
     local git_available = require("astronvim").executable "git"
     local sources = {
-      { source = "filesystem", display_name = get_icon("FolderClosed", 1, true) .. "Arquivos" },
-      { source = "buffers", display_name = get_icon("DefaultFile", 1, true) .. "Buffers" },
+      { source = "filesystem", display_name = get_icon("FolderClosed", 1, true) .. "Pastas" },
+      { source = "buffers", display_name = get_icon("DefaultFile", 1, true) .. "Abas" },
       { source = "diagnostics", display_name = get_icon("Diagnostic", 1, true) .. "Diagnóstico" },
     }
     if git_available then

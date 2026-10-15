@@ -27,6 +27,20 @@ editor**, abertura mais rápida e tudo em **português**.
 | **Tema próprio** | `astrograph` (escuro) e `astrograph-light`, com contraste verificado. |
 | **Instalação de uma linha** | Windows, Linux e macOS: o instalador cuida de Neovim, Git, ripgrep, fd, compilador C e fonte. |
 
+## Como ele é pensado
+
+O Astrograph segue a mesma ideia dos produtos da Apple: parecer moderno e rápido
+não por enfeite, mas por cuidado com o que você sente ao usar.
+
+- **Resposta imediata.** A primeira busca é quase tão rápida quanto as seguintes:
+  o que você costuma usar é pré-carregado quando o editor está ocioso.
+- **O conteúdo em primeiro lugar.** Sem ruído entre as linhas de código, sem
+  `~` no fim do arquivo, mensagens discretas.
+- **Movimento com propósito.** Animações curtas, a 60 fps, que desaceleram no fim
+  e nunca atrasam o que você está fazendo.
+- **Acabamento uniforme.** Bordas arredondadas, rótulos que cabem e textos em
+  português em toda a interface.
+
 ## Em ação
 
 ![Editor com explorador de arquivos]({{ '/img/editor.png' | relative_url }})

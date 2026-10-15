@@ -44,7 +44,8 @@ Medido no Windows 11 (veja [Performance](performance)).
 
 | Ponto | AstroNvim | Astrograph |
 | --- | --- | --- |
-| Abrir o editor | ~392 ms | **~256 ms** |
+| Abrir o editor | ~392 ms | **~258 ms** |
+| 1ª busca de arquivo / explorador | sem pré-aquecimento | pré-carregados no ocioso; busca abre antes dos resultados |
 | Primeiro arquivo (caminho crítico) | ~120 ms, tudo de uma vez | **~59 ms**; o resto vem em seguida, sem travar |
 | Saber se o arquivo está num repositório git | `cmd.exe /C git rev-parse` em todo arquivo (~39 ms) | procura `.git` em Lua (~0,2 ms) |
 | Checar programas externos (lazygit, node…) | no boot (~20 ms cada ausente, no Windows) | depois da animação de entrada, com cache |

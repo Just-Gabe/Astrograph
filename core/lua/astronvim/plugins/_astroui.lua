@@ -11,6 +11,10 @@ return {
             {
               event = "FileType",
               callback = function()
+                -- Astrograph: janelas flutuantes (picker, preview, hover) não têm
+                -- dobras; redefinir o foldexpr nelas recalculava as dobras do
+                -- buffer inteiro e era ~2/3 do tempo de abrir a busca.
+                if vim.api.nvim_win_get_config(0).relative ~= "" then return end
                 if require("astrocore.buffer").is_valid() then
                   if vim.wo[0][0].foldexpr ~= astroui_foldexpr and vim.go.foldexpr == astroui_foldexpr then
                     vim.wo[0][0].foldexpr = astroui_foldexpr

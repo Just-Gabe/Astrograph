@@ -45,6 +45,7 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 | `agents.lua` | Detecta CLIs de IA, Ollama e modelo local (com cache) |
 | `commands.lua` | `:Astrograph atualizar / saude / agentes / atalhos / docs` |
 | `health.lua` | `:checkhealth astrograph` |
+| `warmup.lua` | Pré-aquecimento no ocioso (busca, explorador, `fd`/`rg`/`git`) |
 | `dashboard.lua` | Cena animada da tela inicial e rodapé em português |
 | `plugins/visual.lua` | ui2, bordas arredondadas, ghost text e cursor animado |
 | `art.lua` | Arte gerada por `tools/gen_art.py` (não edite à mão) |
@@ -58,6 +59,8 @@ comentários `Astrograph:` no código:
 - `plugins/_astrocore_autocmds.lua`: arquivo em estágios (`AstroFile` →
   `AstroFileIdle`) e detecção do git sem processo externo;
 - `plugins/toggleterm.lua`: atalhos de ferramentas externas registrados após o startup;
+- `plugins/_astroui.lua` e `_astrocore_autocmds.lua`: dobras e EditorConfig ignoram
+  janelas flutuantes e buffers internos (abrir a busca ficou mais leve);
 - `astronvim/lazygit.lua` + `plugins/_astroui.lua`: tema do lazygit só quando ele existe;
 - descrições dos atalhos, tela inicial e mensagens em português.
 

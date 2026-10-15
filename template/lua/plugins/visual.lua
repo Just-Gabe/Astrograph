@@ -8,9 +8,16 @@
 --   * Cursor animado (smear-cursor): um rastro suave ao pular pelo texto. Segue
 --     o `<Leader>um` das animações e começa desligado via SSH.
 --   * Linha do cursor destacada só na janela ativa.
+--   * Menos ruído: sem `~` no fim do buffer, CodeLens desligado por padrão e
+--     uma leve translucidez no menu de completação.
 
 -- Bordas arredondadas por padrão em hovers do LSP, diagnósticos, etc. (0.11+)
 if vim.fn.has "nvim-0.11" == 1 then vim.o.winborder = "rounded" end
+
+-- Conteúdo em primeiro lugar: sem `~` depois do fim do arquivo e uma leve
+-- translucidez no menu de completação (lembra o vibrancy do macOS).
+vim.opt.fillchars:append { eob = " " }
+vim.o.pumblend = 8
 
 -- ui2: experimental no 0.12; qualquer falha mantém a interface clássica
 if vim.g.astrograph_ui2 ~= false then
@@ -31,6 +38,33 @@ vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter", "WinLeave" }, {
 
 ---@type LazySpec
 return {
+  {
+    "AstroNvim/astrolsp",
+    optional = true,
+    -- CodeLens ("N references" entre as linhas) começa desligado: menos ruído
+    -- no código. <Leader>uL liga quando quiser.
+    opts = { features = { codelens = false } },
+  },
+  {
+    "folke/snacks.nvim",
+    opts = function(_, opts)
+      -- Buscas abrem na hora e os resultados entram conforme chegam (antes a
+      -- janela esperava o `fd`/`rg` devolver algo: ~50–200 ms no Windows).
+      -- As buscas do LSP ficam como estão: com um resultado só elas pulam
+      -- direto para o código, e a janela apenas piscaria.
+      opts.picker = opts.picker or {}
+      opts.picker.sources = opts.picker.sources or {}
+      for _, src in ipairs { "files", "grep", "grep_word", "buffers", "recent", "smart", "git_files", "help", "keymaps", "commands" } do
+        opts.picker.sources[src] = vim.tbl_deep_extend("force", opts.picker.sources[src] or {}, { show_delay = 0 })
+      end
+    end,
+  },
+  {
+    "folke/which-key.nvim",
+    optional = true,
+    -- menu de atalhos um pouco mais ágil (padrão: 200 ms); plugins seguem imediatos
+    opts = { delay = function(ctx) return ctx.plugin and 0 or 150 end },
+  },
   {
     "saghen/blink.cmp",
     optional = true,

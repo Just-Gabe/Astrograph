@@ -42,6 +42,8 @@ rodar `nvim`.
   arquivos abrem em estágios, com o essencial em ~59 ms.
 - **Moderno no terminal**: linha de comando com destaque, cursor animado, bordas
   arredondadas, ghost text na completação e animações a 60 fps.
+- **Resposta imediata**: o que você usa é pré-carregado quando o editor está
+  ocioso, e o código aparece sem ruído (sem CodeLens nem `~` por padrão).
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
   verificado.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.

@@ -26,5 +26,8 @@ vim.opt.smoothscroll = true
 -- Sai do modo terminal (ex.: janela do agente) com Esc Esc
 vim.keymap.set("t", "<Esc><Esc>", [[<C-\><C-n>]], { desc = "Sair do modo terminal" })
 
--- :Astrograph atualizar | saude | agentes | atalhos | docs
+-- :Astrograph atualizar | saude | agentes | configurar | login | atalhos | docs
 require("astrograph.commands").setup()
+
+-- Pré-aquecimento no ocioso: a 1ª busca/explorador tão rápidos quanto os seguintes
+require("astrograph.warmup").setup()

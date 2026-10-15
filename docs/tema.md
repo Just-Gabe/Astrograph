@@ -60,6 +60,8 @@ depois as estrelas piscam devagar.
 | **Bordas arredondadas** | Em hovers do LSP, diagnósticos, completação e documentação. |
 | **Ghost text** | A primeira sugestão da completação aparece em cinza na própria linha. |
 | **Linha do cursor** | Destacada só na janela ativa. |
+| **Menos ruído** | Sem `~` depois do fim do arquivo; CodeLens ("N references") desligado por padrão (`<Leader>uL` liga); menu de completação levemente translúcido. |
+| **Tela inicial** | Rodapé discreto: só "pronto em X ms". |
 
 ![Linha de comando com destaque]({{ '/img/linha-de-comando.png' | relative_url }})
 

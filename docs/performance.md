@@ -13,6 +13,31 @@ Medido no Windows 11 com `nvim --startuptime` e o profile do lazy.nvim
 | Abrir o editor | ~392 ms | **~256 ms** (−35%) |
 | Primeiro arquivo: caminho crítico | ~230 ms | **~59 ms** (−74%) |
 
+## Resposta imediata
+
+Tempo da tecla até a janela aparecer, com o editor aberto há alguns segundos
+(UI conectada, cache quente):
+
+| Ação | 1ª vez | 2ª vez |
+| --- | --- | --- |
+| Buscar arquivo (`<Leader>ff`) | ~218 ms | ~136 ms |
+| Buscar texto (`<Leader>fw`) | ~178 ms | ~116 ms |
+| Explorador (`<Leader>e`) | ~149 ms | ~63 ms |
+| Menu de atalhos (`Espaço`) | ~159 ms | ~157 ms |
+
+O que entrou para isso:
+
+- **Pré-aquecimento no ocioso** (`astrograph.warmup`): ~1,2 s depois de abrir,
+  um item por vez e só quando você não está digitando, carrega os módulos da
+  busca, o explorador e executa `fd`/`rg`/`git` uma vez (no Windows, a primeira
+  execução de cada um custa 120–210 ms porque o sistema e o antivírus os examinam).
+  Desligue com `vim.g.astrograph_warmup = false`.
+- **Buscas abrem na hora**: a janela aparece sem esperar o `fd`/`rg` responder,
+  e os resultados entram conforme chegam.
+- **Janelas flutuantes mais leves**: o core não recalcula dobras nem procura
+  `.editorconfig` para janelas do picker, preview e painéis.
+- **Menu de atalhos** aparece em 150 ms (antes 200 ms).
+
 ## De onde veio o ganho
 
 O código legado do Vim (plugins de `$VIMRUNTIME`, `syntax`, `ftplugin`) custava

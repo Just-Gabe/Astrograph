@@ -312,23 +312,20 @@ local function start(buf, grad)
   twinkle(buf)
 end
 
---- Rodape do dashboard em portugues (substitui a secao `startup` do snacks)
+--- Rodape discreto: so o tempo de abertura (substitui a secao `startup`)
 function M.footer()
   local ok, stats = pcall(function() return require("lazy").stats() end)
-  if not ok then
-    return {}
+  -- o tempo so existe depois do UIEnter; antes disso o rodape fica vazio
+  if not ok or stats.startuptime <= 0 then
+    return { align = "center", text = { { " ", hl = "footer" } } }
   end
-  local text = {
-    { "⚡ Astrograph carregou ", hl = "footer" },
-    { stats.loaded .. "/" .. stats.count, hl = "special" },
-    { " plugins", hl = "footer" },
+  return {
+    align = "center",
+    text = {
+      { "pronto em ", hl = "footer" },
+      { ("%d ms"):format(math.floor(stats.startuptime + 0.5)), hl = "special" },
+    },
   }
-  -- o tempo só existe depois do UIEnter; antes disso mostra só a contagem
-  if stats.startuptime > 0 then
-    text[#text + 1] = { " em ", hl = "footer" }
-    text[#text + 1] = { (math.floor(stats.startuptime * 100 + 0.5) / 100) .. " ms", hl = "special" }
-  end
-  return { align = "center", text = text }
 end
 
 --- Item de secao do dashboard (Gen). Nunca lanca: cai para o header padrao.
