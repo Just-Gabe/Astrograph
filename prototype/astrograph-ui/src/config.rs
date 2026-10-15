@@ -34,6 +34,8 @@ pub struct FontCfg {
     /// Fontes de fallback, tentadas por glifo quando a principal nao tem o
     /// caractere (emoji, simbolos, CJK). Ordem importa.
     pub fallback: Vec<String>,
+    /// Ligaduras de programacao (`->`, `=>`, `!=`, `===`) quando a fonte tem.
+    pub ligatures: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -79,6 +81,7 @@ impl Default for FontCfg {
                 "seguisym.ttf".to_string(),
                 "malgun.ttf".to_string(),
             ],
+            ligatures: true,
         }
     }
 }

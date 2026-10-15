@@ -31,6 +31,10 @@ line_height = 1.0
 # Fontes de fallback, tentadas por glifo quando a principal nao tem o
 # caractere (emoji, simbolos, CJK). Ordem importa.
 fallback = ["seguiemj.ttf", "seguisym.ttf", "malgun.ttf"]
+# Ligaduras de programacao (->, =>, !=, ===, <=, ::) quando a fonte tem
+# (JetBrains Mono tem; as variantes "NL" nao). O caractere sob o cursor
+# aparece sempre separado.
+ligatures = true
 
 [cursor]
 blink = true

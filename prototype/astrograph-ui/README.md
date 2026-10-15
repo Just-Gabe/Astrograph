@@ -28,7 +28,8 @@ SPIKE_WIDE=1 cargo run    # caracteres largos (CJK): espera "AB你好CD"
 SPIKE_KEYS=1 cargo run    # teclas especiais: <, \, | chegam literais
 SPIKE_CLIP=1 cargo run    # copia com "+y e cola com "+p (tipo de registro preservado)
 SPIKE_BENCH=1 cargo run --release   # ms/quadro: tela inteira e so o que mudou
-cargo test --release      # testes de unidade (grade, publicacao, mistura de cores)
+cargo test --release      # testes de unidade (grade, publicacao, cores, ligaduras)
+cargo test --release -- --ignored --nocapture bench_ligaduras   # pior caso das ligaduras
 DEBUG_FONT=1 cargo run    # imprime metricas da fonte
 ```
 
@@ -79,7 +80,10 @@ Resultado: **GO** para a rota R1 (UI em Rust sobre Neovim embutido).
 - Visual: barra de titulo e borda na cor do tema, cantos arredondados (Windows
   11), margem ao redor do texto, janela que cabe na tela e abre ja pintada.
 - Fallback de fontes por glifo (emoji, simbolos, CJK), configuravel.
+- Ligaduras de programacao (`->`, `=>`, `!=`, `===`, `<=`, `|>`) com
+  `rustybuzz`, desligaveis em `font.ligatures`; o trecho sob o cursor volta
+  aos caracteres da celula.
 - Decisao: `wgpu` **nao** e necessario (render por CPU; ver `FINDINGS.md`).
-- Pendente: shaping/ligaduras via `cosmic-text`, `ext_multigrid`, IME. Fallback
+- Pendente: `ext_multigrid`, IME. Fallback
   CJK completo depende de fonte TTF (os fontes CJK do Windows sao TTC, que o
   ab_glyph nao carrega).

@@ -120,3 +120,45 @@ Principio: o que funciona bem na primeira vez tem que funcionar bem n vezes.
 - Cursor deslizando com ease-out; aceso enquanto voce digita ou move.
 - Blocos e molduras desenhados como geometria; cantos `╭╮╯╰` com arco
   antisserrilhado.
+
+## Ligaduras (2026-10-15)
+
+Ultimo item da issue #9: `->`, `=>`, `!=`, `===` como ligaduras da JetBrains
+Mono.
+
+### Escolha: rustybuzz, nao cosmic-text
+
+- `cosmic-text` traz layout de paragrafo, sistema de fontes e rasterizador
+  proprios (swash): duplicaria o atlas e o fallback que ja temos e nao conhece
+  a grade do Neovim.
+- `rustybuzz` so faz o shaping (porta do HarfBuzz em Rust puro) e usa o mesmo
+  `ttf-parser` 0.25 que ja estava no projeto. O desenho continua no atlas do
+  `ab_glyph`, agora tambem por id de glifo.
+
+### Como funciona
+
+- As fontes de programacao fazem ligaduras com `calt`: cada caractere vira um
+  glifo de **uma celula** (o `>` de `->` vira a seta inteira, invadindo a
+  celula do `-`, que vira um espaco). A grade continua valendo.
+- So passam pelo shaping trechos de **pontuacao ASCII** de mesma cor e estilo
+  com 2+ caracteres. O resto da linha segue o caminho rapido, celula a celula.
+- Resultado em cache por texto e estilo; trechos que o shaping nao muda (`();`)
+  ficam marcados e voltam ao caminho rapido sem novo shaping.
+- O trecho que contem o cursor e desenhado sem ligadura: o caractere da celula
+  aparece (como o `disable_ligatures cursor` do kitty), parado ou digitando.
+- `font.ligatures = false` desliga tudo. Fontes "NL" nao tem ligaduras e caem
+  sozinhas no caminho rapido.
+- Limite conhecido: ligaduras com letras ou digitos (`www`, `0xF`) nao sao
+  formadas.
+
+### Numeros (release)
+
+| Metrica | Antes | Depois |
+|---------|-------|--------|
+| SPIKE_BENCH, tela inteira (1280x750) | 0,98-1,02 ms | 0,96-0,98 ms |
+| SPIKE_BENCH, so o que mudou | 0,033-0,038 ms | 0,031-0,036 ms |
+| Tela cheia de ligaduras, tela inteira (1320x960) | 0,77 ms (desligadas) | 0,84 ms (ligadas) |
+| Tela cheia de ligaduras, uma linha | 0,018 ms (desligadas) | 0,020 ms (ligadas) |
+
+O pior caso (codigo denso em `->`/`=>`/`!=`, teste `bench_ligaduras`) custa
+~10% a mais; no dashboard a diferenca fica dentro do ruido.
