@@ -1,0 +1,10 @@
+[package]
+name = "astrograph-ui"
+version = "0.0.1"
+edition = "2021"
+description = "Spike: UI em Rust do Astrograph sobre Neovim embutido"
+publish = false
+
+[dependencies]
+winit = "0.30"
+softbuffer = "0.4"
