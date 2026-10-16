@@ -94,13 +94,6 @@ return {
       -- :Astrograph agente) via ACP; sem ele, o modelo local (Ollama); depois o
       -- Claude por API (com chave) ou o Claude Code via ACP.
       opts.providers = opts.providers or {}
-      -- OmniRoute (gateway local, opcional): disponível em :AvanteSwitchProvider
-      -- quando instalado E com um modelo escolhido por você (`:OmniRoute
-      -- modelo`; a escolha entra aqui na hora, sem reiniciar), e NUNCA
-      -- escolhido como padrão abaixo.
-      local omni_model = agents.has_omniroute() and agents.omniroute_model() or nil
-      if omni_model then opts.providers.omniroute = require("astrograph.omniroute").avante_provider(omni_model) end
-
       local current = agents.current()
       if current and current.avante and opts.acp_providers[current.avante] then
         opts.provider = current.avante

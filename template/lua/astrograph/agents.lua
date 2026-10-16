@@ -227,49 +227,6 @@ function M.legacy_acp(a)
   return false
 end
 
----URL da API do OmniRoute (gateway local de modelos, opcional), com `/v1`.
----`OMNIROUTE_BASE_URL` sobrescreve o padrão.
----@return string
-function M.omniroute_url()
-  local url = vim.env.OMNIROUTE_BASE_URL
-  if not url or url == "" then url = "http://localhost:20128/v1" end
-  url = url:gsub("/+$", "")
-  if not url:match "/v1$" then url = url .. "/v1" end
-  return url
-end
-
----O OmniRoute está instalado (o CLI)? Ele só vira um provedor a mais, nunca o
----padrão: é usado quando você o escolhe.
----@return boolean
-function M.has_omniroute() return M.has "omniroute" end
-
----Modelo (ou combo) do OmniRoute que VOCÊ escolheu: `OMNIROUTE_MODEL` ou a
----escolha salva no config.json (`:OmniRoute modelo`, ou `ga` no chat). Nunca
----um palpite: sem escolha, nil, e o editor pergunta antes do primeiro pedido.
----@return string?
-function M.omniroute_model()
-  local m = vim.env.OMNIROUTE_MODEL
-  if m and m ~= "" then return m end
-  local saved = M.read_config().omniroute_model
-  return type(saved) == "string" and saved ~= "" and saved or nil
-end
-
----O combo do OmniRoute que o opencode usa como modelo padrão
----(`"model": "omniroute/<combo>"` na config dele), ou nil.
----@return string?
-function M.opencode_omniroute()
-  local dir = vim.env.XDG_CONFIG_HOME and (vim.env.XDG_CONFIG_HOME .. "/opencode") or vim.fn.expand "~/.config/opencode"
-  for _, name in ipairs { "opencode.jsonc", "opencode.json" } do
-    local f = io.open(dir .. "/" .. name, "r")
-    if f then
-      local combo = (f:read "*a"):match '"model"%s*:%s*"omniroute/([^"]+)"'
-      f:close()
-      return combo
-    end
-  end
-  return nil
-end
-
 ---Host base do Ollama, aceitando `OLLAMA_HOST` com ou sem esquema.
 ---@return string
 function M.ollama_host()
