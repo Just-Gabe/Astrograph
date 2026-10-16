@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.s
 O instalador cuida de tudo: Neovim 0.11+, Git, ripgrep, fd, compilador C, a
 JetBrainsMono Nerd Font, o clone do Astrograph e a ligação da config (com backup da
 antiga). No fim, um checklist opcional instala agentes de IA: Claude Code, opencode,
-Codex, Gemini e Ollama. Em seguida ele instala o que o chat precisa e oferece
+Codex, Gemini, Ollama e o OmniRoute (gateway de modelos). Em seguida ele instala o que o chat precisa e oferece
 fazer o **login de cada agente** ali mesmo. Depois é só abrir um terminal novo e
 rodar `nvim`.
 
@@ -59,11 +59,16 @@ rodar `nvim`.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.
 - **Sessões de todos os projetos** (`<Leader>AS`): as conversas do agente com a
   tag do modelo que as fez; retomar volta para a pasta e o agente da conversa.
-- **OmniRoute**: quando o gateway troca de modelo no meio da conversa (o modelo
-  em uso esgotou), o chat e o painel do agente avisam no fim da resposta.
-  `:OmniRoute` mostra o modelo de cada conversa.
+- **OmniRoute (opcional)**: o gateway local de modelos vira mais um provedor no
+  chat (`ga` → omniroute) e no avante (`:AvanteSwitchProvider`), **nunca o
+  padrão**; o instalador oferece instalá-lo no checklist. Chave em
+  `OMNIROUTE_API_KEY` (`omniroute keys`), modelo/combo em `OMNIROUTE_MODEL`.
+  Quando ele é o escolhido e troca de modelo no meio da conversa, o fim da
+  resposta avisa. `:OmniRoute` mostra o estado do detector
+  (`vim.g.astrograph_omniroute = false` desliga o aviso).
 - **Plugins só desta máquina**: specs do lazy em
   `%LOCALAPPDATA%\astrograph-local\specs` (ou `$ASTROGRAPH_LOCAL`), fora do git.
+  São código Lua executado na abertura do editor: ponha ali só o que é seu.
 - **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `configurar`, `login`, `sessoes`, `atalhos`, `docs`.
 
 | Editor | Menu de atalhos (`Espaço`) |

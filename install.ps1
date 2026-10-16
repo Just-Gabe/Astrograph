@@ -332,7 +332,9 @@ $agentDefs = @(
   [pscustomobject]@{ Id = 'opencode'; Bin = 'opencode'; Label = 'opencode';    Detail = 'npm opencode-ai';              Npm = 'opencode-ai' },
   [pscustomobject]@{ Id = 'codex';    Bin = 'codex';    Label = 'Codex CLI';   Detail = 'npm @openai/codex';            Npm = '@openai/codex' },
   [pscustomobject]@{ Id = 'gemini';   Bin = 'gemini';   Label = 'Gemini CLI';  Detail = 'npm @google/gemini-cli';       Npm = '@google/gemini-cli' },
-  [pscustomobject]@{ Id = 'ollama';   Bin = 'ollama';   Label = 'Ollama';      Detail = 'modelo local (offline)';       Npm = $null }
+  [pscustomobject]@{ Id = 'ollama';   Bin = 'ollama';   Label = 'Ollama';      Detail = 'modelo local (offline)';       Npm = $null },
+  # gateway de modelos (opcional): vira um provedor a mais no chat, nunca o padrao
+  [pscustomobject]@{ Id = 'omniroute'; Bin = 'omniroute'; Label = 'OmniRoute';  Detail = 'npm omniroute (gateway)';      Npm = 'omniroute' }
 )
 $agentModels = @('qwen2.5-coder:7b', 'qwen3:8b', 'llama3.1:8b')
 
@@ -551,6 +553,10 @@ if ($present) {
     Write-Host ''
     Info 'Falta entrar nestes agentes (rode num terminal, ou no nvim: :Astrograph login):'
     foreach ($a in $pending) { Write-Host ("  {0,-20} -> {1}" -f $a.Login, $a.Label) }
+  }
+  if ($selectedIds -contains 'omniroute') {
+    Write-Host '  omniroute            -> sobe o gateway (porta 20128); crie uma chave com: omniroute keys'
+    Write-Host '                          e defina OMNIROUTE_API_KEY. No chat: ga -> omniroute'
   }
   if ($selectedIds -contains 'ollama') { Write-Host '  ollama serve         -> se o Ollama não estiver no ar' }
   Write-Host ''

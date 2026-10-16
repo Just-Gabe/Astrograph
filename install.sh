@@ -181,11 +181,11 @@ else
 fi
 
 # --- 7. Agentes (opcional, via checklist) ---------------------------------
-AGENT_IDS=(claude opencode codex gemini ollama)
-AGENT_BINS=(claude opencode codex gemini ollama)
-AGENT_LABELS=("Claude Code" "opencode" "Codex CLI" "Gemini CLI" "Ollama")
-AGENT_NPM=("@anthropic-ai/claude-code" "opencode-ai" "@openai/codex" "@google/gemini-cli" "")
-AGENT_DETAIL=("npm @anthropic-ai/claude-code" "npm opencode-ai" "npm @openai/codex" "npm @google/gemini-cli" "modelo local (offline)")
+AGENT_IDS=(claude opencode codex gemini ollama omniroute)
+AGENT_BINS=(claude opencode codex gemini ollama omniroute)
+AGENT_LABELS=("Claude Code" "opencode" "Codex CLI" "Gemini CLI" "Ollama" "OmniRoute")
+AGENT_NPM=("@anthropic-ai/claude-code" "opencode-ai" "@openai/codex" "@google/gemini-cli" "" "omniroute")
+AGENT_DETAIL=("npm @anthropic-ai/claude-code" "npm opencode-ai" "npm @openai/codex" "npm @google/gemini-cli" "modelo local (offline)" "npm omniroute (gateway)")
 AGENT_MODELS=(qwen2.5-coder:7b qwen3:8b llama3.1:8b)
 
 TTY=""
@@ -417,6 +417,12 @@ if [ -n "$any_agent" ]; then
     printf '\n'
     info "Falta entrar nestes agentes (rode num terminal, ou no nvim: :Astrograph login):"
     for i in "${PENDING[@]}"; do printf '  %-20s -> %s\n' "${SETUP_LOGIN[$i]}" "${SETUP_LABELS[$i]}"; done
+  fi
+  if has_sel omniroute; then
+    printf '  omniroute            -> sobe o gateway (porta 20128); crie uma chave com: omniroute keys
+'
+    printf '                          e defina OMNIROUTE_API_KEY. No chat: ga -> omniroute
+'
   fi
   if has_sel ollama; then printf '  ollama serve         -> se o Ollama não estiver no ar\n'; fi
   printf '\n'

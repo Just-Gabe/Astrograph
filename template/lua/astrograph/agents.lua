@@ -227,6 +227,24 @@ function M.legacy_acp(a)
   return false
 end
 
+---URL da API do OmniRoute (gateway local de modelos, opcional), com `/v1`.
+---`OMNIROUTE_BASE_URL` sobrescreve o padrão.
+---@return string
+function M.omniroute_url()
+  local url = vim.env.OMNIROUTE_BASE_URL
+  if not url or url == "" then url = "http://localhost:20128/v1" end
+  url = url:gsub("/+$", "")
+  if not url:match "/v1$" then url = url .. "/v1" end
+  return url
+end
+
+---O OmniRoute está instalado? (o CLI ou a pasta de estado dele). Ele só vira
+---um provedor a mais, nunca o padrão: é usado quando você o escolhe.
+---@return boolean
+function M.has_omniroute()
+  return M.has "omniroute" or (vim.uv or vim.loop).fs_stat(vim.fn.expand "~/.omniroute") ~= nil
+end
+
 ---Host base do Ollama, aceitando `OLLAMA_HOST` com ou sem esquema.
 ---@return string
 function M.ollama_host()

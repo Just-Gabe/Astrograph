@@ -56,6 +56,27 @@ return {
         end
       end
 
+      -- OmniRoute (gateway local de modelos, opcional): um provedor a mais, só
+      -- quando instalado, e NUNCA o padrão (fica fora de http_default e
+      -- chat_default abaixo). Escolha no chat com `ga` -> omniroute. Chave em
+      -- OMNIROUTE_API_KEY (`omniroute keys`); modelo/combo em OMNIROUTE_MODEL.
+      if agents.has_omniroute() then
+        opts.adapters.http.omniroute = function()
+          return require("codecompanion.adapters").extend("openai_compatible", {
+            name = "omniroute",
+            formatted_name = "OmniRoute",
+            env = {
+              url = agents.omniroute_url():gsub("/v1$", ""),
+              api_key = function()
+                local key = vim.env.OMNIROUTE_API_KEY
+                return (key and key ~= "") and key or "no-key"
+              end,
+            },
+            schema = { model = { default = vim.env.OMNIROUTE_MODEL or "auto" } },
+          })
+        end
+      end
+
       -- Adapters ACP (agentes no chat). No Windows os CLIs do npm são `.cmd` e o
       -- spawn pelo nome falha (ENOENT): usa o caminho completo resolvido.
       opts.adapters.acp = opts.adapters.acp or {}
