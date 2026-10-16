@@ -57,7 +57,14 @@ rodar `nvim`.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
   verificado.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.
-- **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `configurar`, `login`, `atalhos`, `docs`.
+- **Sessões de todos os projetos** (`<Leader>AS`): as conversas do agente com a
+  tag do modelo que as fez; retomar volta para a pasta e o agente da conversa.
+- **OmniRoute**: quando o gateway troca de modelo no meio da conversa (o modelo
+  em uso esgotou), o chat e o painel do agente avisam no fim da resposta.
+  `:OmniRoute` mostra o modelo de cada conversa.
+- **Plugins só desta máquina**: specs do lazy em
+  `%LOCALAPPDATA%\astrograph-local\specs` (ou `$ASTROGRAPH_LOCAL`), fora do git.
+- **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `configurar`, `login`, `sessoes`, `atalhos`, `docs`.
 
 | Editor | Menu de atalhos (`Espaço`) |
 | --- | --- |
@@ -94,6 +101,7 @@ janelas flutuantes ganham sombra.
 | `<Leader>Ac` | Chat com IA |
 | `<Leader>AE` | Pedir uma edição para a IA (selecione o trecho antes) |
 | `<Leader>Ax` / `<Leader>Ar` | Corrigir o erro da linha / revisar suas alterações |
+| `<Leader>AS` | Sessões do agente de todos os projetos (retomar) |
 | `<Leader>um` | Ligar/desligar as animações |
 
 `<Leader>` é a tecla **Espaço**. Veja a [lista completa](https://just-gabe.github.io/Astrograph/uso)
