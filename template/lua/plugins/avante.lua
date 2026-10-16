@@ -49,6 +49,10 @@ return {
     dependencies = {
       "nvim-lua/plenary.nvim",
       "MunifTanjim/nui.nvim",
+      -- obrigatória desde que o avante passou a montar :AvanteSwitchProvider com
+      -- ela (plugin/avante.lua); sem ela o primeiro <Leader>At dá "Failed to
+      -- source ... module 'mega.cmdparse' not found" e os comandos não existem
+      { "ColinKennedy/mega.cmdparse", dependencies = { "ColinKennedy/mega.logging" } },
       { "stevearc/dressing.nvim", optional = true },
       { "folke/snacks.nvim", optional = true },
     },
