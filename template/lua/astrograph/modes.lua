@@ -36,6 +36,9 @@ M.list = {
 
 M.default = "manual"
 
+-- quanto a conversa do avante espera o agente confirmar a troca de modo (ms)
+M.switch_timeout = 5000
+
 -- Ids de modo ACP que equivalem a cada modo. Só os medidos (Claude Code:
 -- default/acceptEdits/plan/auto/bypassPermissions na ponte 0.91; opencode:
 -- build/plan na 2.0.31). Id de outro agente que não esteja aqui cai na imitação
@@ -302,12 +305,18 @@ function M.apply_avante(client, session_id, cb)
   if not (opt and target and target ~= opt.currentValue) then return done(true) end
   -- até o agente confirmar a troca, pergunta tudo (nunca aprova no modo velho)
   Config.behaviour.auto_approve_tool_permissions = false
+  local finished = false
   local function after(_, err)
     vim.schedule(function()
+      if finished then return end
+      finished = true
       if err then notify(("Não consegui pôr o avante no modo %s."):format(M.label()), vim.log.levels.WARN) end
       done(not err)
     end)
   end
+  -- agente que não responde à troca não pode prender a conversa: em 5 s segue
+  -- no modo dele, com a imitação (avisada)
+  vim.defer_fn(function() after(nil, { message = "sem resposta" }) end, M.switch_timeout)
   if client._legacy_api then
     client:set_mode(session_id, target, after)
   else

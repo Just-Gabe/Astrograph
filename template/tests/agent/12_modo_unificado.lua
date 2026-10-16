@@ -165,6 +165,13 @@ H.eq(av_cfg.behaviour.auto_approve_tool_permissions, false, "avante: pergunta tu
 pending({}, { message = "falhou" })
 vim.wait(200, function() return false end)
 H.eq(av_cfg.behaviour.auto_approve_tool_permissions, true, "avante: troca falhou em bypass = imitação (avisada)")
+-- agente que não responde à troca não prende a conversa
+modes.switch_timeout = 100
+local seguiu = false
+ACPClient.set_config_option = function() end -- nunca responde
+modes.apply_avante(setmetatable({ config_options = cfg_open.config_options }, { __index = ACPClient }), "sd", function() seguiu = true end)
+vim.wait(1000, function() return seguiu end, 20)
+H.ok(seguiu, "avante: sem resposta à troca, a conversa segue (imitação)")
 modes.current = nil
 package.loaded["astrograph.modes"] = nil
 modes = require "astrograph.modes"

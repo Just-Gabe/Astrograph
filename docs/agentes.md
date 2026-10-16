@@ -90,7 +90,7 @@ em todas as telas: painel do agente (`<Leader>Ao`), chat (`<Leader>Ac`), avante
 | --- | --- | --- | --- |
 | Manual | `manual` | Pergunta antes de editar ou executar | Igual: tudo pergunta |
 | Aceitar edições | `acceptEdits` | Edita sem perguntar; comandos ainda pedem | Painel e avante aprovam só edições; o chat pergunta tudo |
-| Plano | `plan` | Só lê e planeja, não altera nada | No opencode existe (`plan`); em outro agente **não** é só leitura: cada pedido aparece para você recusar |
+| Plano | `plan` | Só lê e planeja, não altera nada | No opencode existe no chat e no avante (`plan`); no painel nativo e em outro agente **não** é só leitura: cada pedido aparece para você recusar |
 | Auto | `auto` | O agente decide o que precisa de você | Painel e avante aprovam leituras e edições e perguntam comandos; o chat também aprova comandos que considera seguros |
 | Sem permissões | `bypass` | Aceita tudo, sem perguntar (cuidado) | Aprova tudo |
 
