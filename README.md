@@ -51,7 +51,8 @@ rodar `nvim`.
 - **Movimento**: janelas com fade, explorador deslizante e `dd` animado (a
   linha colapsa e some), sempre sem atrasar a edição.
 - **Um agente para tudo**: escolha com `<Leader>Ag` e terminal, chat e edição
-  inline passam a usar o mesmo agente; a escolha fica salva.
+  inline passam a usar o mesmo agente; a escolha fica salva. O modo (Manual,
+  Aceitar edições, Plano, Auto) também: `<Leader>Aw` vale para todas as telas.
 - **Código próprio onde importa**: cores e TODOs desenhados pelo motor nativo
   do Neovim, no lugar de dois plugins; rolar a tela ficou ~10× mais leve.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste

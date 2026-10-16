@@ -12,7 +12,8 @@
 --   <Leader>Ae  pedir ao agente (na seleção: manda o trecho junto)
 --   <Leader>Ao  painel do agente (abrir/fechar)
 --   <Leader>Ak  interromper
---   <Leader>Aw  modo (Manual, Aceitar edições, Plano, Auto)
+--   <Leader>Aw  modo (Manual, Aceitar edições, Plano, Auto, Sem permissões): o
+--               mesmo do chat, do avante e do terminal, salvo (astrograph.modes)
 --   <Leader>Av  seguir o agente (liga/desliga)
 --
 -- Avisos de arquivo (mudou no disco, :w sobre versão nova, swap) nunca travam a
@@ -29,6 +30,7 @@ local ns_changes = vim.api.nvim_create_namespace "astrograph_agent_changes"
 
 local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Agente" }) end
 local function agents() return require "astrograph.agents" end
+local function modes() return require "astrograph.modes" end
 
 M.follow = true
 
@@ -39,6 +41,8 @@ local st = {
   busy = false,
   mode = nil, ---@type string?
   modes = {}, ---@type {id:string, name:string}[]
+  exact = true, -- o agente tem o modo escolhido (senão o Astrograph imita)
+  mode_wait = nil, ---@type string? modo pedido na abertura, antes do 1º pedido
   queue = {}, ---@type table[] pedidos esperando a sessão abrir
   buf = nil, ---@type integer?
   last = nil, ---@type string? tipo da última coisa escrita no painel
@@ -495,14 +499,53 @@ local next_permission
 
 local handlers = {}
 
-function handlers.ready(ev)
-  st.ready = true
-  st.mode = ev.mode ~= vim.NIL and ev.mode or nil
-  st.modes = type(ev.modes) == "table" and ev.modes or {}
-  write(("_%s pronto · modo %s_"):format(st.agent.label, st.mode or "?"), "info")
+local function mode_name(id)
+  for _, m in ipairs(st.modes) do
+    if m.id == id then return m.name ~= vim.NIL and m.name or id end
+  end
+  return id or "?"
+end
+
+---Sessão pronta para pedidos: solta a fila.
+local function go_ready()
+  st.ready, st.mode_wait = true, nil
+  write(("_%s pronto · modo %s_"):format(st.agent.label, mode_name(st.mode)), "info")
+  vim.cmd.redrawstatus()
   local q = st.queue
   st.queue = {}
   for _, op in ipairs(q) do M.submit(op) end
+end
+
+---Põe a sessão no modo escolhido (astrograph.modes). Devolve o modo pedido
+---quando é preciso trocar.
+---@return string?
+local function apply_mode()
+  local target, exact = modes().resolve(st.modes)
+  st.exact = exact
+  modes().warn_emulated(st.agent and st.agent.label or "O agente", exact)
+  if target and target ~= st.mode then
+    send { op = "mode", mode = target }
+    return target
+  end
+end
+
+function handlers.ready(ev)
+  st.mode = ev.mode ~= vim.NIL and ev.mode or nil
+  st.modes = type(ev.modes) == "table" and ev.modes or {}
+  -- a sessão nasce no modo do agente; o primeiro pedido espera a troca para o
+  -- modo escolhido (ou 3 s, se o agente não confirmar)
+  st.mode_wait = apply_mode()
+  if not st.mode_wait then return go_ready() end
+  local job = st.job
+  vim.defer_fn(function()
+    if st.job == job and st.mode_wait and not st.ready then
+      -- o agente não confirmou: segue no modo dele, e o Astrograph imita o
+      -- escolhido (avisado), em vez de fingir que trocou
+      st.exact = false
+      modes().warn_emulated(st.agent and st.agent.label or "O agente", false)
+      go_ready()
+    end
+  end, 3000)
 end
 
 function handlers.text(ev)
@@ -548,6 +591,18 @@ function handlers.permission(ev)
   for _, l in ipairs(type(ev.locations) == "table" and ev.locations or {}) do
     if type(l) == "table" then touch(l.path) end
   end
+  -- agente sem o modo escolhido: o Astrograph aprova o que o modo deixaria
+  -- passar (só "uma vez": nada fica liberado para depois)
+  if modes().auto_approves(ev.kind ~= vim.NIL and ev.kind or nil, st.exact) then
+    for _, o in ipairs(type(ev.options) == "table" and ev.options or {}) do
+      if o.kind == "allow_once" then
+        local title = type(ev.title) == "string" and ev.title or "ação"
+        set_tool_line(ev.tool ~= vim.NIL and ev.tool or nil, ("  ✓ %s — aprovado pelo modo %s"):format(title, modes().label()))
+        send { op = "permission", id = ev.id, option = o.optionId }
+        return
+      end
+    end
+  end
   table.insert(st.perms, ev)
   next_permission()
 end
@@ -569,7 +624,9 @@ end
 
 function handlers.mode(ev)
   st.mode = ev.mode
-  write(("_modo: %s_"):format(ev.mode), "info")
+  -- só a confirmação do modo pedido solta a fila (outro evento de modo não)
+  if st.mode_wait and not st.ready and ev.mode == st.mode_wait then return go_ready() end
+  write(("_modo: %s_"):format(mode_name(ev.mode)), "info")
 end
 
 function handlers.done(ev)
@@ -666,7 +723,7 @@ local function reset_session(quiet)
     back[#back + 1] = c
   end
   if st.batch_timer then pcall(function() st.batch_timer:stop() end) end
-  st.job, st.ready, st.busy = nil, false, false
+  st.job, st.ready, st.busy, st.mode_wait, st.exact = nil, false, false, nil, true
   st.queue, st.conflicts, st.turn_conflicts, st.batch, st.batch_timer = {}, {}, {}, {}, nil
   st.perms, st.asking = {}, false
   if quiet then return end
@@ -796,15 +853,9 @@ function M.cancel()
   write("_interrompido_", "info")
 end
 
-function M.pick_mode()
-  if not st.ready then return notify "Abra uma conversa com o agente primeiro (<Leader>Ae)." end
-  vim.ui.select(st.modes, {
-    prompt = "Modo do agente",
-    format_item = function(m) return (m.id == st.mode and "● " or "  ") .. (m.name or m.id) end,
-  }, function(m)
-    if m then send { op = "mode", mode = m.id } end
-  end)
-end
+---Escolhe o modo de todas as telas de agente (fica salvo; a sessão aberta
+---troca na hora).
+function M.pick_mode() modes().pick() end
 
 function M.toggle_follow()
   M.follow = not M.follow
@@ -834,6 +885,19 @@ function M.setup()
     end,
   })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = function() M.stop(true) end })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "AstrographModeChanged",
+    desc = "Levar o modo escolhido para a sessão aberta do painel",
+    callback = function()
+      if st.job and st.ready then
+        apply_mode()
+      elseif st.job and st.mode_wait then
+        -- trocou enquanto a sessão abria: pede o modo novo e espera por ele
+        st.mode_wait = apply_mode() or st.mode_wait
+      end
+    end,
+  })
   vim.api.nvim_create_user_command("AstrographAgent", function(o)
     if o.args ~= "" then
       M.open()

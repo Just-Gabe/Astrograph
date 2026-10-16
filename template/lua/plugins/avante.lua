@@ -61,7 +61,12 @@ return {
       local info = agents.detect()
 
       opts.selector = { provider = "snacks" }
-      opts.behaviour = vim.tbl_deep_extend("force", opts.behaviour or {}, { auto_suggestions = false })
+      -- aprovação automática segue o modo do agente (<Leader>Aw); o padrão do
+      -- avante aprovava TUDO, em qualquer modo
+      opts.behaviour = vim.tbl_deep_extend("force", opts.behaviour or {}, {
+        auto_suggestions = false,
+        auto_approve_tool_permissions = require("astrograph.modes").avante_auto_approve(false),
+      })
 
       -- Teclas do Astrograph (o resto fica no padrão do avante, sob <leader>a).
       opts.mappings = {
@@ -121,6 +126,8 @@ return {
     end,
     config = function(_, opts)
       require("avante").setup(opts)
+      -- sessão ACP nova nasce no modo escolhido em <Leader>Aw
+      require("astrograph.modes").setup_avante()
       -- tag do modelo em cada conversa + índice para <Leader>AS
       require("astrograph.sessions").setup()
     end,

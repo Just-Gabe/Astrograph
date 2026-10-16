@@ -80,6 +80,42 @@ A troca vale na hora, sem reiniciar. Sem a ponte do chat instalada para o
 agente escolhido, o terminal já muda e o aviso diz para rodar
 `:Astrograph configurar`.
 
+## Um modo para tudo
+
+O modo do agente (o que ele pode fazer sem perguntar) também é **um só** e vale
+em todas as telas: painel do agente (`<Leader>Ao`), chat (`<Leader>Ac`), avante
+(`<Leader>At`) e terminal (`<Leader>Al`). Fica salvo; sem escolha, é Manual.
+
+| Modo | Id (`:Astrograph modo`) | O que faz | Agente sem o modo (ex.: opencode) |
+| --- | --- | --- | --- |
+| Manual | `manual` | Pergunta antes de editar ou executar | Igual: tudo pergunta |
+| Aceitar edições | `acceptEdits` | Edita sem perguntar; comandos ainda pedem | Painel e avante aprovam só edições; o chat pergunta tudo |
+| Plano | `plan` | Só lê e planeja, não altera nada | No opencode existe no chat e no avante (`plan`); no painel nativo e em outro agente **não** é só leitura: cada pedido aparece para você recusar |
+| Auto | `auto` | O agente decide o que precisa de você | Painel e avante aprovam leituras e edições e perguntam comandos; o chat também aprova comandos que considera seguros |
+| Sem permissões | `bypass` | Aceita tudo, sem perguntar (cuidado) | Aprova tudo |
+
+Troque com `<Leader>Aw` ou `:Astrograph modo acceptEdits` (`Tab` completa).
+"Sem permissões" pede confirmação ao escolher e, enquanto estiver salvo, um aviso
+aparece toda vez que o Neovim abre. A troca vai na hora para as conversas
+abertas do painel, do chat e do avante; o terminal abre no modo novo da próxima
+vez (`claude --permission-mode ...`; no opencode, `--auto` em Auto e Sem
+permissões; o Plano você escolhe dentro do próprio opencode).
+
+Quando o agente tem o modo (o Claude Code tem os cinco), é ele quem o faz valer
+e a tela mostra tudo o que ele pedir. Quando não tem, o Astrograph imita (tabela
+acima), aprova só "uma vez" (nada fica liberado para depois) e avisa uma vez. Só
+os modos medidos contam como de verdade (Claude Code e opencode); Codex e Gemini
+ficam na imitação até serem medidos. O seletor de modo próprio do avante e do
+chat continua funcionando, mas vale só para aquela conversa.
+
+**Mudou no avante:** antes ele aprovava sozinho todo pedido do agente, em
+qualquer modo (o padrão do plugin). Agora segue o modo: em Manual, ele pergunta.
+
+A ligação com o chat e o avante usa funções internas desses plugins (testada no
+CodeCompanion `3dd1ef7` e no avante `4f49656`, as versões do `lazy-lock.json`).
+Se uma atualização mudar essas funções, a sessão abre no modo do próprio agente
+(Manual no Claude Code) e a imitação cuida do resto: nunca mais solto que o modo escolhido.
+
 ## Peça ao agente
 
 Ações prontas para o dia a dia. Cada uma abre um chat novo com o agente atual,
@@ -109,6 +145,7 @@ Enquanto o agente trabalha, a barra de status mostra `✦ Claude Code ⋯`.
 | Atalho | O que faz |
 | --- | --- |
 | `<Leader>Ag` | Escolher o agente (vale para terminal, chat e edição) |
+| `<Leader>Aw` | Escolher o modo: Manual, Aceitar edições, Plano, Auto, Sem permissões (vale para todas as telas) |
 | `<Leader>Al` | Abrir o agente atual no terminal |
 | `<Leader>AT` | Alternar o terminal do agente atual |
 | `<Leader>A.` | Mencionar o arquivo (ou a seleção) no terminal do agente |
