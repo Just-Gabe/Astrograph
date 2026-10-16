@@ -63,7 +63,6 @@ return {
       -- escolhe (`:OmniRoute modelo` ou `ga`), a escolha fica salva e vale até
       -- você trocar (OMNIROUTE_MODEL no ambiente vence).
       if agents.has_omniroute() then
-        local warned_key = false
         opts.adapters.http.omniroute = function()
           local base = require "codecompanion.adapters.http.openai_compatible"
           return require("codecompanion.adapters").extend("openai_compatible", {
@@ -71,19 +70,13 @@ return {
             formatted_name = "OmniRoute",
             env = {
               url = agents.omniroute_url():gsub("/v1$", ""),
-              -- sem chave: cabeçalho vazio (o gateway local aceita nos combos
-              -- abertos; um texto falso como "no-key" fazia o combo ficar sem
-              -- destino) e um aviso, para o 401 de um combo fechado ter pista
+              -- sem chave: cabeçalho vazio. O gateway local responde sem chave
+              -- (medido em 16/10); um texto falso como "no-key" deixava o combo
+              -- sem destino. Sem aviso prévio: ele soava como "sem API" mesmo
+              -- funcionando; um combo que exija chave responde 401 no chat.
               api_key = function()
                 local key = vim.env.OMNIROUTE_API_KEY
-                if key and key ~= "" then return key end
-                if not warned_key then
-                  warned_key = true
-                  vim.schedule(function()
-                    vim.notify("OmniRoute sem OMNIROUTE_API_KEY: combos que exigem chave vão recusar (crie com `omniroute keys`).", vim.log.levels.WARN, { title = "Astrograph" })
-                  end)
-                end
-                return ""
+                return (key and key ~= "") and key or ""
               end,
             },
             schema = {

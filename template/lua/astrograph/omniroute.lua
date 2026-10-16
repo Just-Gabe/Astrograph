@@ -296,6 +296,25 @@ function M.setup_chat()
   })
 
   local group = vim.api.nvim_create_augroup("astrograph_omniroute_chat", {})
+  -- escolheu o OmniRoute no chat (ao criar ou pelo `ga`) e ainda não há
+  -- modelo: pergunta AGORA, antes de você escrever, e aplica neste chat
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionChatAdapter",
+    callback = function(args)
+      local bufnr = args.data and args.data.bufnr
+      if not bufnr then return end
+      vim.schedule(function()
+        local ok, cc = pcall(require, "codecompanion")
+        local chat = ok and cc.buf_get_chat(bufnr) or nil
+        if not M.chat_selected(chat) then return end
+        local model = require("astrograph.agents").omniroute_model()
+        if model then return M.apply_to_chat(chat, model) end
+        vim.notify("OmniRoute: escolha o modelo (fica salvo; troque quando quiser com :OmniRoute modelo).", vim.log.levels.INFO, { title = "Astrograph" })
+        M.choose_model(function(m) M.apply_to_chat(chat, m) end)
+      end)
+    end,
+  })
   -- trocar o modelo no chat (`ga`) também é uma decisão sua: fica salva. O
   -- mesmo evento dispara ao CRIAR o chat, com o modelo em vigor; só grava
   -- quando o modelo difere do que já vale (senão abrir um chat com
@@ -430,7 +449,11 @@ end
 
 ---Abre a escolha do modelo/combo: o que o OmniRoute oferece, mais "digitar outro".
 ---@param cb? fun(model: string)
+local choosing = false -- uma escolha aberta por vez (dois chats seguidos não empilham janelas)
+
 function M.choose_model(cb)
+  if choosing then return end
+  choosing = true
   local current = require("astrograph.agents").omniroute_model()
   M.model_choices_async(function(list)
     local items = vim.list_extend({}, list)
@@ -443,31 +466,58 @@ function M.choose_model(cb)
       )
     end
     local function done(model)
+      choosing = false
       if not model or model == "" then return end
       M.set_model(model)
       if cb then cb(model) end
     end
-    vim.ui.select(items, {
+    local ok = pcall(vim.ui.select, items, {
       prompt = "Modelo do OmniRoute" .. (current and (" (atual: " .. current .. ")") or " (nenhum escolhido)"),
       format_item = function(it) return it == current and (it .. "  ✓") or it end,
     }, function(choice)
       if choice == "Digitar outro…" then
-        vim.ui.input({ prompt = "Modelo ou combo do OmniRoute: ", default = current or "" }, done)
+        local okin = pcall(vim.ui.input, { prompt = "Modelo ou combo do OmniRoute: ", default = current or "" }, done)
+        if not okin then choosing = false end
       else
         done(choice)
       end
     end)
+    if not ok then choosing = false end
   end)
 end
 
----Antes de um pedido sem modelo: em vez de chutar um, pergunta.
+---Aplica o modelo num chat aberto do OmniRoute (sem mexer em outros chats).
+---@param chat table chat do CodeCompanion
+---@param model string
+function M.apply_to_chat(chat, model)
+  if not (chat and model and chat.settings) or chat.settings.model == model then return end
+  pcall(chat.change_model, chat, { model = model })
+end
+
+---Rede de segurança: um pedido saiu sem modelo (o `setup` do adapter barrou).
+---O CodeCompanion não avisa o chat quando o setup barra (e ainda guarda um
+---valor em `current_request`), e o buffer ficaria travado. Destrava TODOS os
+---chats do OmniRoute presos assim (com vários chats abertos, o último focado
+---pode não ser o que pediu) pelo `Chat:restore()`, que o CodeCompanion usa
+---quando um envio é impedido, e abre a escolha.
 function M.ask_model()
-  vim.notify(
-    "OmniRoute: escolha o modelo (fica salvo; troque quando quiser com :OmniRoute modelo) e reenvie o pedido.",
-    vim.log.levels.WARN,
-    { title = "Astrograph" }
-  )
-  M.choose_model()
+  local ok, Chat = pcall(require, "codecompanion.interactions.chat")
+  local stuck = {}
+  for _, entry in ipairs(ok and Chat.buf_get_chat() or {}) do
+    local chat = entry.chat
+    local model = chat and chat.settings and chat.settings.model
+    if M.chat_selected(chat) and chat.current_request and (not model or model == "") then
+      chat.current_request = nil
+      pcall(chat.restore, chat)
+      stuck[#stuck + 1] = chat
+    end
+  end
+  vim.notify("OmniRoute: escolha o modelo e envie de novo (a escolha fica salva; troque com :OmniRoute modelo).", vim.log.levels.WARN, { title = "Astrograph" })
+  M.choose_model(function(m)
+    for _, chat in ipairs(stuck) do
+      M.apply_to_chat(chat, m)
+    end
+  end)
 end
 
 ---Provedor do avante com o modelo escolhido.
