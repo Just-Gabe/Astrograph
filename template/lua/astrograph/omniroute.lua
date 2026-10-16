@@ -296,6 +296,25 @@ function M.setup_chat()
   })
 
   local group = vim.api.nvim_create_augroup("astrograph_omniroute_chat", {})
+  -- escolheu o OmniRoute no chat (ao criar ou pelo `ga`) e ainda não há
+  -- modelo: pergunta AGORA, antes de você escrever, e aplica neste chat
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionChatAdapter",
+    callback = function(args)
+      local bufnr = args.data and args.data.bufnr
+      if not bufnr then return end
+      vim.schedule(function()
+        local ok, cc = pcall(require, "codecompanion")
+        local chat = ok and cc.buf_get_chat(bufnr) or nil
+        if not M.chat_selected(chat) then return end
+        local model = require("astrograph.agents").omniroute_model()
+        if model then return M.apply_to_chat(chat, model) end
+        vim.notify("OmniRoute: escolha o modelo (fica salvo; troque quando quiser com :OmniRoute modelo).", vim.log.levels.INFO, { title = "Astrograph" })
+        M.choose_model(function(m) M.apply_to_chat(chat, m) end)
+      end)
+    end,
+  })
   -- trocar o modelo no chat (`ga`) também é uma decisão sua: fica salva. O
   -- mesmo evento dispara ao CRIAR o chat, com o modelo em vigor; só grava
   -- quando o modelo difere do que já vale (senão abrir um chat com
@@ -460,14 +479,27 @@ function M.choose_model(cb)
   end)
 end
 
----Antes de um pedido sem modelo: em vez de chutar um, pergunta.
+---Aplica o modelo num chat aberto do OmniRoute (sem mexer em outros chats).
+---@param chat table chat do CodeCompanion
+---@param model string
+function M.apply_to_chat(chat, model)
+  if not (chat and model and chat.settings) or chat.settings.model == model then return end
+  pcall(chat.change_model, chat, { model = model })
+end
+
+---Rede de segurança: um pedido saiu sem modelo (o `setup` do adapter barrou).
+---O CodeCompanion não avisa o chat quando o setup barra (e ainda guarda um
+---valor em `current_request`), e o buffer ficaria travado; então destrava o
+---chat com um erro claro e abre a escolha. Só é chamado nesse caso.
 function M.ask_model()
-  vim.notify(
-    "OmniRoute: escolha o modelo (fica salvo; troque quando quiser com :OmniRoute modelo) e reenvie o pedido.",
-    vim.log.levels.WARN,
-    { title = "Astrograph" }
-  )
-  M.choose_model()
+  local ok, cc = pcall(require, "codecompanion")
+  local chat = ok and cc.last_chat and cc.last_chat() or nil
+  if M.chat_selected(chat) and chat.done then
+    pcall(chat.done, chat, {}, nil, nil, nil, { error = "OmniRoute sem modelo escolhido: escolha e reenvie (:OmniRoute modelo)." })
+  end
+  M.choose_model(function(m)
+    if M.chat_selected(chat) then M.apply_to_chat(chat, m) end
+  end)
 end
 
 ---Provedor do avante com o modelo escolhido.
