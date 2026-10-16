@@ -238,11 +238,36 @@ function M.omniroute_url()
   return url
 end
 
----O OmniRoute está instalado? (o CLI ou a pasta de estado dele). Ele só vira
----um provedor a mais, nunca o padrão: é usado quando você o escolhe.
+---O OmniRoute está instalado (o CLI)? Ele só vira um provedor a mais, nunca o
+---padrão: é usado quando você o escolhe.
 ---@return boolean
-function M.has_omniroute()
-  return M.has "omniroute" or (vim.uv or vim.loop).fs_stat(vim.fn.expand "~/.omniroute") ~= nil
+function M.has_omniroute() return M.has "omniroute" end
+
+---Modelo (ou combo) do OmniRoute: `OMNIROUTE_MODEL`; senão o `omniroute/<x>`
+---que o opencode já usa (o mesmo gateway, já configurado); senão "auto".
+---Medido em 16/10: "auto" caiu num modelo que só funciona dentro do opencode
+---(403), e o combo do opencode respondeu.
+---@return string
+function M.omniroute_model()
+  local m = vim.env.OMNIROUTE_MODEL
+  if m and m ~= "" then return m end
+  return M.opencode_omniroute() or "auto"
+end
+
+---O combo do OmniRoute que o opencode usa como modelo padrão
+---(`"model": "omniroute/<combo>"` na config dele), ou nil.
+---@return string?
+function M.opencode_omniroute()
+  local dir = vim.env.XDG_CONFIG_HOME and (vim.env.XDG_CONFIG_HOME .. "/opencode") or vim.fn.expand "~/.config/opencode"
+  for _, name in ipairs { "opencode.jsonc", "opencode.json" } do
+    local f = io.open(dir .. "/" .. name, "r")
+    if f then
+      local combo = (f:read "*a"):match '"model"%s*:%s*"omniroute/([^"]+)"'
+      f:close()
+      return combo
+    end
+  end
+  return nil
 end
 
 ---Host base do Ollama, aceitando `OLLAMA_HOST` com ou sem esquema.

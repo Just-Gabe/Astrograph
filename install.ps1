@@ -374,7 +374,8 @@ function Read-AgentMenu {
       'Enter' { return $checked }
       'Escape' { return (New-Object 'bool[]' $n) }
       default {
-        if ($key.KeyChar -eq 'a') { for ($i = 0; $i -lt $n; $i++) { if (-not $Items[$i].Installed) { $checked[$i] = $true } } }
+        # "todos" = os agentes; o gateway (OmniRoute) so entra marcado a mao
+        if ($key.KeyChar -eq 'a') { for ($i = 0; $i -lt $n; $i++) { if (-not $Items[$i].Installed -and $Items[$i].Id -ne 'omniroute') { $checked[$i] = $true } } }
         if ($key.KeyChar -eq 'q') { return (New-Object 'bool[]' $n) }
       }
     }
@@ -555,8 +556,9 @@ if ($present) {
     foreach ($a in $pending) { Write-Host ("  {0,-20} -> {1}" -f $a.Login, $a.Label) }
   }
   if ($selectedIds -contains 'omniroute') {
-    Write-Host '  omniroute            -> sobe o gateway (porta 20128); crie uma chave com: omniroute keys'
-    Write-Host '                          e defina OMNIROUTE_API_KEY. No chat: ga -> omniroute'
+    Write-Host '  omniroute            -> sobe o gateway (porta 20128); deixe rodando'
+    Write-Host '  omniroute keys       -> cria a chave; defina OMNIROUTE_API_KEY (combos abertos funcionam sem)'
+    Write-Host '  no chat: ga -> omniroute (nunca e o padrao; modelo em OMNIROUTE_MODEL)'
   }
   if ($selectedIds -contains 'ollama') { Write-Host '  ollama serve         -> se o Ollama não estiver no ar' }
   Write-Host ''

@@ -230,7 +230,8 @@ run_agent_menu() {
           if [ "${selected[$cursor]}" = 1 ]; then selected[$cursor]=0; else selected[$cursor]=1; fi
         fi
         ;;
-      'a') for ((i = 0; i < n; i++)); do [ "${installed[$i]}" = 0 ] && selected[$i]=1; done ;;
+      # "todos" = os agentes; o gateway (OmniRoute) só entra marcado à mão
+      'a') for ((i = 0; i < n; i++)); do [ "${installed[$i]}" = 0 ] && [ "${AGENT_IDS[$i]}" != omniroute ] && selected[$i]=1; done ;;
       'q' | '') break ;;
     esac
     printf '\033[%dA' "$n"
@@ -419,10 +420,9 @@ if [ -n "$any_agent" ]; then
     for i in "${PENDING[@]}"; do printf '  %-20s -> %s\n' "${SETUP_LOGIN[$i]}" "${SETUP_LABELS[$i]}"; done
   fi
   if has_sel omniroute; then
-    printf '  omniroute            -> sobe o gateway (porta 20128); crie uma chave com: omniroute keys
-'
-    printf '                          e defina OMNIROUTE_API_KEY. No chat: ga -> omniroute
-'
+    printf '  omniroute            -> sobe o gateway (porta 20128); deixe rodando\n'
+    printf '  omniroute keys       -> cria a chave; defina OMNIROUTE_API_KEY (combos abertos funcionam sem)\n'
+    printf '  no chat: ga -> omniroute (nunca e o padrao; modelo em OMNIROUTE_MODEL)\n'
   fi
   if has_sel ollama; then printf '  ollama serve         -> se o Ollama não estiver no ar\n'; fi
   printf '\n'

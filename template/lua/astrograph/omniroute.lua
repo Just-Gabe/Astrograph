@@ -331,17 +331,7 @@ function M.panel_selected()
   if not cur or cur.bin ~= "opencode" then return false end
   local now = os.time()
   if opencode_cache and now - opencode_cache.at < 30 then return opencode_cache.uses end
-  local uses = false
-  local dir = vim.env.XDG_CONFIG_HOME and (vim.env.XDG_CONFIG_HOME .. "/opencode") or vim.fn.expand "~/.config/opencode"
-  for _, name in ipairs { "opencode.jsonc", "opencode.json" } do
-    local f = io.open(dir .. "/" .. name, "r")
-    if f then
-      local text = f:read "*a"
-      f:close()
-      uses = text:match '"model"%s*:%s*"omniroute/' ~= nil
-      break
-    end
-  end
+  local uses = agents.opencode_omniroute() ~= nil
   opencode_cache = { at = now, uses = uses }
   return uses
 end
@@ -390,8 +380,18 @@ function M.notice_chat(chat, change)
   local buf = chat.bufnr
   if type(buf) ~= "number" or not vim.api.nvim_buf_is_valid(buf) then return end
   local n = vim.api.nvim_buf_line_count(buf)
-  -- header_line = 1ª linha (1-based) depois do cabeçalho; o cabeçalho é a anterior
-  local row = math.min(math.max((tonumber(chat.header_line) or n) - 2, 0), n - 1)
+  -- âncora: o último cabeçalho de papel ("## Você") do buffer, que é o do
+  -- próximo pedido (o CodeCompanion calcula header_line de jeitos diferentes
+  -- conforme o caminho; ele fica só de reserva)
+  local row
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i = #lines, 1, -1 do
+    if lines[i]:match "^##%s" then
+      row = i - 1
+      break
+    end
+  end
+  row = row or math.min(math.max((tonumber(chat.header_line) or n) - 2, 0), n - 1)
   local chunks = { { "▸ mudou para ", HL_NOTICE }, { change.to, HL_MODEL }, { " via OmniRoute", HL_NOTICE } }
   if change.from and change.from ~= "" then chunks[#chunks + 1] = { fmt(" (antes: %s)", change.from), HL_NOTICE } end
   pcall(vim.api.nvim_buf_set_extmark, buf, M.ns, row, 0, { virt_lines = { chunks }, virt_lines_above = true })

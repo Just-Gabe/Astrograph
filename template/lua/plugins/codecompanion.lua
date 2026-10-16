@@ -59,20 +59,32 @@ return {
       -- OmniRoute (gateway local de modelos, opcional): um provedor a mais, só
       -- quando instalado, e NUNCA o padrão (fica fora de http_default e
       -- chat_default abaixo). Escolha no chat com `ga` -> omniroute. Chave em
-      -- OMNIROUTE_API_KEY (`omniroute keys`); modelo/combo em OMNIROUTE_MODEL.
+      -- OMNIROUTE_API_KEY (`omniroute keys`); modelo/combo em OMNIROUTE_MODEL
+      -- (padrão: o mesmo combo que o opencode usa, ver agents.omniroute_model).
       if agents.has_omniroute() then
+        local warned_key = false
         opts.adapters.http.omniroute = function()
           return require("codecompanion.adapters").extend("openai_compatible", {
             name = "omniroute",
             formatted_name = "OmniRoute",
             env = {
               url = agents.omniroute_url():gsub("/v1$", ""),
+              -- sem chave: cabeçalho vazio (o gateway local aceita nos combos
+              -- abertos; um texto falso como "no-key" fazia o combo ficar sem
+              -- destino) e um aviso, para o 401 de um combo fechado ter pista
               api_key = function()
                 local key = vim.env.OMNIROUTE_API_KEY
-                return (key and key ~= "") and key or "no-key"
+                if key and key ~= "" then return key end
+                if not warned_key then
+                  warned_key = true
+                  vim.schedule(function()
+                    vim.notify("OmniRoute sem OMNIROUTE_API_KEY: combos que exigem chave vão recusar (crie com `omniroute keys`).", vim.log.levels.WARN, { title = "Astrograph" })
+                  end)
+                end
+                return ""
               end,
             },
-            schema = { model = { default = vim.env.OMNIROUTE_MODEL or "auto" } },
+            schema = { model = { default = agents.omniroute_model() } },
           })
         end
       end

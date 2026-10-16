@@ -96,7 +96,7 @@ return {
           __inherited_from = "openai",
           endpoint = agents.omniroute_url(),
           api_key_name = "OMNIROUTE_API_KEY",
-          model = vim.env.OMNIROUTE_MODEL or "auto",
+          model = agents.omniroute_model(),
         }
       end
 
