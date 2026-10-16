@@ -286,11 +286,27 @@ end
 function M.setup_chat()
   M.setup()
   vim.api.nvim_create_autocmd("ColorScheme", { group = vim.api.nvim_create_augroup("astrograph_omniroute", {}), callback = M.setup })
-  vim.api.nvim_create_user_command("OmniRoute", function()
+  vim.api.nvim_create_user_command("OmniRoute", function(args)
+    if vim.trim(args.args or "") == "modelo" then return M.choose_model() end
     vim.notify(table.concat(M.report(), "\n"), vim.log.levels.INFO, { title = "OmniRoute" })
-  end, { desc = "Estado do OmniRoute (modelo por conversa)" })
+  end, {
+    nargs = "?",
+    complete = function() return { "modelo" } end,
+    desc = "OmniRoute: estado do detector; `:OmniRoute modelo` escolhe o modelo/combo (fica salvo)",
+  })
 
   local group = vim.api.nvim_create_augroup("astrograph_omniroute_chat", {})
+  -- trocar o modelo no chat (`ga`) também é uma decisão sua: fica salva
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "CodeCompanionChatModel",
+    callback = function(args)
+      local d = args.data or {}
+      if type(d.model) ~= "string" or d.model == "" or not d.bufnr then return end
+      local ok, cc = pcall(require, "codecompanion")
+      if M.chat_selected(ok and cc.buf_get_chat(d.bufnr) or nil) then M.set_model(d.model, { quiet = true }) end
+    end,
+  })
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "CodeCompanionChatSubmitted",
@@ -311,6 +327,111 @@ function M.setup_chat()
       end, "chat")
     end,
   })
+end
+
+-- ------------------------------------------------------------ modelo (escolha)
+--
+-- Nenhum modelo é assumido: você escolhe, a escolha fica no config.json do
+-- Astrograph e vale entre sessões até você trocar (`:OmniRoute modelo` ou `ga`
+-- no chat). `OMNIROUTE_MODEL` no ambiente vence a escolha salva.
+
+---Combos e modelos que o OmniRoute oferece, pelo próprio CLI (não exige a
+---chave da API). Guardado por 60 s.
+local choices_cache ---@type { at: integer, list: string[] }?
+function M.model_choices()
+  local now = os.time()
+  if choices_cache and now - choices_cache.at < 60 then return choices_cache.list end
+  local list, seen = {}, {}
+  local agents = require "astrograph.agents"
+  local ok, res = pcall(function()
+    return vim.system({ agents.exe "omniroute", "combo", "list", "--output", "json" }, { text = true }):wait(15000)
+  end)
+  local out = ok and res and res.stdout or ""
+  local start = out:find("{", 1, true) -- o CLI imprime avisos antes do JSON
+  local okj, data = pcall(vim.json.decode, start and out:sub(start) or "")
+  for _, c in ipairs(okj and type(data) == "table" and data.combos or {}) do
+    if type(c.name) == "string" and not seen[c.name] then
+      seen[c.name] = true
+      list[#list + 1] = c.name
+    end
+    for _, m in ipairs(type(c.models) == "table" and c.models or {}) do
+      if type(m.model) == "string" and not seen[m.model] then
+        seen[m.model] = true
+        list[#list + 1] = m.model
+      end
+    end
+  end
+  choices_cache = { at = now, list = list }
+  return list
+end
+
+---Salva a escolha e aplica no que já está aberto (avante: sem reiniciar).
+---@param model string
+---@param opts? { quiet?: boolean }
+function M.set_model(model, opts)
+  local agents = require "astrograph.agents"
+  if type(model) ~= "string" or model == "" then return end
+  if agents.read_config().omniroute_model == model and not (opts and opts.force) then return end
+  agents.write_config { omniroute_model = model }
+  if package.loaded["avante.config"] and agents.has_omniroute() then
+    pcall(function()
+      require("avante.config").override { providers = { omniroute = M.avante_provider(model) } }
+      rawset(require "avante.providers", "omniroute", nil) -- o avante remonta com o modelo novo
+    end)
+  end
+  if not (opts and opts.quiet) then
+    local env = vim.env.OMNIROUTE_MODEL
+    local extra = (env and env ~= "" and env ~= model) and (" (atenção: OMNIROUTE_MODEL=%s no ambiente vence)"):format(env) or ""
+    vim.notify(("OmniRoute: modelo %s (salvo)%s"):format(model, extra), vim.log.levels.INFO, { title = "Astrograph" })
+  end
+end
+
+---Abre a escolha do modelo/combo: o que o OmniRoute oferece, mais "digitar outro".
+---@param cb? fun(model: string)
+function M.choose_model(cb)
+  local current = require("astrograph.agents").omniroute_model()
+  local list = M.model_choices()
+  local items = vim.list_extend({}, list)
+  items[#items + 1] = "Digitar outro…"
+  local function done(model)
+    if not model or model == "" then return end
+    M.set_model(model)
+    if cb then cb(model) end
+  end
+  vim.ui.select(items, {
+    prompt = "Modelo do OmniRoute" .. (current and (" (atual: " .. current .. ")") or " (nenhum escolhido)"),
+    format_item = function(it) return it == current and (it .. "  ✓") or it end,
+  }, function(choice)
+    if choice == "Digitar outro…" then
+      vim.ui.input({ prompt = "Modelo ou combo do OmniRoute: ", default = current or "" }, done)
+    else
+      done(choice)
+    end
+  end)
+end
+
+---Antes de um pedido sem modelo: em vez de chutar um, pergunta.
+function M.ask_model()
+  vim.notify(
+    "OmniRoute: escolha o modelo (fica salvo; troque quando quiser com :OmniRoute modelo) e reenvie o pedido.",
+    vim.log.levels.WARN,
+    { title = "Astrograph" }
+  )
+  M.choose_model()
+end
+
+---Provedor do avante com o modelo escolhido.
+---@param model string
+function M.avante_provider(model)
+  local agents = require "astrograph.agents"
+  local key = vim.env.OMNIROUTE_API_KEY
+  return {
+    __inherited_from = "openai",
+    endpoint = agents.omniroute_url(),
+    -- sem chave no ambiente, nome vazio = sem cabeçalho (como nos provedores locais)
+    api_key_name = (key and key ~= "") and "OMNIROUTE_API_KEY" or "",
+    model = model,
+  }
 end
 
 ---O chat usa o provedor OmniRoute? (adapter `omniroute` do CodeCompanion)

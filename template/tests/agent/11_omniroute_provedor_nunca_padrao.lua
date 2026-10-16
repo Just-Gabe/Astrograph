@@ -5,8 +5,13 @@ local H = dofile(vim.fs.dirname(vim.fs.dirname(vim.fs.normalize(debug.getinfo(1,
 
 -- agentes falsos: só o OmniRoute instalado, nenhum outro provedor nem chave
 for _, k in ipairs { "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ASTROGRAPH_LOCAL_URL" } do vim.env[k] = nil end
-local current, combo = nil, "gratis"
--- as funções reais de modelo/config do opencode são testadas no fim
+local current, combo, chosen = nil, "gratis", nil
+-- config.json do teste numa pasta temporária (nunca a escolha real do usuário)
+local tmp = vim.fs.normalize(vim.fn.tempname())
+vim.fn.mkdir(tmp, "p")
+vim.env.APPDATA, vim.env.LOCALAPPDATA, vim.env.XDG_CONFIG_HOME = tmp, tmp, tmp
+vim.env.OMNIROUTE_MODEL = nil
+-- as funções reais de modelo/config são testadas no fim
 local real = dofile(H.template .. "/lua/astrograph/agents.lua")
 package.loaded["astrograph.agents"] = {
   agents = {},
@@ -18,7 +23,7 @@ package.loaded["astrograph.agents"] = {
   local_url = function() return nil end,
   has_omniroute = function() return true end,
   omniroute_url = function() return "http://localhost:20128/v1" end,
-  omniroute_model = function() return "gratis" end,
+  omniroute_model = function() return chosen end,
   opencode_omniroute = function() return combo end,
 }
 
@@ -35,10 +40,15 @@ for name, v in pairs(cc.interactions) do
   if type(v) == "table" then H.ok(v.adapter ~= "omniroute", "chat: omniroute não é padrão de " .. name) end
 end
 
--- avante
+-- avante: sem modelo escolhido, nada de provedor com modelo chutado
 local av = spec("avante").opts(nil, {})
-H.ok(av.providers.omniroute and av.providers.omniroute.endpoint == "http://localhost:20128/v1", "avante: provedor omniroute registrado")
+H.eq(av.providers.omniroute, nil, "avante: sem escolha, sem provedor")
+chosen = "meu-combo"
+av = spec("avante").opts(nil, {})
+H.ok(av.providers.omniroute and av.providers.omniroute.endpoint == "http://localhost:20128/v1", "avante: provedor registrado após a escolha")
+H.eq(av.providers.omniroute.model, "meu-combo", "avante: com o modelo escolhido")
 H.ok(av.provider ~= "omniroute", "avante: omniroute não é o padrão")
+chosen = nil
 
 -- sem o OmniRoute instalado, ele nem aparece
 package.loaded["astrograph.agents"].has_omniroute = function() return false end
@@ -57,19 +67,26 @@ H.ok(not O.panel_selected(), "painel: Claude Code não passa pelo OmniRoute")
 current = { bin = "opencode" }
 H.ok(O.panel_selected(), "painel: opencode com modelo omniroute/...")
 
--- modelo padrão (funções reais): OMNIROUTE_MODEL > combo do opencode > "auto"
-local cfg = vim.fs.normalize(vim.fn.tempname())
-vim.fn.mkdir(cfg .. "/opencode", "p")
-vim.env.XDG_CONFIG_HOME = cfg
-H.eq(real.opencode_omniroute(), nil, "modelo: sem config do opencode")
-H.eq(real.omniroute_model(), "auto", "modelo: sem nada, auto")
-vim.fn.writefile({ '{ "model": "omniroute/gratis", "provider": {} }' }, cfg .. "/opencode/opencode.jsonc")
-H.eq(real.omniroute_model(), "gratis", "modelo: o combo que o opencode usa")
-vim.env.OMNIROUTE_MODEL = "meu-combo"
-H.eq(real.omniroute_model(), "meu-combo", "modelo: OMNIROUTE_MODEL vence")
+-- modelo (funções reais): só o que VOCÊ escolheu; nada de palpite
+vim.fn.mkdir(tmp .. "/opencode", "p")
+H.eq(real.opencode_omniroute(), nil, "opencode: sem config")
+H.eq(real.omniroute_model(), nil, "modelo: sem escolha, nenhum (nem auto)")
+vim.fn.writefile({ '{ "model": "omniroute/gratis", "provider": {} }' }, tmp .. "/opencode/opencode.jsonc")
+H.eq(real.opencode_omniroute(), "gratis", "opencode: combo lido (para o painel)")
+H.eq(real.omniroute_model(), nil, "modelo: o combo do opencode NÃO vira padrão")
+-- a escolha fica salva (config.json) e vale até você trocar
+package.loaded["astrograph.agents"] = real
+O.set_model("combo-a", { quiet = true })
+H.eq(real.read_config().omniroute_model, "combo-a", "escolha: salva no config.json")
+H.eq(real.omniroute_model(), "combo-a", "escolha: usada")
+O.set_model("combo-b", { quiet = true })
+H.eq(real.omniroute_model(), "combo-b", "escolha: trocada quando você quer")
+H.ok(vim.fn.filereadable(tmp .. "/astrograph/config.json") == 1, "escolha: no config.json da pasta do teste")
+vim.env.OMNIROUTE_MODEL = "do-ambiente"
+H.eq(real.omniroute_model(), "do-ambiente", "escolha: OMNIROUTE_MODEL vence a salva")
 vim.env.OMNIROUTE_MODEL = nil
-vim.fn.writefile({ '{ "model": "anthropic/claude" }' }, cfg .. "/opencode/opencode.jsonc")
-H.eq(real.opencode_omniroute(), nil, "modelo: opencode em outro provedor")
+vim.fn.writefile({ '{ "model": "anthropic/claude" }' }, tmp .. "/opencode/opencode.jsonc")
+H.eq(real.opencode_omniroute(), nil, "opencode: em outro provedor")
 
 -- linha virtual ancorada no último cabeçalho, mesmo com header_line errado
 local cbuf = vim.api.nvim_create_buf(false, true)
