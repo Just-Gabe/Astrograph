@@ -890,7 +890,12 @@ function M.setup()
     pattern = "AstrographModeChanged",
     desc = "Levar o modo escolhido para a sessão aberta do painel",
     callback = function()
-      if st.job and st.ready then apply_mode() end
+      if st.job and st.ready then
+        apply_mode()
+      elseif st.job and st.mode_wait then
+        -- trocou enquanto a sessão abria: pede o modo novo e espera por ele
+        st.mode_wait = apply_mode() or st.mode_wait
+      end
     end,
   })
   vim.api.nvim_create_user_command("AstrographAgent", function(o)

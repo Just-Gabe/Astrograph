@@ -205,6 +205,17 @@ vim.wait(3500, function() return st.ready end, 50)
 H.ok(st.ready and not st.exact, "painel: sem confirmação, segue imitando")
 H.ok(vim.iter(H.notes):any(function(n) return n:find("não tem o modo Plano", 1, true) ~= nil end), "painel: sem confirmação, avisa")
 
+-- trocar o modo enquanto o painel abre: pede o novo e espera por ele
+ag.stop(true)
+sent = {}
+st.job, st.agent, st.ready, st.busy = 96, claude, false, false
+H.event(ag, { ev = "ready", mode = "default", modes = { { id = "default" }, { id = "plan" }, { id = "auto" } } })
+H.eq(sent[1] and sent[1].mode, "plan", "abrindo: pede o modo salvo")
+modes.set("auto", { quiet = true })
+H.eq(sent[2] and sent[2].mode, "auto", "abrindo: troca no meio pede o novo")
+H.event(ag, { ev = "mode", mode = "auto" })
+H.ok(st.ready and st.exact, "abrindo: confirmação do modo novo solta a fila")
+
 -- chat imitado: o aviso diz o que o chat faz de verdade
 H.notes = {}
 modes.set("acceptEdits", { quiet = true })
