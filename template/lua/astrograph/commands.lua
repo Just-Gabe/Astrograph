@@ -6,6 +6,7 @@
 --   :Astrograph configurar  instala as pontes do chat e faz os logins que faltam
 --   :Astrograph login [ag]  abre o login de um agente (claude, opencode, codex, gemini)
 --   :Astrograph agente [ag] escolhe o agente de todo o modo agentic (fica salvo)
+--   :Astrograph sessoes     conversas do agente de todos os projetos (retomar)
 --   :Astrograph atalhos     lista todos os atalhos (busca)
 --   :Astrograph docs        abre a documentação no navegador
 
@@ -253,6 +254,7 @@ local subcommands = {
       require("astrograph.agents").pick()
     end
   end,
+  sessoes = function() require("astrograph.sessions").pick() end,
   atalhos = M.atalhos,
   docs = M.docs,
 }
@@ -270,7 +272,7 @@ function M.setup()
     fn(rest)
   end, {
     nargs = "*",
-    desc = "Astrograph: atualizar, saude, agentes, agente, configurar, login, atalhos, docs",
+    desc = "Astrograph: atualizar, saude, agentes, agente, configurar, login, sessoes, atalhos, docs",
     complete = function(lead, line)
       if line:match "^%S+%s+login%s+" or line:match "^%S+%s+agente%s+" then
         local bins = vim.tbl_map(function(a) return a.bin end, require("astrograph.agents").agents)

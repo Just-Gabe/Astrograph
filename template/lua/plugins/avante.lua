@@ -6,6 +6,7 @@
 --
 --   <Leader>AE  perguntar/editar seleção   <Leader>At  alternar sidebar
 --   <Leader>As  alternar sugestões          <Leader>Af  focar   <Leader>Az  zen
+--   <Leader>AS  sessões de todos os projetos, com a tag do modelo (retomar)
 
 ---@type LazySpec
 return {
@@ -25,6 +26,11 @@ return {
       { "<Leader>As", "<Plug>(AvanteToggleSuggestion)", remap = true, desc = "avante: alternar sugestões" },
       { "<Leader>Af", "<Plug>(AvanteFocus)", remap = true, desc = "avante: focar" },
       { "<Leader>Az", "<Plug>(AvanteZenMode)", mode = { "n", "v" }, remap = true, desc = "avante: zen" },
+      {
+        "<Leader>AS",
+        function() require("astrograph.sessions").pick() end,
+        desc = "avante: sessões de todos os projetos (retomar)",
+      },
     },
     cmd = {
       "AvanteAsk",
@@ -102,6 +108,11 @@ return {
       end
 
       return opts
+    end,
+    config = function(_, opts)
+      require("avante").setup(opts)
+      -- tag do modelo em cada conversa + índice para <Leader>AS
+      require("astrograph.sessions").setup()
     end,
   },
 }
