@@ -6,6 +6,8 @@
 --   :Astrograph configurar  instala as pontes do chat e faz os logins que faltam
 --   :Astrograph login [ag]  abre o login de um agente (claude, opencode, codex, gemini)
 --   :Astrograph agente [ag] escolhe o agente de todo o modo agentic (fica salvo)
+--   :Astrograph modo [m]    modo do agente em todas as telas: manual, acceptEdits,
+--                           plan, auto, bypass (fica salvo)
 --   :Astrograph sessoes     conversas do agente de todos os projetos (retomar)
 --   :Astrograph atalhos     lista todos os atalhos (busca)
 --   :Astrograph docs        abre a documentação no navegador
@@ -254,6 +256,13 @@ local subcommands = {
       require("astrograph.agents").pick()
     end
   end,
+  modo = function(id)
+    if id and id ~= "" then
+      require("astrograph.modes").set(id)
+    else
+      require("astrograph.modes").pick()
+    end
+  end,
   sessoes = function() require("astrograph.sessions").pick() end,
   atalhos = M.atalhos,
   docs = M.docs,
@@ -272,11 +281,15 @@ function M.setup()
     fn(rest)
   end, {
     nargs = "*",
-    desc = "Astrograph: atualizar, saude, agentes, agente, configurar, login, sessoes, atalhos, docs",
+    desc = "Astrograph: atualizar, saude, agentes, agente, modo, configurar, login, sessoes, atalhos, docs",
     complete = function(lead, line)
       if line:match "^%S+%s+login%s+" or line:match "^%S+%s+agente%s+" then
         local bins = vim.tbl_map(function(a) return a.bin end, require("astrograph.agents").agents)
         return vim.tbl_filter(function(c) return c:find(lead, 1, true) == 1 end, bins)
+      end
+      if line:match "^%S+%s+modo%s+" then
+        local ids = vim.tbl_map(function(m) return m.id end, require("astrograph.modes").list)
+        return vim.tbl_filter(function(c) return c:find(lead, 1, true) == 1 end, ids)
       end
       return vim.tbl_filter(function(c) return c:find(lead, 1, true) == 1 end, names)
     end,

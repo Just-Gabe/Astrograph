@@ -2,7 +2,8 @@
 --
 -- Roda o TUI nativo do agente atual (claude/opencode/codex/gemini) no root do
 -- projeto. O agente é o mesmo do chat e da edição inline: troque com
--- :Astrograph agente ou <Leader>Ag (nenhum custo de detecção no boot).
+-- :Astrograph agente ou <Leader>Ag (nenhum custo de detecção no boot), e abre no
+-- modo escolhido em <Leader>Aw (ex.: `claude --permission-mode acceptEdits`).
 --
 --   <Leader>Al  abrir o agente atual         <Leader>AT  alternar o terminal dele
 --   <Leader>A.  mencionar o arquivo atual (ou a seleção) no agente: `@arquivo#L1-9`
@@ -13,11 +14,14 @@ local last = { cmd = nil, buf = nil }
 
 local function win_opts() return { position = "float", border = "rounded" } end
 
----Abre um agente num terminal flutuante.
+---Abre um agente num terminal flutuante, no modo escolhido em <Leader>Aw.
 ---@param a AstrographAgent
 local function open_agent(a)
+  local modes = require "astrograph.modes"
+  local cmd, exact = modes.terminal_cmd(a)
+  modes.warn_emulated(a.label .. " (terminal)", exact)
   local ok, term = pcall(function()
-    return require("snacks").terminal.open(a.cmd, {
+    return require("snacks").terminal.open(cmd, {
       cwd = require("astrograph.agents").root(),
       win = win_opts(),
     })
@@ -25,11 +29,11 @@ local function open_agent(a)
   if not ok or not term then
     -- Fallback: terminal nativo do Neovim.
     vim.cmd "botright split | terminal"
-    vim.fn.chansend(vim.b.terminal_job_id, a.cmd .. "\r")
-    last.cmd = a.cmd
+    vim.fn.chansend(vim.b.terminal_job_id, cmd .. "\r")
+    last.cmd = cmd
     return
   end
-  last.cmd = a.cmd
+  last.cmd = cmd
   last.buf = term.buf
 end
 
@@ -47,9 +51,11 @@ end
 function M.toggle()
   local a = require("astrograph.agents").current()
   if not a then return M.launch() end
-  if last.cmd ~= a.cmd then return M.launch() end
+  -- outro agente ou outro modo: terminal novo (o modo vale da abertura do CLI)
+  local cmd = require("astrograph.modes").terminal_cmd(a)
+  if last.cmd ~= cmd then return M.launch() end
   pcall(function()
-    require("snacks").terminal.toggle(a.cmd, { cwd = require("astrograph.agents").root(), win = win_opts() })
+    require("snacks").terminal.toggle(cmd, { cwd = require("astrograph.agents").root(), win = win_opts() })
   end)
 end
 

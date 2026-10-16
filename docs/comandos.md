@@ -15,6 +15,7 @@ nav_order: 5
 | `:Astrograph configurar` | Instala as pontes do chat e faz os logins que faltam |
 | `:Astrograph login [agente]` | Abre o login de um agente (`claude`, `opencode`, `codex`, `gemini`) |
 | `:Astrograph agente [agente]` | Escolhe o agente de todo o modo agentic (fica salvo) |
+| `:Astrograph modo [modo]` | Escolhe o modo do agente em todas as telas (fica salvo): `manual` (Manual), `acceptEdits` (Aceitar edições), `plan` (Plano), `auto` (Auto), `bypass` (Sem permissões, pede confirmação) |
 | `:Astrograph atalhos` | Busca entre todos os atalhos |
 | `:Astrograph docs` | Abre esta documentação no navegador |
 

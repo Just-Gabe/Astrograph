@@ -28,6 +28,12 @@ return {
     -- gateway troca de modelo. O painel do agente nativo (<Leader>Ao) usa o
     -- mesmo módulo, em lua/astrograph/agent.lua.
     init = function() require("astrograph.omniroute").setup_chat() end,
+    -- modo do agente (permissões): toda sessão ACP do chat nasce no modo
+    -- escolhido em <Leader>Aw, o mesmo do painel, do avante e do terminal
+    config = function(_, opts)
+      require("codecompanion").setup(opts)
+      require("astrograph.modes").setup_codecompanion()
+    end,
     opts = function(_, opts)
       local agents = require "astrograph.agents"
       local info = agents.detect()
@@ -179,10 +185,12 @@ return {
         opts.interactions[key] = vim.tbl_deep_extend("force", opts.interactions[key] or {}, { adapter = http_default })
       end
 
-      -- Interação CLI: registra só os agentes presentes no PATH.
+      -- Interação CLI: registra só os agentes presentes no PATH, já no modo
+      -- escolhido (<Leader>Aw).
+      local modes = require "astrograph.modes"
       local cli = {}
       for _, a in ipairs(present) do
-        cli[a.bin] = { cmd = a.cmd, description = a.label }
+        cli[a.bin] = { cmd = (modes.terminal_cmd(a)), description = a.label }
       end
       opts.interactions.cli = vim.tbl_deep_extend("force", opts.interactions.cli or {}, {
         agents = cli,
@@ -239,7 +247,7 @@ return {
           maps.v["<Leader>Ae"] = { function() agent().ask() end, desc = "Pedir ao agente sobre a seleção" }
           maps.n["<Leader>Ao"] = { function() agent().toggle() end, desc = "Painel do agente" }
           maps.n["<Leader>Ak"] = { function() agent().cancel() end, desc = "Interromper o agente" }
-          maps.n["<Leader>Aw"] = { function() agent().pick_mode() end, desc = "Modo do agente" }
+          maps.n["<Leader>Aw"] = { function() require("astrograph.modes").pick() end, desc = "Modo do agente (vale para tudo)" }
           maps.n["<Leader>Av"] = { function() agent().toggle_follow() end, desc = "Seguir o agente (liga/desliga)" }
         end,
       },
