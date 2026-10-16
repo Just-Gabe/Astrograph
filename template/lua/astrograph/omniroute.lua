@@ -296,7 +296,10 @@ function M.setup_chat()
   })
 
   local group = vim.api.nvim_create_augroup("astrograph_omniroute_chat", {})
-  -- trocar o modelo no chat (`ga`) também é uma decisão sua: fica salva
+  -- trocar o modelo no chat (`ga`) também é uma decisão sua: fica salva. O
+  -- mesmo evento dispara ao CRIAR o chat, com o modelo em vigor; só grava
+  -- quando o modelo difere do que já vale (senão abrir um chat com
+  -- OMNIROUTE_MODEL no ambiente apagaria a escolha salva)
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "CodeCompanionChatModel",
@@ -304,7 +307,17 @@ function M.setup_chat()
       local d = args.data or {}
       if type(d.model) ~= "string" or d.model == "" or not d.bufnr then return end
       local ok, cc = pcall(require, "codecompanion")
-      if M.chat_selected(ok and cc.buf_get_chat(d.bufnr) or nil) then M.set_model(d.model, { quiet = true }) end
+      if not M.chat_selected(ok and cc.buf_get_chat(d.bufnr) or nil) then return end
+      if d.model == require("astrograph.agents").omniroute_model() then return end
+      M.set_model(d.model, { quiet = true })
+      local env = vim.env.OMNIROUTE_MODEL
+      if env and env ~= "" then
+        vim.notify(
+          ("OmniRoute: %s salvo, mas OMNIROUTE_MODEL=%s no ambiente vence nos próximos chats."):format(d.model, env),
+          vim.log.levels.WARN,
+          { title = "Astrograph" }
+        )
+      end
     end,
   })
   vim.api.nvim_create_autocmd("User", {
@@ -336,18 +349,17 @@ end
 -- no chat). `OMNIROUTE_MODEL` no ambiente vence a escolha salva.
 
 ---Combos e modelos que o OmniRoute oferece, pelo próprio CLI (não exige a
----chave da API). Guardado por 60 s.
+---chave da API). Guardado por 60 s, mas só lista não vazia: uma falha do CLI
+---não fica presa no cache.
 local choices_cache ---@type { at: integer, list: string[] }?
-function M.model_choices()
-  local now = os.time()
-  if choices_cache and now - choices_cache.at < 60 then return choices_cache.list end
+
+local function choices_cmd() return { require("astrograph.agents").exe "omniroute", "combo", "list", "--output", "json" } end
+
+---@param out string saída do `omniroute combo list --output json`
+---@return string[]
+local function parse_choices(out)
   local list, seen = {}, {}
-  local agents = require "astrograph.agents"
-  local ok, res = pcall(function()
-    return vim.system({ agents.exe "omniroute", "combo", "list", "--output", "json" }, { text = true }):wait(15000)
-  end)
-  local out = ok and res and res.stdout or ""
-  local start = out:find("{", 1, true) -- o CLI imprime avisos antes do JSON
+  local start = (out or ""):find("{", 1, true) -- o CLI imprime avisos antes do JSON
   local okj, data = pcall(vim.json.decode, start and out:sub(start) or "")
   for _, c in ipairs(okj and type(data) == "table" and data.combos or {}) do
     if type(c.name) == "string" and not seen[c.name] then
@@ -361,8 +373,38 @@ function M.model_choices()
       end
     end
   end
-  choices_cache = { at = now, list = list }
   return list
+end
+M._parse_choices = parse_choices -- para os testes
+
+local function remember(list)
+  if #list > 0 then choices_cache = { at = os.time(), list = list } end
+  return list
+end
+
+local function cached()
+  if choices_cache and os.time() - choices_cache.at < 60 then return choices_cache.list end
+end
+
+---Lista síncrona (o `ga` do CodeCompanion pede assim): espera no máximo 5 s.
+---@return string[]
+function M.model_choices()
+  local hit = cached()
+  if hit then return hit end
+  local ok, res = pcall(function() return vim.system(choices_cmd(), { text = true }):wait(5000) end)
+  return remember(parse_choices(ok and res and res.stdout or ""))
+end
+
+---Lista sem travar a tela (para `:OmniRoute modelo`).
+---@param cb fun(list: string[])
+function M.model_choices_async(cb)
+  local hit = cached()
+  if hit then return cb(hit) end
+  local ok = pcall(vim.system, choices_cmd(), { text = true, timeout = 15000 }, function(res)
+    local list = remember(parse_choices(res.stdout or ""))
+    vim.schedule(function() cb(list) end)
+  end)
+  if not ok then cb {} end
 end
 
 ---Salva a escolha e aplica no que já está aberto (avante: sem reiniciar).
@@ -390,23 +432,31 @@ end
 ---@param cb? fun(model: string)
 function M.choose_model(cb)
   local current = require("astrograph.agents").omniroute_model()
-  local list = M.model_choices()
-  local items = vim.list_extend({}, list)
-  items[#items + 1] = "Digitar outro…"
-  local function done(model)
-    if not model or model == "" then return end
-    M.set_model(model)
-    if cb then cb(model) end
-  end
-  vim.ui.select(items, {
-    prompt = "Modelo do OmniRoute" .. (current and (" (atual: " .. current .. ")") or " (nenhum escolhido)"),
-    format_item = function(it) return it == current and (it .. "  ✓") or it end,
-  }, function(choice)
-    if choice == "Digitar outro…" then
-      vim.ui.input({ prompt = "Modelo ou combo do OmniRoute: ", default = current or "" }, done)
-    else
-      done(choice)
+  M.model_choices_async(function(list)
+    local items = vim.list_extend({}, list)
+    items[#items + 1] = "Digitar outro…"
+    if #list == 0 then
+      vim.notify(
+        "OmniRoute: não consegui listar os combos (`omniroute combo list`). O gateway está instalado e configurado? Dá para digitar o nome.",
+        vim.log.levels.WARN,
+        { title = "Astrograph" }
+      )
     end
+    local function done(model)
+      if not model or model == "" then return end
+      M.set_model(model)
+      if cb then cb(model) end
+    end
+    vim.ui.select(items, {
+      prompt = "Modelo do OmniRoute" .. (current and (" (atual: " .. current .. ")") or " (nenhum escolhido)"),
+      format_item = function(it) return it == current and (it .. "  ✓") or it end,
+    }, function(choice)
+      if choice == "Digitar outro…" then
+        vim.ui.input({ prompt = "Modelo ou combo do OmniRoute: ", default = current or "" }, done)
+      else
+        done(choice)
+      end
+    end)
   end)
 end
 
@@ -533,6 +583,12 @@ end
 -- Checagem rápida: estado atual, para `:OmniRoute`.
 function M.report()
   local lines = {}
+  local ok, agents = pcall(require, "astrograph.agents")
+  local model = ok and agents.omniroute_model() or nil
+  local env = vim.env.OMNIROUTE_MODEL
+  lines[#lines + 1] = model
+      and ("modelo: %s%s"):format(model, (env and env ~= "") and " (de OMNIROUTE_MODEL)" or " (escolha salva)")
+    or "modelo: nenhum escolhido — :OmniRoute modelo (o avante só mostra o provedor depois da escolha)"
   if not uv.fs_stat(M.logs_dir()) then
     lines[#lines + 1] = "OmniRoute não encontrado em " .. M.logs_dir()
   else

@@ -84,7 +84,29 @@ H.eq(real.omniroute_model(), "combo-b", "escolha: trocada quando você quer")
 H.ok(vim.fn.filereadable(tmp .. "/astrograph/config.json") == 1, "escolha: no config.json da pasta do teste")
 vim.env.OMNIROUTE_MODEL = "do-ambiente"
 H.eq(real.omniroute_model(), "do-ambiente", "escolha: OMNIROUTE_MODEL vence a salva")
+
+-- evento do chat (CodeCompanionChatModel): dispara ao CRIAR o chat com o modelo
+-- em vigor e ao TROCAR no `ga`; só a troca é gravada
+package.loaded["codecompanion"] = { buf_get_chat = function() return { adapter = { name = "omniroute" } } end }
+O.setup_chat()
+local function chat_model(model, id)
+  vim.api.nvim_exec_autocmds("User", { pattern = "CodeCompanionChatModel", data = { bufnr = 1, id = id, model = model } })
+end
+chat_model("do-ambiente", 1) -- criação com OMNIROUTE_MODEL no ambiente
+H.eq(real.read_config().omniroute_model, "combo-b", "evento: criar chat não apaga a escolha salva")
 vim.env.OMNIROUTE_MODEL = nil
+chat_model("combo-b", 2) -- criação com a escolha salva
+H.eq(real.read_config().omniroute_model, "combo-b", "evento: criar chat não regrava")
+chat_model "combo-c" -- troca no `ga`
+H.eq(real.read_config().omniroute_model, "combo-c", "evento: troca no ga fica salva")
+package.loaded["codecompanion"] = { buf_get_chat = function() return { adapter = { name = "claude_code" } } end }
+chat_model "outro-provedor"
+H.eq(real.read_config().omniroute_model, "combo-c", "evento: chat de outro provedor não mexe")
+
+-- lista de escolha: avisos do CLI antes do JSON; saída ruim = lista vazia
+local saida = 'Loaded env from x\n{"combos":[{"name":"gratis","models":[{"model":"ddgw/gpt-4o"},{"model":"ddgw/gpt-4o"}]}]}'
+H.eq(table.concat(O._parse_choices(saida), ","), "gratis,ddgw/gpt-4o", "lista: combo + modelos, sem repetir")
+H.eq(#O._parse_choices "erro qualquer", 0, "lista: falha do CLI = vazia")
 vim.fn.writefile({ '{ "model": "anthropic/claude" }' }, tmp .. "/opencode/opencode.jsonc")
 H.eq(real.opencode_omniroute(), nil, "opencode: em outro provedor")
 
