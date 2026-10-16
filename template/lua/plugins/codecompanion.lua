@@ -23,6 +23,11 @@ return {
       "CodeCompanionCLI",
     },
     dependencies = { "nvim-lua/plenary.nvim", "nvim-treesitter/nvim-treesitter" },
+    -- Aviso de troca de modelo do OmniRoute no chat (<Leader>Ac): escuta
+    -- ChatSubmitted/ChatDone e escreve o aviso no fim da resposta quando o
+    -- gateway troca de modelo. O painel do agente nativo (<Leader>Ao) usa o
+    -- mesmo módulo, em lua/astrograph/agent.lua.
+    init = function() require("astrograph.omniroute").setup_chat() end,
     opts = function(_, opts)
       local agents = require "astrograph.agents"
       local info = agents.detect()
