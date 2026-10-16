@@ -88,20 +88,30 @@ return {
       -- Provedor: o agente atual (o mesmo do terminal e do chat, escolhido em
       -- :Astrograph agente) via ACP; sem ele, o modelo local (Ollama); depois o
       -- Claude por API (com chave) ou o Claude Code via ACP.
+      opts.providers = opts.providers or {}
+      -- OmniRoute (gateway local, opcional): disponível em :AvanteSwitchProvider
+      -- quando instalado, e NUNCA escolhido como padrão abaixo.
+      if agents.has_omniroute() then
+        opts.providers.omniroute = {
+          __inherited_from = "openai",
+          endpoint = agents.omniroute_url(),
+          api_key_name = "OMNIROUTE_API_KEY",
+          model = agents.omniroute_model(),
+        }
+      end
+
       local current = agents.current()
       if current and current.avante and opts.acp_providers[current.avante] then
         opts.provider = current.avante
       elseif info.ollama and info.local_model then
         opts.provider = "ollama"
-        opts.providers = {
-          ollama = {
-            endpoint = agents.ollama_host(),
-            model = info.local_model,
-            is_env_set = function()
-              local ok, mod = pcall(require, "avante.providers.ollama")
-              return ok and mod.check_endpoint_alive and mod.check_endpoint_alive() or false
-            end,
-          },
+        opts.providers.ollama = {
+          endpoint = agents.ollama_host(),
+          model = info.local_model,
+          is_env_set = function()
+            local ok, mod = pcall(require, "avante.providers.ollama")
+            return ok and mod.check_endpoint_alive and mod.check_endpoint_alive() or false
+          end,
         }
       elseif vim.env.ANTHROPIC_API_KEY then
         opts.provider = "claude"

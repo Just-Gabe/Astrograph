@@ -64,6 +64,28 @@ local specs = {
 -- astroui aplicar `colorscheme = "astrograph"`.
 if theme then table.insert(specs, 1, { dir = theme, name = "astrograph-theme", priority = 1000 }) end
 
+-- Plugins locais desta máquina, fora do git (integrações internas, etc.):
+-- $ASTROGRAPH_LOCAL ou <pasta de dados>/astrograph-local (no Windows,
+-- %LOCALAPPDATA%\astrograph-local). Módulos em `lua/`, specs do lazy em `specs/*.lua`.
+local function astrograph_local()
+  local uv = vim.uv or vim.loop
+  local dir = vim.env.ASTROGRAPH_LOCAL
+  if not dir or dir == "" then dir = vim.fs.joinpath(vim.fs.dirname(vim.fn.stdpath "data"), "astrograph-local") end
+  if not uv.fs_stat(dir .. "/specs") then return end
+  table.insert(specs, { dir = dir, name = "astrograph-local", lazy = false })
+  for name, kind in vim.fs.dir(dir .. "/specs") do
+    if kind == "file" and name:match "%.lua$" then
+      local ok, spec = pcall(dofile, dir .. "/specs/" .. name)
+      if ok and type(spec) == "table" then
+        table.insert(specs, spec)
+      elseif not ok then
+        vim.schedule(function() vim.notify(("Plugin local %s: %s"):format(name, spec), vim.log.levels.ERROR) end)
+      end
+    end
+  end
+end
+astrograph_local()
+
 require("lazy").setup(specs --[[@as LazySpec]], {
   -- Configure any other `lazy.nvim` configuration options here
   install = { colorscheme = { "astrotheme", "habamax" } },

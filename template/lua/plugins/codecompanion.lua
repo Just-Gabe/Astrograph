@@ -23,6 +23,11 @@ return {
       "CodeCompanionCLI",
     },
     dependencies = { "nvim-lua/plenary.nvim", "nvim-treesitter/nvim-treesitter" },
+    -- Aviso de troca de modelo do OmniRoute no chat (<Leader>Ac): escuta
+    -- ChatSubmitted/ChatDone e escreve o aviso no fim da resposta quando o
+    -- gateway troca de modelo. O painel do agente nativo (<Leader>Ao) usa o
+    -- mesmo módulo, em lua/astrograph/agent.lua.
+    init = function() require("astrograph.omniroute").setup_chat() end,
     opts = function(_, opts)
       local agents = require "astrograph.agents"
       local info = agents.detect()
@@ -47,6 +52,39 @@ return {
           return require("codecompanion.adapters").extend("openai_compatible", {
             env = { url = url, api_key = vim.env.ASTROGRAPH_LOCAL_KEY or "no-key" },
             schema = { model = { default = vim.env.ASTROGRAPH_LOCAL_MODEL or "local" } },
+          })
+        end
+      end
+
+      -- OmniRoute (gateway local de modelos, opcional): um provedor a mais, só
+      -- quando instalado, e NUNCA o padrão (fica fora de http_default e
+      -- chat_default abaixo). Escolha no chat com `ga` -> omniroute. Chave em
+      -- OMNIROUTE_API_KEY (`omniroute keys`); modelo/combo em OMNIROUTE_MODEL
+      -- (padrão: o mesmo combo que o opencode usa, ver agents.omniroute_model).
+      if agents.has_omniroute() then
+        local warned_key = false
+        opts.adapters.http.omniroute = function()
+          return require("codecompanion.adapters").extend("openai_compatible", {
+            name = "omniroute",
+            formatted_name = "OmniRoute",
+            env = {
+              url = agents.omniroute_url():gsub("/v1$", ""),
+              -- sem chave: cabeçalho vazio (o gateway local aceita nos combos
+              -- abertos; um texto falso como "no-key" fazia o combo ficar sem
+              -- destino) e um aviso, para o 401 de um combo fechado ter pista
+              api_key = function()
+                local key = vim.env.OMNIROUTE_API_KEY
+                if key and key ~= "" then return key end
+                if not warned_key then
+                  warned_key = true
+                  vim.schedule(function()
+                    vim.notify("OmniRoute sem OMNIROUTE_API_KEY: combos que exigem chave vão recusar (crie com `omniroute keys`).", vim.log.levels.WARN, { title = "Astrograph" })
+                  end)
+                end
+                return ""
+              end,
+            },
+            schema = { model = { default = agents.omniroute_model() } },
           })
         end
       end

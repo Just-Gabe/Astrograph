@@ -589,6 +589,11 @@ function handlers.done(ev)
   st.turn_conflicts = {}
   clear_preview()
   write(("_— fim (%s)_"):format(ev.stop ~= vim.NIL and ev.stop or "?"), "info")
+  -- o OmniRoute pode ter trocado de modelo no meio do turno (o modelo em uso
+  -- esgotou): avisa no painel, com o nome do modelo em verde sobre faixa amarela
+  pcall(function()
+    require("astrograph.omniroute").notice_panel(write, st.buf)
+  end)
   if not panel_win() and #st.queue == 0 then notify "O agente terminou." end
   vim.cmd.redrawstatus()
   local nxt = table.remove(st.queue, 1)
@@ -748,6 +753,9 @@ function M.submit(op)
     st.turn_conflicts[k] = true
   end
   write(op.label or ("**Você:** " .. op.text), "user")
+  -- marca o início do turno: o aviso de troca de modelo do OmniRoute procura o
+  -- registro da chamada a partir daqui (ver lua/astrograph/omniroute.lua)
+  pcall(function() require("astrograph.omniroute").mark "panel" end)
   send { op = "prompt", text = op.text, files = op.files, snippets = op.snippets }
   vim.cmd.redrawstatus()
 end
