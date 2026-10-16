@@ -62,7 +62,10 @@ rodar `nvim`.
 - **OmniRoute (opcional)**: o gateway local de modelos vira mais um provedor no
   chat (`ga` → omniroute) e no avante (`:AvanteSwitchProvider`), **nunca o
   padrão**; o instalador oferece instalá-lo no checklist. Chave em
-  `OMNIROUTE_API_KEY` (`omniroute keys`), modelo/combo em `OMNIROUTE_MODEL`.
+  `OMNIROUTE_API_KEY` (`omniroute keys`). **Nenhum modelo é assumido**: no
+  primeiro pedido o editor pergunta (lista os combos e modelos do OmniRoute),
+  a escolha fica salva e vale até você trocar com `:OmniRoute modelo` ou `ga`
+  no chat (`OMNIROUTE_MODEL` no ambiente vence a escolha salva).
   Quando ele é o escolhido e troca de modelo no meio da conversa, o fim da
   resposta avisa. `:OmniRoute` mostra o estado do detector
   (`vim.g.astrograph_omniroute = false` desliga o aviso).

@@ -59,11 +59,13 @@ return {
       -- OmniRoute (gateway local de modelos, opcional): um provedor a mais, só
       -- quando instalado, e NUNCA o padrão (fica fora de http_default e
       -- chat_default abaixo). Escolha no chat com `ga` -> omniroute. Chave em
-      -- OMNIROUTE_API_KEY (`omniroute keys`); modelo/combo em OMNIROUTE_MODEL
-      -- (padrão: o mesmo combo que o opencode usa, ver agents.omniroute_model).
+      -- OMNIROUTE_API_KEY (`omniroute keys`). Modelo: nenhum é assumido; você
+      -- escolhe (`:OmniRoute modelo` ou `ga`), a escolha fica salva e vale até
+      -- você trocar (OMNIROUTE_MODEL no ambiente vence).
       if agents.has_omniroute() then
         local warned_key = false
         opts.adapters.http.omniroute = function()
+          local base = require "codecompanion.adapters.http.openai_compatible"
           return require("codecompanion.adapters").extend("openai_compatible", {
             name = "omniroute",
             formatted_name = "OmniRoute",
@@ -84,7 +86,26 @@ return {
                 return ""
               end,
             },
-            schema = { model = { default = agents.omniroute_model() } },
+            schema = {
+              model = {
+                default = function() return agents.omniroute_model() end,
+                choices = function() return require("astrograph.omniroute").model_choices() end,
+              },
+            },
+            handlers = {
+              -- sem modelo escolhido, o pedido não sai: pergunta em vez de chutar
+              setup = function(self)
+                self.parameters = self.parameters or {}
+                local model = self.parameters.model
+                if not model or model == "" then model = agents.omniroute_model() end
+                if not model then
+                  vim.schedule(function() require("astrograph.omniroute").ask_model() end)
+                  return false
+                end
+                self.parameters.model = model
+                return base.handlers.setup(self)
+              end,
+            },
           })
         end
       end

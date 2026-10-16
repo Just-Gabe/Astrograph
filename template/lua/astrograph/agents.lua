@@ -243,15 +243,15 @@ end
 ---@return boolean
 function M.has_omniroute() return M.has "omniroute" end
 
----Modelo (ou combo) do OmniRoute: `OMNIROUTE_MODEL`; senão o `omniroute/<x>`
----que o opencode já usa (o mesmo gateway, já configurado); senão "auto".
----Medido em 16/10: "auto" caiu num modelo que só funciona dentro do opencode
----(403), e o combo do opencode respondeu.
----@return string
+---Modelo (ou combo) do OmniRoute que VOCÊ escolheu: `OMNIROUTE_MODEL` ou a
+---escolha salva no config.json (`:OmniRoute modelo`, ou `ga` no chat). Nunca
+---um palpite: sem escolha, nil, e o editor pergunta antes do primeiro pedido.
+---@return string?
 function M.omniroute_model()
   local m = vim.env.OMNIROUTE_MODEL
   if m and m ~= "" then return m end
-  return M.opencode_omniroute() or "auto"
+  local saved = M.read_config().omniroute_model
+  return type(saved) == "string" and saved ~= "" and saved or nil
 end
 
 ---O combo do OmniRoute que o opencode usa como modelo padrão
