@@ -13,7 +13,10 @@
 -- Depois de cada resposta, o modelo servido é comparado com o da resposta
 -- anterior daquela conversa; se mudou, avisamos no fim da resposta:
 --
---   ▸ mudando modelo para <modelo> via OmniRoute (antes: <modelo>)
+--   ▸ mudou para <modelo> via OmniRoute (antes: <modelo>)
+--
+-- No chat do CodeCompanion o aviso é uma linha virtual (só na tela, nunca
+-- enviada ao modelo); no painel do agente, uma linha do próprio painel.
 --
 -- O nome do modelo sai em verde e o aviso inteiro numa faixa amarela (as
 -- cores ficam em `M.setup`). O mesmo aviso vale para os dois chats: o do
@@ -41,7 +44,7 @@ local HL_NOTICE = "AstrographOmniRouteNotice"
 local last = {}
 
 ---Início do turno atual (epoch), para achar o log que ele gerou.
-local pending
+local pending = {} ---@type table<string, string> carimbo do começo do turno, por chat
 
 -- ---------------------------------------------------------------- localização
 
@@ -56,35 +59,44 @@ function M.logs_dir()
   return M.home() .. "/call_logs"
 end
 
----Diretório de log de hoje e de ontem (o dia pode virar no meio do turno).
+---Diretórios de log de hoje e de ontem (o dia pode virar no meio do turno),
+---no horário local e em UTC: os nomes dos logs estão em UTC, e no Brasil o
+---dia UTC vira às 21h locais.
 local function day_dirs(at)
-  local dirs = {}
+  local dirs, seen = {}, {}
   for _, off in ipairs { 0, -86400 } do
-    local t = os.date("*t", at + off)
-    dirs[#dirs + 1] = fmt("%s/%04d-%02d-%02d", M.logs_dir(), t.year, t.month, t.day)
+    for _, f in ipairs { "*t", "!*t" } do
+      local t = os.date(f, at + off)
+      local d = fmt("%s/%04d-%02d-%02d", M.logs_dir(), t.year, t.month, t.day)
+      if not seen[d] then
+        seen[d] = true
+        dirs[#dirs + 1] = d
+      end
+    end
   end
   return dirs
 end
 
----Logs gravados depois de `since` (epoch), do mais novo para o mais antigo.
+---Instante atual como o começo do nome de um log ("2026-10-16T15-09-32.562Z").
+---Os nomes estão em UTC com milissegundos, então comparar o texto é comparar o
+---tempo: filtra a pasta sem um fs_stat por arquivo.
+function M.stamp(sec, usec)
+  if not sec then sec, usec = uv.gettimeofday() end
+  return os.date("!%Y-%m-%dT%H-%M-%S", sec) .. fmt(".%03dZ", math.floor((usec or 0) / 1000))
+end
+
+---Logs gravados a partir de `since` (carimbo de `M.stamp`), do mais novo para o
+---mais antigo.
 local function recent_logs(since)
   local found = {}
   for _, dir in ipairs(day_dirs(os.time())) do
-    if uv.fs_stat(dir) then
-      local ok, names = pcall(vim.fn.readdir, dir)
-      if ok then
-        for _, name in ipairs(names) do
-          if name:sub(-5) == ".json" then
-            local p = dir .. "/" .. name
-            local stt = uv.fs_stat(p)
-            local m = stt and stt.mtime.sec
-            if m and m >= since then found[#found + 1] = { path = p, name = name } end
-          end
-        end
+    local ok, names = pcall(vim.fn.readdir, dir)
+    if ok then
+      for _, name in ipairs(names) do
+        if name >= since and name:sub(-5) == ".json" then found[#found + 1] = { path = dir .. "/" .. name, name = name } end
       end
     end
   end
-  -- o nome começa com o timestamp ISO (ms): ordena melhor que o mtime (em segundos)
   table.sort(found, function(a, b) return a.name > b.name end)
   return found
 end
@@ -96,7 +108,8 @@ end
 -- apenas no log escolhido, para a chave da conversa.
 local HEAD = 16 * 1024
 local FULL_MAX = 4 * 1024 * 1024
-local heads = {} ---@type table<string, table|false> resumo por caminho (o log não muda depois de gravado)
+local heads, nheads = {}, 0 ---@type table<string, table|false>, integer resumo por caminho (o log não muda depois de gravado)
+local HEADS_MAX = 2000 -- editor aberto por dias: o cache recomeça em vez de crescer sem fim
 
 local function field(head, name)
   local v = head:match('"' .. name .. '"%s*:%s*"([^"]*)"')
@@ -112,11 +125,12 @@ local function summary_of(path)
   local head = f:read(HEAD) or ""
   f:close()
   local at = head:find('"summary"', 1, true)
-  if not at then
-    heads[path] = false
-    return nil
-  end
+  -- arquivo ainda sendo gravado: não guarda nada, a próxima tentativa relê
+  if not at then return nil end
+  -- só o objeto summary: o requestBody também tem "model"
   head = head:sub(at)
+  local stop = head:find('"requestBody"', 1, true)
+  if stop then head = head:sub(1, stop - 1) end
   local s = {
     model = field(head, "model"),
     status = tonumber(field(head, "status")),
@@ -124,6 +138,9 @@ local function summary_of(path)
     provider = field(head, "provider"),
     requested = field(head, "requestedModel"),
   }
+  if not s.status then return nil end -- resumo incompleto: idem
+  if nheads >= HEADS_MAX then heads, nheads = {}, 0 end
+  nheads = nheads + 1
   heads[path] = s
   return s
 end
@@ -141,8 +158,17 @@ local function conversation_key(path)
   local body = ok and type(log) == "table" and log.requestBody or nil
   local msgs = type(body) == "table" and body.messages or nil
   for _, m in ipairs(type(msgs) == "table" and msgs or {}) do
-    if type(m) == "table" and m.role == "user" and type(m.content) == "string" and m.content ~= "" then
-      return vim.fn.sha256(m.content)
+    if type(m) == "table" and m.role == "user" then
+      local text = m.content
+      -- formato OpenAI com partes: { { type = "text", text = "..." }, ... }
+      if type(text) == "table" then
+        local parts = {}
+        for _, p in ipairs(text) do
+          if type(p) == "table" and type(p.text) == "string" then parts[#parts + 1] = p.text end
+        end
+        text = table.concat(parts, "\n")
+      end
+      if type(text) == "string" and text ~= "" then return vim.fn.sha256(text) end
     end
   end
   return nil
@@ -189,46 +215,69 @@ function M.state()
   return last
 end
 
----Marca o começo de um turno (chamado ao enviar um pedido).
-function M.mark()
-  pending = os.time()
+---O recurso está ligado? `vim.g.astrograph_omniroute = false` desliga.
+function M.enabled() return vim.g.astrograph_omniroute ~= false end
+
+---Saúde do detector, para `:OmniRoute`: distingue "nenhuma troca" de "não
+---está lendo os logs".
+M.health = { turns = 0, found = 0 } ---@type { turns: integer, found: integer, at?: integer, model?: string }
+
+---Marca o começo de um turno (chamado ao enviar um pedido). Cada chat tem a
+---sua marca (`src`): o do CodeCompanion e o painel do agente não consomem a
+---marca um do outro.
+---@param src? string
+function M.mark(src)
+  pending[src or "default"] = M.stamp()
 end
 
----Depois de um turno, procura o modelo no registro de chamadas e chama `cb`
----com a mudança — se houve. O arquivo é gravado ao fim da resposta, então
----tentamos algumas vezes antes de desistir.
----@param cb fun(change: { from: string, to: string, provider: string?, combo: string? })
-function M.after_turn(cb)
-  if not uv.fs_stat(M.logs_dir()) then return end -- OmniRoute não está instalado
-  local now = os.time()
-  local since = pending
-  pending = nil
-  -- sem marca (ou marca velha demais): assume que a chamada acabou de ocorrer
-  if not since or since > now or now - since > 900 then since = now - 5 end
+M.SETTLE_MS, M.TRIES = 150, 10
 
-  local tries = 0
+---Depois de um turno, procura o modelo no registro de chamadas e chama `cb`
+---com a mudança — se houve. Num turno agêntico há vários pedidos e o log do
+---último é gravado logo depois do fim: só decide quando a lista de logs parou
+---de mudar entre duas tentativas (ou na última tentativa).
+---@param cb fun(change: { from: string, to: string, provider: string?, combo: string? })
+---@param src? string
+function M.after_turn(cb, src)
+  if not M.enabled() or not uv.fs_stat(M.logs_dir()) then return end -- desligado / OmniRoute ausente
+  src = src or "default"
+  local since = pending[src]
+  pending[src] = nil
+  -- sem marca: assume que a chamada acabou de ocorrer
+  if not since then
+    local sec, usec = uv.gettimeofday()
+    since = M.stamp(sec - 5, usec)
+  end
+  M.health.turns = M.health.turns + 1
+
+  local tries, newest = 0, nil
   local function attempt()
     tries = tries + 1
+    local logs = recent_logs(since)
+    local top = logs[1] and logs[1].name
+    local settled = top ~= nil and top == newest
+    newest = top
+    if not settled and tries < M.TRIES then return vim.defer_fn(attempt, M.SETTLE_MS) end
     local info
-    for _, log in ipairs(recent_logs(since - 2)) do
+    for _, log in ipairs(logs) do
       info = read_log(log.path)
       if info then break end
     end
-    if not info then
-      if tries < 8 then return vim.defer_fn(attempt, 150) end
-      return
-    end
+    if not info then return end
+    M.health.found, M.health.at, M.health.model = M.health.found + 1, os.time(), info.model
     local change = M.evaluate(info)
     if change then vim.schedule(function() cb(change) end) end
   end
-  attempt()
+  vim.defer_fn(attempt, M.SETTLE_MS)
 end
 
 -- ------------------------------------------------------------------ desenho
 
 ---Cor do aviso: nome do modelo em verde, faixa amarela no aviso inteiro.
 function M.setup()
-  vim.api.nvim_set_hl(0, HL_MODEL, { fg = "#0b6e0b", bold = true })
+  -- o fundo amarelo também no nome: na linha virtual do chat não há line_hl
+  -- contraste sobre o amarelo: verde 6,0:1 e texto 7,6:1 (mínimo AA: 4,5:1)
+  vim.api.nvim_set_hl(0, HL_MODEL, { fg = "#08560a", bg = "#f2d16b", bold = true })
   vim.api.nvim_set_hl(0, HL_NOTICE, { bg = "#f2d16b", fg = "#3b3b2a" })
 end
 
@@ -245,7 +294,7 @@ function M.setup_chat()
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "CodeCompanionChatSubmitted",
-    callback = function() M.mark() end,
+    callback = function() M.mark "chat" end,
   })
   vim.api.nvim_create_autocmd("User", {
     group = group,
@@ -253,23 +302,53 @@ function M.setup_chat()
     callback = function(args)
       local buf = args.data and args.data.bufnr
       if not buf then return end
+      local ok, cc = pcall(require, "codecompanion")
+      local chat = ok and cc.buf_get_chat(buf) or nil
+      -- só quando ESTE chat está no provedor OmniRoute (escolhido com `ga`)
+      if not M.chat_selected(chat) then return end
       M.after_turn(function(change)
-        local ok, cc = pcall(require, "codecompanion")
-        if not ok then return end
-        local chat = cc.buf_get_chat(buf)
-        if not chat or not vim.api.nvim_buf_is_valid(chat.bufnr) then return end
-        -- o aviso sai como um bloco só dele, sem entrar no histórico do modelo
-        -- (nada é reenviado ao LLM no próximo turno)
-        local last_line = chat:add_buf_message { content = "\n" .. M.text(change) }
-        if last_line then M.decorate(chat.bufnr, last_line - 1, change) end
-      end)
+        if vim.api.nvim_buf_is_valid(buf) then M.notice_chat(chat, change) end
+      end, "chat")
     end,
   })
 end
 
+---O chat usa o provedor OmniRoute? (adapter `omniroute` do CodeCompanion)
+---@param chat? { adapter?: { name?: string } }
+function M.chat_selected(chat)
+  local a = chat and chat.adapter
+  return type(a) == "table" and a.name == "omniroute"
+end
+
+local opencode_cache ---@type { at: integer, uses: boolean }?
+
+---O painel do agente passa pelo OmniRoute? Só quando o agente atual é o
+---opencode e o modelo padrão dele é do provedor `omniroute/...` (o opencode é
+---o único agente do painel que roteia pelo gateway). Relido a cada 30 s.
+function M.panel_selected()
+  local ok, agents = pcall(require, "astrograph.agents")
+  local cur = ok and agents.current() or nil
+  if not cur or cur.bin ~= "opencode" then return false end
+  local now = os.time()
+  if opencode_cache and now - opencode_cache.at < 30 then return opencode_cache.uses end
+  local uses = false
+  local dir = vim.env.XDG_CONFIG_HOME and (vim.env.XDG_CONFIG_HOME .. "/opencode") or vim.fn.expand "~/.config/opencode"
+  for _, name in ipairs { "opencode.jsonc", "opencode.json" } do
+    local f = io.open(dir .. "/" .. name, "r")
+    if f then
+      local text = f:read "*a"
+      f:close()
+      uses = text:match '"model"%s*:%s*"omniroute/' ~= nil
+      break
+    end
+  end
+  opencode_cache = { at = now, uses = uses }
+  return uses
+end
+
 ---O texto do aviso (uma linha).
 function M.text(change)
-  local t = fmt("▸ mudando modelo para %s via OmniRoute", change.to)
+  local t = fmt("▸ mudou para %s via OmniRoute", change.to)
   if change.from and change.from ~= "" then t = t .. fmt(" (antes: %s)", change.from) end
   return t
 end
@@ -300,15 +379,34 @@ function M.decorate(buf, row, change)
   end
 end
 
+---Avisa no chat do CodeCompanion com uma linha VIRTUAL acima do cabeçalho do
+---próximo pedido. Quando o `ChatDone` dispara, o chat já escreveu esse
+---cabeçalho (`ready_for_input`), e tudo dali para baixo é lido como o próximo
+---pedido do usuário: texto de verdade no buffer seria enviado ao modelo e se
+---misturaria com o que você digita. A linha virtual só aparece na tela.
+---@param chat { bufnr: integer, header_line?: integer }
+---@param change { from?: string, to: string }
+function M.notice_chat(chat, change)
+  local buf = chat.bufnr
+  if type(buf) ~= "number" or not vim.api.nvim_buf_is_valid(buf) then return end
+  local n = vim.api.nvim_buf_line_count(buf)
+  -- header_line = 1ª linha (1-based) depois do cabeçalho; o cabeçalho é a anterior
+  local row = math.min(math.max((tonumber(chat.header_line) or n) - 2, 0), n - 1)
+  local chunks = { { "▸ mudou para ", HL_NOTICE }, { change.to, HL_MODEL }, { " via OmniRoute", HL_NOTICE } }
+  if change.from and change.from ~= "" then chunks[#chunks + 1] = { fmt(" (antes: %s)", change.from), HL_NOTICE } end
+  pcall(vim.api.nvim_buf_set_extmark, buf, M.ns, row, 0, { virt_lines = { chunks }, virt_lines_above = true })
+end
+
 ---Avisa no painel do agente nativo: escreve a linha e pinta. O `write` do
 ---painel devolve a linha (0-based) onde o texto parou.
 ---@param write fun(text: string, kind: string): integer
 ---@param buf integer buffer do painel
 function M.notice_panel(write, buf)
+  if not M.panel_selected() then return end
   M.after_turn(function(change)
     local row = write(M.text(change), "info")
     M.decorate(buf, row, change)
-  end)
+  end, "panel")
 end
 
 -- Checagem rápida: estado atual, para `:OmniRoute`.
@@ -325,6 +423,10 @@ function M.report()
     lines[#lines + 1] = fmt("  conversa %d: %s", n, model)
   end
   if n == 0 then lines[#lines + 1] = "  nenhuma conversa vista ainda" end
+  local h = M.health
+  lines[#lines + 1] = fmt("detector: %s; %d turno(s) checado(s), modelo achado em %d", M.enabled() and "ligado" or "desligado (vim.g.astrograph_omniroute = false)", h.turns, h.found)
+  if h.at then lines[#lines + 1] = fmt("  último: %s às %s", h.model or "?", os.date("%H:%M:%S", h.at)) end
+  if h.turns > 0 and h.found == 0 then lines[#lines + 1] = "  nenhum log com resposta 2xx lido: o formato do log pode ter mudado" end
   return lines
 end
 

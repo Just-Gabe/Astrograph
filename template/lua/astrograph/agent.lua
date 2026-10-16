@@ -755,7 +755,7 @@ function M.submit(op)
   write(op.label or ("**Você:** " .. op.text), "user")
   -- marca o início do turno: o aviso de troca de modelo do OmniRoute procura o
   -- registro da chamada a partir daqui (ver lua/astrograph/omniroute.lua)
-  pcall(function() require("astrograph.omniroute").mark() end)
+  pcall(function() require("astrograph.omniroute").mark "panel" end)
   send { op = "prompt", text = op.text, files = op.files, snippets = op.snippets }
   vim.cmd.redrawstatus()
 end
