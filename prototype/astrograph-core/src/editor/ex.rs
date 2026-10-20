@@ -183,7 +183,7 @@ impl Editor {
                     i += 1;
                 }
             }
-        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap") {
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap" | "t" | "co" | "copy" | "m" | "move" | "sort" | "sor") {
             // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
             let primeiro = nome.chars().next().unwrap();
             if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {
@@ -234,9 +234,14 @@ impl Editor {
                 }
  self.cursor = Pos::new(faixa.b, self.buf.first_nonblank(faixa.b));
                 self.fix_cursor();
-                self.curswant = self.want_here();
             }
             "set" | "se" => self.ex_set(&resto),
+            "t" | "co" | "copy" => self.ex_copiar(faixa.a, faixa.b, &resto),
+            "m" | "move" => self.ex_mover(faixa.a, faixa.b, &resto),
+            "sort" | "sor" => {
+                let (a, b) = if faixa.dado { (faixa.a, faixa.b) } else { (0, self.last_row()) };
+                self.ex_ordenar(a, b, &resto);
+            }
             "map" | "nm" | "nmap" | "im" | "imap" | "vm" | "vmap" | "xm" | "xmap" | "no" | "noremap" | "nn" | "nnoremap" | "ino" | "inoremap" | "vn" | "vnoremap" | "xn" | "xnoremap" | "unm" | "unmap" | "nun" | "nunmap"
             | "iu" | "iunmap" | "vu" | "vunmap" | "xu" | "xunmap" | "mapc" | "mapclear" => self.ex_mapa(&nome, &resto),
             "normal" | "norm" => {
@@ -327,6 +332,157 @@ impl Editor {
             return;
         }
         self.mapear(modos, lhs, rhs, recursivo);
+    }
+
+    /// Destino de `:t` e `:m`: o número da linha depois da qual inserir (`0` = antes da primeira).
+    fn ex_destino(&self, resto: &str) -> Option<i64> {
+        let s: Vec<char> = resto.trim().chars().collect();
+        if s.is_empty() {
+            return None;
+        }
+        if s.iter().all(|c| *c == '0') {
+            return Some(-1);
+        }
+        let mut i = 0;
+        let r = self.endereco(&s, &mut i)??;
+        (i == s.len()).then_some(r as i64)
+    }
+
+    fn ex_copiar(&mut self, a: usize, b: usize, resto: &str) {
+        let Some(dest) = self.ex_destino(resto) else {
+            self.failed = true;
+            return;
+        };
+        let old = self.buf.rope.clone();
+        self.checkpoint();
+        let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+        let ini = (dest + 1) as usize;
+        for (k, l) in linhas.iter().enumerate() {
+            self.buf.insert_line(ini + k, l);
+        }
+        self.adjust_marks(&old);
+        let r = ini + linhas.len() - 1;
+        self.cursor = Pos::new(r, self.col_for_want(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    fn ex_mover(&mut self, a: usize, b: usize, resto: &str) {
+        let Some(dest) = self.ex_destino(resto) else {
+            self.failed = true;
+            return;
+        };
+        // E134: não dá para mover para dentro do próprio trecho
+        if dest >= a as i64 && dest < b as i64 {
+            self.failed = true;
+            return;
+        }
+        let n = b - a + 1;
+        let fim = if dest >= b as i64 {
+            let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+            self.checkpoint();
+            let ini = (dest + 1) as usize;
+            for (k, l) in linhas.iter().enumerate() {
+                self.buf.insert_line(ini + k, l);
+            }
+            self.buf.delete_lines(a, b);
+            dest as usize
+        } else if dest + 1 == a as i64 {
+            b
+        } else {
+            let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+            self.checkpoint();
+            self.buf.delete_lines(a, b);
+            let ini = (dest + 1) as usize;
+            for (k, l) in linhas.iter().enumerate() {
+                self.buf.insert_line(ini + k, l);
+            }
+            ini + n - 1
+        };
+        let r = fim.min(self.last_row());
+        self.cursor = Pos::new(r, self.col_for_want(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    /// `:sort[!] [n] [i] [u]` (sem `/padrão/` nem `x`/`o`/`b`/`f`).
+    fn ex_ordenar(&mut self, a: usize, b: usize, args: &str) {
+        let (mut rev, mut num, mut ic, mut uniq) = (false, false, false, false);
+        let args = args.trim_start();
+        let args = match args.strip_prefix('!') {
+            Some(r) => {
+                rev = true;
+                r
+            }
+            None => args,
+        };
+        for c in args.chars() {
+            match c {
+                'n' => num = true,
+                'i' => ic = true,
+                'u' => uniq = true,
+                ' ' => {}
+                _ => {
+                    self.failed = true;
+                    return;
+                }
+            }
+        }
+        let numero = |l: &str| -> Option<i128> {
+            let cs: Vec<char> = l.chars().collect();
+            let i = cs.iter().position(|c| c.is_ascii_digit())?;
+            let neg = i > 0 && cs[i - 1] == '-';
+            let v: i128 = cs[i..].iter().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
+            Some(if neg { -v } else { v })
+        };
+        let chave = |l: &str| -> String { if ic { l.to_lowercase() } else { l.to_string() } };
+        let mut linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+        let original = linhas.clone();
+        if num {
+            linhas.sort_by(|x, y| numero(x).cmp(&numero(y)));
+        } else {
+            linhas.sort_by(|x, y| chave(x).as_bytes().cmp(chave(y).as_bytes()));
+        }
+        if rev {
+            // o Vim percorre o resultado de trás para frente (empates também invertem)
+            linhas.reverse();
+        }
+        if uniq {
+            let mut fora: Vec<String> = Vec::new();
+            for l in linhas {
+                let igual = fora.last().is_some_and(|p| if num { numero(p) == numero(&l) } else { chave(p) == chave(&l) });
+                if !igual {
+                    fora.push(l);
+                }
+            }
+            linhas = fora;
+        }
+        if linhas != original {
+            let old = self.buf.rope.clone();
+            self.checkpoint();
+            self.buf.delete_lines(a, b);
+            if self.buf.line_count() == 1 && self.buf.line(0).is_empty() && a == 0 && b + 1 >= old.len_lines() {
+                // buffer todo apagado: sobrou uma linha vazia
+                self.buf.delete(Pos::new(0, 0), Pos::new(0, 0));
+                for (k, l) in linhas.iter().enumerate() {
+                    if k == 0 {
+                        self.buf.insert(Pos::new(0, 0), l);
+                    } else {
+                        self.buf.insert_line(k, l);
+                    }
+                }
+            } else {
+                for (k, l) in linhas.iter().enumerate() {
+                    self.buf.insert_line(a + k, l);
+                }
+            }
+            self.adjust_marks(&old);
+        }
+        self.cursor = Pos::new(a.min(self.last_row()), 0);
+        let r = self.cursor.row;
+        self.cursor = Pos::new(r, self.buf.first_nonblank(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
     }
 
     fn ex_apagar(&mut self, a: usize, b: usize) {
