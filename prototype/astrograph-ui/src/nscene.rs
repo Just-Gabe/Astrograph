@@ -77,6 +77,9 @@ pub struct Scene {
     toast_cache: Option<(String, ToastKind)>,
     toast_id: u64,
     toast_at: Instant,
+    shift: Spring,
+    shift_row: usize,
+    last_lines: usize,
     hit_id: u64,
     hit_fade: Chase,
     flash_id: u64,
@@ -131,6 +134,9 @@ impl Scene {
             toast_cache: None,
             toast_id: 0,
             toast_at: now,
+            shift: Spring::new(0.0, 22.0, 1.0),
+            shift_row: usize::MAX,
+            last_lines: 0,
             hit_id: 0,
             hit_fade: Chase::new(0.0, 14.0),
             flash_id: 0,
@@ -204,7 +210,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -254,6 +260,23 @@ impl Scene {
         if vm.cursor != self.last_cursor || vm.seq != self.last_seq {
             self.moved_at = now;
         }
+        // linhas entrando/saindo: o que vem depois desliza até o novo lugar
+        if !self.first && self.last_lines != 0 && vm.lines != self.last_lines {
+            let n = vm.lines.abs_diff(self.last_lines);
+            let lo = self.last_cursor.0.min(vm.cursor.0);
+            if n <= 40 {
+                let dist = n as f32 * lay.line_h;
+                if vm.lines < self.last_lines {
+                    self.shift_row = lo;
+                    self.shift.x += dist;
+                } else {
+                    self.shift_row = lo + n + (vm.cursor.0 > self.last_cursor.0) as usize;
+                    self.shift.x -= dist;
+                }
+                self.shift.target = 0.0;
+            }
+        }
+        self.last_lines = vm.lines;
         self.last_cursor = vm.cursor;
         self.last_seq = vm.seq;
         // seleção
@@ -361,7 +384,7 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = [&self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -437,13 +460,15 @@ impl Scene {
         }
 
         // linhas visíveis
-        let first = ((top_px / lay.line_h).floor() as i64 - 1).max(0) as usize;
-        let last = (((top_px + h - lay.text_y) / lay.line_h).ceil() as usize + 1).min(vm.lines);
+        let pad = (self.shift.x.abs() / lay.line_h).ceil() as i64;
+        let first = ((top_px / lay.line_h).floor() as i64 - 1 - pad).max(0) as usize;
+        let last = (((top_px + h - lay.text_y) / lay.line_h).ceil() as usize + 1 + pad as usize).min(vm.lines);
         let gpx = self.font_px * 0.84;
         let cur_row = vm.cursor.0;
         let mut classes: Vec<Option<Cls>> = Vec::new();
         for row in first..last {
-            let y = lay.text_y + row as f32 * lay.line_h - top_px;
+            let slide = if row >= self.shift_row { self.shift.x } else { 0.0 };
+            let y = lay.text_y + row as f32 * lay.line_h - top_px + slide;
             if y + lay.line_h < 0.0 || y > h {
                 continue;
             }
@@ -841,6 +866,28 @@ mod testes {
         s.feed(":noh<CR>");
         let vm = s.view_model();
         assert!(vm.hits.is_empty() && vm.hits_id == 0);
+    }
+
+    #[test]
+    fn apagar_linha_faz_o_resto_subir_deslizando() {
+        let Some(mut sc) = cena() else { return };
+        let texto: String = (0..8).map(|i| format!("linha {i}\n")).collect();
+        let mut s = Session::new(&texto, None);
+        let lay = sc.layout(640, 400, 8);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 640, 400, t0);
+        s.feed("jdd");
+        let vm = s.view_model();
+        assert_eq!(vm.lines, 7);
+        quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16));
+        assert!(sc.shift.x > lay.line_h * 0.5, "o resto começa onde estava");
+        let mut fim = vec![];
+        for i in 2..60 {
+            fim = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(!fim.is_empty() && sc.shift.x.abs() < 0.5, "e assenta no lugar");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`
