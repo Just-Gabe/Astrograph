@@ -132,6 +132,8 @@ pub struct Editor {
     pending: Vec<Key>,
     regs: HashMap<char, Reg>,
     unnamed: Option<Reg>,
+    /// Último trecho copiado: (contador, início, fim exclusivo, por linhas). Para efeitos visuais.
+    pub last_yank: (u64, Pos, Pos, bool),
     undo: Vec<Snap>,
     redo: Vec<Snap>,
     last_find: Option<(char, bool, bool)>,
@@ -172,6 +174,7 @@ impl Editor {
             pending: Vec::new(),
             regs: HashMap::new(),
             unnamed: None,
+            last_yank: (0, Pos::new(0, 0), Pos::new(0, 0), false),
             undo: Vec::new(),
             redo: Vec::new(),
             last_find: None,
@@ -198,6 +201,11 @@ impl Editor {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Padrão da última busca (`/`, `?`, `*`, `#`).
+    pub fn last_pattern(&self) -> Option<&str> {
+        self.last_search.as_ref().map(|(p, _)| p.as_str())
     }
 
     /// Texto do que está sendo digitado: `/padrão` ou `?padrão` durante uma busca.
@@ -916,6 +924,13 @@ impl Editor {
                     return;
                 }
                 self.store(reg, text, linewise, false);
+                let end = match kind {
+                    Kind::Line => Pos::new(b.row, self.buf.line_len(b.row)),
+                    Kind::Incl => Pos::new(b.row, (b.col + 1).min(self.buf.line_len(b.row))),
+                    Kind::Excl => b,
+                };
+                let start = if kind == Kind::Line { Pos::new(a.row, 0) } else { a };
+                self.last_yank = (self.last_yank.0 + 1, start, end, linewise);
                 // o cursor vai para o início do trecho
                 match kind {
                     Kind::Line => {

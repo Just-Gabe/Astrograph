@@ -30,6 +30,10 @@ pub struct Session {
     toast: Option<(u64, String, ToastKind)>,
     toast_id: u64,
     seq: u64,
+    bump: Option<(u64, f32)>,
+    hl_pat: String,
+    hl_id: u64,
+    hl_off: bool,
     pub quit: bool,
 }
 
@@ -54,6 +58,10 @@ impl Session {
             lang,
             doc: None,
             cmdline: None,
+            bump: None,
+            hl_pat: String::new(),
+            hl_id: 0,
+            hl_off: false,
             toast: None,
             toast_id: 0,
             seq: 0,
@@ -139,7 +147,12 @@ impl Session {
     /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
     pub fn scroll(&mut self, lines: f32) {
         let max = self.ed.buf.line_count().saturating_sub(1) as f32;
-        self.top = (self.top + lines).clamp(0.0, max);
+        let wanted = self.top + lines;
+        self.top = wanted.clamp(0.0, max);
+        if wanted != self.top {
+            let id = self.bump.map_or(1, |(i, _)| i + 1);
+            self.bump = Some((id, wanted - self.top));
+        }
         // o cursor acompanha para não sair da tela
         let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
         let row = self.ed.cursor.row as f32;
@@ -173,6 +186,7 @@ impl Session {
             return;
         }
         match name {
+            "noh" | "nohl" | "nohlsearch" => self.hl_off = true,
             "w" | "write" => self.write(arg),
             "q" | "quit" => {
                 if self.modified() && !bang {
@@ -284,6 +298,33 @@ impl Session {
             (k, (lo.row, lo.col), (hi.row, hi.col))
         });
         let search = self.ed.search_line();
+        // realce da busca: ao digitar já mostra as ocorrências; `:noh` apaga até mudar o padrão
+        let pat = match &search {
+            Some(s) if s.chars().count() > 1 => Some(s.chars().skip(1).collect::<String>()),
+            _ => self.ed.last_pattern().map(str::to_string),
+        };
+        let mut hits = Vec::new();
+        let pat = pat.filter(|p| !p.is_empty());
+        if pat.as_deref() != Some(self.hl_pat.as_str()) {
+            self.hl_pat = pat.clone().unwrap_or_default();
+            self.hl_id += 1;
+            self.hl_off = false;
+        }
+        if let (Some(p), false) = (&pat, self.hl_off) {
+            if let Some(re) = astrograph_core::search::compile(p) {
+                for row in lo..hi {
+                    let line = self.ed.buf.line(row);
+                    for m in re.find_iter(&line).take(200) {
+                        if m.start() == m.end() {
+                            continue;
+                        }
+                        let a = line[..m.start()].chars().count();
+                        hits.push((row, a, a + line[m.start()..m.end()].chars().count()));
+                    }
+                }
+            }
+        }
+        let hits_id = if pat.is_some() && !self.hl_off { self.hl_id } else { 0 };
         let mode = if self.cmdline.is_some() {
             ModeKind::Command
         } else if search.is_some() {
@@ -320,7 +361,13 @@ impl Session {
             cmd,
             toast: self.toast.clone(),
             showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
-            flash: None,
+            bump: self.bump,
+            hits,
+            hits_id,
+            flash: (self.ed.last_yank.0 > 0).then(|| {
+                let (id, a, b, _) = self.ed.last_yank;
+                ((a.row, a.col), (b.row, b.col), id)
+            }),
         }
     }
 }

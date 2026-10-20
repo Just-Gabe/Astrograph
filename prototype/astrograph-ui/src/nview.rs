@@ -47,6 +47,12 @@ pub struct ViewModel {
     pub toast: Option<(u64, String, ToastKind)>,
     pub showcmd: String,
     /// trecho que acabou de ser copiado (clarão): (início, fim, id)
+    /// ocorrências da busca nas linhas em volta da tela: (linha, início, fim) em caracteres
+    /// tentativa de rolar além do fim: (id, linhas; < 0 = acima do início)
+    pub bump: Option<(u64, f32)>,
+    pub hits: Vec<(usize, usize, usize)>,
+    /// muda quando o padrão muda (0 = sem realce); a cena reinicia o fade
+    pub hits_id: u64,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -69,6 +75,9 @@ impl ViewModel {
             cmd: None,
             toast: None,
             showcmd: String::new(),
+            bump: None,
+            hits: Vec::new(),
+            hits_id: 0,
             flash: None,
         }
     }
