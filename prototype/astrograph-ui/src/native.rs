@@ -1380,7 +1380,7 @@ mod testes {
         s.feed(":g/q/s/q/Q/<CR>");
         assert_eq!(s.ed.lines(), vec!["X bar", "Qux"]);
         // seleção visual vira a faixa '<,'>
-        s.feed("Vj:s/$/!/<CR>");
+        s.feed("ggVj:s/$/!/<CR>");
         assert_eq!(s.ed.lines(), vec!["X bar!", "Qux!"]);
         // desfazer volta tudo de um comando só
         s.feed("u");
