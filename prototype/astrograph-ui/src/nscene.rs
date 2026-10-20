@@ -77,6 +77,10 @@ pub struct Scene {
     toast_cache: Option<(String, ToastKind)>,
     toast_id: u64,
     toast_at: Instant,
+    over: Spring,
+    bump_id: u64,
+    fade_rows: (usize, usize),
+    fade: Chase,
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
@@ -134,6 +138,10 @@ impl Scene {
             toast_cache: None,
             toast_id: 0,
             toast_at: now,
+            over: Spring::new(0.0, 20.0, 0.5),
+            bump_id: 0,
+            fade_rows: (0, 0),
+            fade: Chase::new(1.0, 9.0),
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
@@ -210,10 +218,10 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
-        for ch in [&mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
+        for ch in [&mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
             ch.step(dt);
         }
         // avisos: somem sozinhos
@@ -260,6 +268,17 @@ impl Scene {
         if vm.cursor != self.last_cursor || vm.seq != self.last_seq {
             self.moved_at = now;
         }
+        // rolar além do fim: a tela cede um pouco e volta com a mola
+        if let Some((id, lines)) = vm.bump {
+            if id != self.bump_id {
+                if !self.first {
+                    let lim = 48.0 * s;
+                    self.over.x = (self.over.x - lines.signum() * (lines.abs() * lay.line_h * 0.5).min(lim)).clamp(-lim, lim);
+                    self.over.target = 0.0;
+                }
+                self.bump_id = id;
+            }
+        }
         // linhas entrando/saindo: o que vem depois desliza até o novo lugar
         if !self.first && self.last_lines != 0 && vm.lines != self.last_lines {
             let n = vm.lines.abs_diff(self.last_lines);
@@ -272,6 +291,9 @@ impl Scene {
                 } else {
                     self.shift_row = lo + n + (vm.cursor.0 > self.last_cursor.0) as usize;
                     self.shift.x -= dist;
+                    self.fade_rows = (lo + (vm.cursor.0 > self.last_cursor.0) as usize, self.shift_row);
+                    self.fade.v = 0.0;
+                    self.fade.target = 1.0;
                 }
                 self.shift.target = 0.0;
             }
@@ -384,8 +406,8 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
-        let chases = [&self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
+        let springs = [&self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let chases = [&self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
         let (_, blink_wake) = self.blink(now);
@@ -411,7 +433,7 @@ impl Scene {
     fn paint_content(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, now: Instant) {
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
-        let top_px = self.top.x;
+        let top_px = self.top.x - self.over.x;
         let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
         c.set_clip(0, 0, c.w, clip_bottom);
 
@@ -473,11 +495,12 @@ impl Scene {
                 continue;
             }
             let base = y + self.ascent;
+            let ra = if row >= self.fade_rows.0 && row < self.fade_rows.1 { self.fade.v.clamp(0.0, 1.0) } else { 1.0 };
             // número da linha
             let num = (row + 1).to_string();
             let nw = self.mono.measure(&num, gpx);
             let ncol = if row == cur_row { d::DIM } else { d::FAINT };
-            c.text(&mut self.mono, gpx, lay.gutter_x + lay.gutter_w - nw, base, &num, ncol, 1.0);
+            c.text(&mut self.mono, gpx, lay.gutter_x + lay.gutter_w - nw, base, &num, ncol, ra);
             // texto
             let line = vm.line(row);
             let n = line.chars().count();
@@ -504,7 +527,7 @@ impl Scene {
                     } else {
                         &mut self.mono
                     };
-                    c.glyph_at(font, self.font_px, x, base, ch, color, 1.0);
+                    c.glyph_at(font, self.font_px, x, base, ch, color, ra);
                 }
                 v += wd;
             }
@@ -888,6 +911,45 @@ mod testes {
             fim = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
         }
         assert!(!fim.is_empty() && sc.shift.x.abs() < 0.5, "e assenta no lugar");
+    }
+
+    #[test]
+    fn rolar_alem_do_inicio_cede_e_volta() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("a\nb\nc\n", None);
+        let lay = sc.layout(640, 400, 3);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 640, 400, t0);
+        s.scroll(-3.0);
+        let vm = s.view_model();
+        assert!(vm.bump.is_some());
+        quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16));
+        assert!(sc.over.x > 1.0, "a tela cede para baixo");
+        for i in 2..80 {
+            quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.over.x.abs() < 0.5, "e volta ao lugar");
+    }
+
+    #[test]
+    fn linhas_coladas_entram_com_fade() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("um\ndois\ntres\n", None);
+        let lay = sc.layout(640, 400, 3);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 640, 400, t0);
+        s.feed("yyjp");
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16));
+        assert!(sc.fade.v < 0.6 && sc.fade_rows.1 > sc.fade_rows.0, "começa transparente: {:?} {}", sc.fade_rows, sc.fade.v);
+        for i in 2..80 {
+            quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.fade.v > 0.98);
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

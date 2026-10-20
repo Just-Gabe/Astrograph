@@ -30,6 +30,7 @@ pub struct Session {
     toast: Option<(u64, String, ToastKind)>,
     toast_id: u64,
     seq: u64,
+    bump: Option<(u64, f32)>,
     hl_pat: String,
     hl_id: u64,
     hl_off: bool,
@@ -57,6 +58,7 @@ impl Session {
             lang,
             doc: None,
             cmdline: None,
+            bump: None,
             hl_pat: String::new(),
             hl_id: 0,
             hl_off: false,
@@ -145,7 +147,12 @@ impl Session {
     /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
     pub fn scroll(&mut self, lines: f32) {
         let max = self.ed.buf.line_count().saturating_sub(1) as f32;
-        self.top = (self.top + lines).clamp(0.0, max);
+        let wanted = self.top + lines;
+        self.top = wanted.clamp(0.0, max);
+        if wanted != self.top {
+            let id = self.bump.map_or(1, |(i, _)| i + 1);
+            self.bump = Some((id, wanted - self.top));
+        }
         // o cursor acompanha para não sair da tela
         let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
         let row = self.ed.cursor.row as f32;
@@ -354,6 +361,7 @@ impl Session {
             cmd,
             toast: self.toast.clone(),
             showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
+            bump: self.bump,
             hits,
             hits_id,
             flash: (self.ed.last_yank.0 > 0).then(|| {
