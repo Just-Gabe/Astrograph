@@ -2050,6 +2050,12 @@ mod testes {
     #[test]
     fn tela_inicial_aparece_some_ao_editar_e_avisa_o_que_falta() {
         let Some(mut sc) = cena() else { return };
+        // `s` retoma a última conversa do Claude: HOME vazio para o teste não depender da máquina
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let home_antes = std::env::var_os("HOME");
+        let vazio = std::env::temp_dir().join(format!("astrograph-home-vazio-{}", std::process::id()));
+        std::fs::create_dir_all(&vazio).unwrap();
+        std::env::set_var("HOME", &vazio);
         let mut s = Session::welcome();
         let lay = sc.layout(800, 600, 1);
         s.resize(lay.cols, lay.rows.floor());
@@ -2064,7 +2070,11 @@ mod testes {
         assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
         s.feed("s");
         let vm = s.view_model();
-        assert!(vm.dash && vm.toast.is_some(), "s ainda não existe: avisa e segue na tela inicial");
+        match home_antes {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert!(vm.dash && vm.toast.is_some(), "sem conversa anterior: avisa e segue na tela inicial");
         s.feed("f");
         assert!(s.view_model().picker.is_some(), "f abre o buscador de arquivos");
         s.feed("<Esc>");

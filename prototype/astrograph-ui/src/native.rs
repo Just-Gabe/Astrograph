@@ -38,6 +38,10 @@ enum Destino {
     Local(PathBuf, usize, usize),
     /// ação de código
     Acao(lsp::Acao),
+    /// trocar o agente / o modo do agente / retomar uma conversa do Claude Code
+    Agente(&'static str),
+    Modo(&'static str),
+    Sessao { id: String, pasta: PathBuf },
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +75,9 @@ struct Pendente {
 
 /// Quanto esperar o servidor antes de gravar mesmo sem a formatação.
 const FORMATAR_ESPERA_MS: u128 = 2500;
+
+/// Quanto esperar o agente abrir antes de entregar um pedido pronto.
+const AGENTE_ESPERA_MS: u128 = 1200;
 
 struct Picker {
     kind: PickKind,
@@ -216,6 +223,16 @@ pub struct Session {
     pub abrir_pedido: Option<(PathBuf, Option<(usize, usize)>)>,
     pub aba_pedido: Option<PedidoAba>,
     pub jan_pedido: Option<PedidoJanela>,
+    /// o terminal aberto é o de um agente (os pedidos prontos vão para ele)
+    term_agente: bool,
+    /// pedido pronto esperando o agente terminar de abrir: (desde quando, texto)
+    agente_fila: Option<(std::time::Instant, String)>,
+    /// só nos testes: pasta do `config.json` e agentes tidos como instalados
+    agentes_pasta: Option<PathBuf>,
+    agentes_tem: Option<Vec<&'static str>>,
+    /// arquivo no disco: última modificação vista e quando se olhou (para recarregar o que o agente editou)
+    mtime: Option<std::time::SystemTime>,
+    mtime_olhado: std::time::Instant,
     /// mouse: último clique (instante, linha, coluna visual, quantos seguidos) e se o botão esquerdo está apertado
     clique: Option<(std::time::Instant, usize, usize, u8)>,
     mouse_baixo: bool,
@@ -321,6 +338,12 @@ impl Session {
             abrir_pedido: None,
             aba_pedido: None,
             jan_pedido: None,
+            term_agente: false,
+            agente_fila: None,
+            agentes_pasta: None,
+            agentes_tem: None,
+            mtime: None,
+            mtime_olhado: std::time::Instant::now(),
             clique: None,
             mouse_baixo: false,
             numero: true,
@@ -356,6 +379,7 @@ impl Session {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
         s.git_load();
+        s.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if !path.exists() {
             s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
@@ -485,8 +509,9 @@ impl Session {
             return;
         }
         let livre = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
-        // <Espaço> é o líder: `ff` arquivos, `fw` texto, `fo` recentes
-        if livre && self.leader.is_empty() && k == Key::Char(self.leader_key) {
+        // <Espaço> é o líder: `ff` arquivos, `fw` texto, `fo` recentes (no visual também, para `<Líder>Ai` na seleção)
+        let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
+        if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
             return;
         }
@@ -521,6 +546,13 @@ impl Session {
                 [Key::Char('l'), Key::Char('r')] => self.lsp_consulta(PedidoLsp::Referencias),
                 [Key::Char('x'), Key::Char('x')] => self.diag_lista(),
                 [Key::Char('A'), Key::Char('l')] => self.open_agent(),
+                [Key::Char('A'), Key::Char('g')] => self.agente_escolher(),
+                [Key::Char('A'), Key::Char('w')] => self.agente_modo(),
+                [Key::Char('A'), Key::Char('S')] => self.agente_sessoes(),
+                [Key::Char('A'), Key::Char('x')] => self.agente_corrigir(),
+                [Key::Char('A'), Key::Char('i')] => self.agente_explicar(),
+                [Key::Char('A'), Key::Char('r')] => self.agente_enviar(crate::agentes::pedido_revisar()),
+                [Key::Char('A'), Key::Char('m')] => self.agente_enviar(crate::agentes::pedido_commit()),
                 [Key::Char('A'), Key::Char('z')] => self.toggle_zen(),
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
@@ -580,7 +612,13 @@ impl Session {
                 Key::Char('w') => return self.pick_open(PickKind::Texto),
                 Key::Char('a') => return self.open_agent(),
                 Key::Char('s') => {
-                    self.say("Ainda não disponível no motor nativo.".into(), ToastKind::Info);
+                    // última conversa do Claude Code (no projeto atual, se houver; senão a mais recente)
+                    let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
+                    let alvo = lista.iter().find(|s| s.pasta == self.root).or_else(|| lista.first()).cloned();
+                    match alvo {
+                        Some(s) => self.retomar_sessao(&s.id, &s.pasta),
+                        None => self.say("Nenhuma conversa anterior encontrada.".into(), ToastKind::Info),
+                    }
                     return;
                 }
                 _ => {}
@@ -1242,9 +1280,15 @@ impl Session {
     }
 
     fn term_spawn(&mut self, cmd: portable_pty::CommandBuilder) {
+        let pasta = self.root.clone();
+        self.term_spawn_em(cmd, &pasta);
+    }
+
+    fn term_spawn_em(&mut self, cmd: portable_pty::CommandBuilder, pasta: &Path) {
         let (rows, cols) = self.term_dims;
         let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
-        match Term::spawn(cmd, rows, cols, Some(&self.root), notify) {
+        self.term_agente = false;
+        match Term::spawn(cmd, rows, cols, Some(pasta), notify) {
             Ok(t) => {
                 self.term = Some(t);
                 self.term_focus = true;
@@ -1264,12 +1308,227 @@ impl Session {
 
     /// `<Líder>Al` / `a` na tela inicial: roda o primeiro agente instalado no terminal.
     fn open_agent(&mut self) {
-        let Some(nome) = term::agente_instalado() else {
+        let root = self.root.clone();
+        self.abrir_agente(&root, &[]);
+    }
+
+    fn pasta_agentes(&self) -> PathBuf {
+        self.agentes_pasta.clone().unwrap_or_else(crate::agentes::pasta_config)
+    }
+
+    fn agente_instalado(&self, bin: &str) -> bool {
+        match &self.agentes_tem {
+            Some(v) => v.contains(&bin),
+            None => crate::agentes::instalado(bin),
+        }
+    }
+
+    fn agente_atual(&self) -> Option<&'static crate::agentes::Agente> {
+        crate::agentes::atual_em(&self.pasta_agentes(), |b| self.agente_instalado(b))
+    }
+
+    /// Abre o agente escolhido, no modo escolhido, no terminal (em `pasta`, com `extra` argumentos).
+    fn abrir_agente(&mut self, pasta: &Path, extra: &[&str]) -> bool {
+        let Some(a) = self.agente_atual() else {
             self.say("Nenhum agente instalado (claude, opencode, codex ou gemini). Use <Líder>t para o terminal.".into(), ToastKind::Info);
+            return false;
+        };
+        let modo = crate::agentes::modo_atual_em(&self.pasta_agentes());
+        let (linha, exato) = crate::agentes::linha_de_comando(a, modo.id);
+        let mut partes = linha.split_whitespace();
+        let mut cmd = portable_pty::CommandBuilder::new(partes.next().unwrap_or(a.bin));
+        for p in partes {
+            cmd.arg(p);
+        }
+        for e in extra {
+            cmd.arg(e);
+        }
+        self.term_close();
+        self.term_spawn_em(cmd, pasta);
+        if self.term.is_some() {
+            self.term_agente = true;
+            if !exato {
+                self.say(format!("{} não tem o modo \"{}\": abriu no padrão dele.", a.label, modo.label), ToastKind::Info);
+            }
+        }
+        self.term.is_some()
+    }
+
+    /// `<Líder>Ag`: lista os agentes instalados (o atual marcado); escolher vale para o terminal e fica salvo.
+    fn agente_escolher(&mut self) {
+        let instalados: Vec<&'static crate::agentes::Agente> = crate::agentes::AGENTES.iter().filter(|a| self.agente_instalado(a.bin)).collect();
+        if instalados.is_empty() {
+            self.say("Nenhum agente instalado. Instale com: npm i -g @anthropic-ai/claude-code (ou opencode-ai, @openai/codex, @google/gemini-cli).".into(), ToastKind::Info);
+            return;
+        }
+        let atual = self.agente_atual().map(|a| a.bin);
+        let itens = instalados
+            .into_iter()
+            .map(|a| ListaItem { texto: format!("{} {}", if atual == Some(a.bin) { "●" } else { " " }, a.label), detalhe: a.bin.to_string(), destino: Destino::Agente(a.bin) })
+            .collect();
+        self.pick_lista("Agente de IA", itens);
+    }
+
+    fn escolher_agente(&mut self, bin: &'static str) {
+        let pasta = self.pasta_agentes();
+        if crate::agentes::definir_atual(&pasta, bin) {
+            let label = crate::agentes::AGENTES.iter().find(|a| a.bin == bin).map_or(bin, |a| a.label);
+            self.say(format!("Agente: {label}"), ToastKind::Done);
+        } else {
+            self.say("Não consegui salvar a escolha (vale só até fechar).".into(), ToastKind::Error);
+        }
+    }
+
+    /// `<Líder>Aw`: o modo de permissão do agente.
+    fn agente_modo(&mut self) {
+        let atual = crate::agentes::modo_atual_em(&self.pasta_agentes()).id;
+        let itens = crate::agentes::MODOS
+            .iter()
+            .map(|m| ListaItem { texto: format!("{} {}", if atual == m.id { "●" } else { " " }, m.label), detalhe: m.desc.to_string(), destino: Destino::Modo(m.id) })
+            .collect();
+        self.pick_lista("Modo do agente", itens);
+    }
+
+    fn escolher_modo(&mut self, id: &'static str) {
+        let pasta = self.pasta_agentes();
+        if crate::agentes::definir_modo(&pasta, id) {
+            let label = crate::agentes::MODOS.iter().find(|m| m.id == id).map_or(id, |m| m.label);
+            self.say(format!("Modo do agente: {label} (vale da próxima vez que ele abrir)"), ToastKind::Done);
+        }
+    }
+
+    /// `<Líder>AS`: conversas do Claude Code de todos os projetos, da mais recente.
+    fn agente_sessoes(&mut self) {
+        let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
+        if lista.is_empty() {
+            self.say("Nenhuma conversa do Claude Code encontrada (~/.claude/projects).".into(), ToastKind::Info);
+            return;
+        }
+        let itens = lista
+            .into_iter()
+            .take(300)
+            .map(|s| {
+                let pasta = s.pasta.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| s.pasta.display().to_string());
+                ListaItem { texto: s.titulo, detalhe: format!("{pasta} · {}", crate::agentes::ha_quanto_tempo(s.quando)), destino: Destino::Sessao { id: s.id, pasta: s.pasta } }
+            })
+            .collect();
+        self.pick_lista("Conversas do agente", itens);
+    }
+
+    /// Retoma uma conversa do Claude Code na pasta dela.
+    fn retomar_sessao(&mut self, id: &str, pasta: &Path) {
+        if !self.agente_instalado("claude") {
+            self.say("O Claude Code não está instalado (npm i -g @anthropic-ai/claude-code).".into(), ToastKind::Info);
+            return;
+        }
+        let mut cmd = portable_pty::CommandBuilder::new("claude");
+        let modo = crate::agentes::modo_atual_em(&self.pasta_agentes());
+        let (linha, _) = crate::agentes::linha_de_comando(&crate::agentes::AGENTES[0], modo.id);
+        for p in linha.split_whitespace().skip(1) {
+            cmd.arg(p);
+        }
+        cmd.arg("--resume");
+        cmd.arg(id);
+        self.term_close();
+        self.term_spawn_em(cmd, pasta);
+        self.term_agente = self.term.is_some();
+    }
+
+    /// Manda um pedido pronto ao agente: abre o agente se preciso (o texto espera ele terminar de subir).
+    fn agente_enviar(&mut self, pedido: String) {
+        if self.term.is_some() && self.term_agente {
+            if let Some(t) = self.term.as_mut() {
+                t.colar(&pedido);
+                t.write(b"\r");
+            }
+            self.term_focus = true;
+            return;
+        }
+        if self.abrir_agente(&self.root.clone(), &[]) {
+            self.agente_fila = Some((std::time::Instant::now(), pedido));
+        }
+    }
+
+    /// Entrega o pedido que esperava o agente abrir: quando ele já desenhou algo e passou um tempo.
+    fn agente_fila_poll(&mut self) {
+        let Some((desde, _)) = &self.agente_fila else { return };
+        let pronto = desde.elapsed().as_millis() >= AGENTE_ESPERA_MS && self.term_screen.as_ref().is_some_and(|s| s.rows.iter().any(|r| r.iter().any(|c| c.ch != ' ')));
+        if !pronto {
+            return;
+        }
+        if let Some((_, pedido)) = self.agente_fila.take() {
+            if let Some(t) = self.term.as_mut() {
+                t.colar(&pedido);
+                t.write(b"\r");
+            }
+        }
+    }
+
+    /// `<Líder>Ax`: pede ao agente para corrigir o diagnóstico da linha do cursor.
+    fn agente_corrigir(&mut self) {
+        let Some(arq) = self.path.clone() else {
+            self.say("Salve o arquivo antes (o agente precisa do nome).".into(), ToastKind::Info);
             return;
         };
-        self.term_close();
-        self.term_spawn(portable_pty::CommandBuilder::new(nome));
+        let linha = self.ed.cursor.row;
+        let Some(d) = self.lsp_diags.iter().find(|d| d.row <= linha && linha <= d.end_row).cloned() else {
+            self.say("Sem diagnóstico nesta linha.".into(), ToastKind::Info);
+            return;
+        };
+        let rel = relativo(&self.root, &arq.to_string_lossy());
+        let grav = match d.severity {
+            1 => "erro",
+            2 => "aviso",
+            _ => "problema",
+        };
+        self.agente_enviar(crate::agentes::pedido_corrigir(&rel, d.row + 1, grav, d.message.lines().next().unwrap_or("")));
+    }
+
+    /// `<Líder>Ai`: pede ao agente para explicar a seleção (ou a linha do cursor).
+    fn agente_explicar(&mut self) {
+        let Some(arq) = self.path.clone() else {
+            self.say("Salve o arquivo antes (o agente precisa do nome).".into(), ToastKind::Info);
+            return;
+        };
+        let (de, ate) = match self.ed.selection() {
+            Some((_, anc)) => (anc.row.min(self.ed.cursor.row), anc.row.max(self.ed.cursor.row)),
+            None => (self.ed.cursor.row, self.ed.cursor.row),
+        };
+        if self.ed.mode() == Mode::Visual {
+            self.ed.feed(&[Key::Esc]);
+        }
+        let rel = relativo(&self.root, &arq.to_string_lossy());
+        self.agente_enviar(crate::agentes::pedido_explicar(&rel, de + 1, ate + 1));
+    }
+
+    /// Recarrega o arquivo se ele mudou no disco (o agente editou). Com alterações não salvas só avisa.
+    fn recarregar_se_mudou(&mut self) {
+        let Some(p) = self.path.clone() else { return };
+        if self.mtime_olhado.elapsed().as_millis() < 700 {
+            return;
+        }
+        self.mtime_olhado = std::time::Instant::now();
+        let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) else { return };
+        match self.mtime {
+            None => self.mtime = Some(m),
+            Some(antes) if antes == m => {}
+            Some(_) => {
+                self.mtime = Some(m);
+                if self.modified() {
+                    self.say("O arquivo mudou no disco, mas você tem alterações não salvas: :e! recarrega.".into(), ToastKind::Error);
+                    return;
+                }
+                let Ok(bytes) = std::fs::read(&p) else { return };
+                let texto = String::from_utf8_lossy(&bytes);
+                let rope = ropey::Rope::from_str(texto.strip_suffix('\n').unwrap_or(&texto));
+                if rope != self.ed.buf.rope {
+                    self.ed.sincronizar(&rope);
+                    self.saved_rev = self.ed.buf.rev;
+                    self.git_load();
+                    self.say("Arquivo recarregado (mudou no disco)".into(), ToastKind::Info);
+                }
+            }
+        }
     }
 
     /// `<Líder>Az`: modo zen. Abre o agente (se não houver terminal) em tela cheia, com o teclado nele.
@@ -1288,6 +1547,8 @@ impl Session {
         if let Some(mut t) = self.term.take() {
             t.matar();
         }
+        self.term_agente = false;
+        self.agente_fila = None;
         self.term_focus = false;
         self.term_zen = false;
         self.term_esc = false;
@@ -1675,6 +1936,9 @@ impl Session {
                 match l.destino {
                     Destino::Local(arq, row, col16) => self.ir_para_local(&arq, row, col16),
                     Destino::Acao(a) => self.aplicar_acao(a),
+                    Destino::Agente(bin) => self.escolher_agente(bin),
+                    Destino::Modo(id) => self.escolher_modo(id),
+                    Destino::Sessao { id, pasta } => self.retomar_sessao(&id, &pasta),
                 }
                 return;
             }
@@ -2042,6 +2306,8 @@ impl Session {
             Ok(()) => {
                 let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 self.say(format!("{nome} salvo · {} linhas", self.ed.buf.line_count()), ToastKind::Done);
+                // o que acabamos de gravar não é "mudou no disco"
+                self.mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
                 if self.path.is_none() {
                     self.path = Some(p);
                 }
@@ -2094,6 +2360,8 @@ impl Session {
             self.copiar_clip(t);
         }
         self.pick_poll();
+        self.agente_fila_poll();
+        self.recarregar_se_mudou();
         self.git_poll();
         self.term_refresh();
         self.lsp_sync();
@@ -3111,6 +3379,185 @@ mod testes {
         assert!(modelo(&mut s).picker.is_none());
         assert_eq!(modelo(&mut s).cursor, (0, 1), "Espaço anda como `l`");
         assert_eq!(tecla_nome('\t'), "<Tab>");
+    }
+
+    /// Pasta com agentes falsos (`claude`, `opencode`) que escrevem os argumentos e a pasta e ecoam o que
+    /// recebem; vai na frente do PATH enquanto a trava estiver nas mãos.
+    #[cfg(unix)]
+    fn agentes_falsos(nome: &str) -> (PathBuf, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = std::env::temp_dir().join(format!("astrograph-bin-{}-{nome}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bin);
+        std::fs::create_dir_all(&bin).unwrap();
+        for a in ["claude", "opencode"] {
+            let f = bin.join(a);
+            std::fs::write(&f, format!("#!/bin/sh\necho \"{a} ARGS:$* PWD:$(pwd)\"\nexec cat\n")).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let antes = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{antes}", bin.display()));
+        (bin, antes)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agente_escolher_modo_e_abrir_no_terminal_com_o_modo() {
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (_bin, path_antes) = agentes_falsos("escolha");
+        let cfg = std::env::temp_dir().join(format!("astrograph-cfg-{}-escolha", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.agentes_pasta = Some(cfg.clone());
+        s.agentes_tem = Some(vec!["claude", "opencode"]);
+        s.resize(80, 20.0);
+        // <Líder>Ag lista os instalados, com o atual marcado
+        s.feed(" Ag");
+        let p = modelo(&mut s).picker.expect("lista de agentes");
+        assert_eq!(p.title, "Agente de IA");
+        assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["● Claude Code", "  opencode"]);
+        s.feed("<C-n><CR>");
+        assert_eq!(crate::agentes::ler_config(&cfg)["agent"], "opencode", "a escolha fica no config.json");
+        // <Líder>Aw: o modo; escolher Plano
+        s.feed(" Aw");
+        let p = modelo(&mut s).picker.expect("lista de modos");
+        assert_eq!((p.title.as_str(), p.items.len(), p.items[0].text.as_str()), ("Modo do agente", 5, "● Manual"));
+        s.feed("<C-n><C-n><CR>");
+        assert_eq!(crate::agentes::ler_config(&cfg)["agent_mode"], "plan");
+        // abrir: opencode no Plano não tem opção própria (abre no padrão e avisa)
+        s.feed(" Al");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.starts_with("opencode ARGS:")));
+        assert!(linhas_do_terminal(&m).iter().any(|l| l.starts_with("opencode ARGS: ")), "{:?}", linhas_do_terminal(&m));
+        assert!(m.toast.is_some_and(|t| t.1.contains("não tem o modo")));
+        // de volta ao Claude: o modo vira `--permission-mode plan`
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed(" T");
+        s.feed(" Ag");
+        let p = modelo(&mut s).picker.expect("lista de novo");
+        assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["  Claude Code", "● opencode"], "sel {}", p.sel);
+        s.feed("<CR>");
+        assert_eq!(crate::agentes::ler_config(&cfg)["agent"], "claude");
+        s.feed(" Al");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.contains("--permission-mode plan")));
+        assert!(linhas_do_terminal(&m).iter().any(|l| l.starts_with("claude ARGS:--permission-mode plan")), "{:?}", linhas_do_terminal(&m));
+        s.term_close();
+        std::env::set_var("PATH", path_antes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pedidos_prontos_corrigir_explicar_revisar_commit_vao_ao_agente() {
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (_bin, path_antes) = agentes_falsos("pedidos");
+        let d = projeto("pedidos");
+        let arq = d.join("src/alfa.rs");
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.agentes_pasta = Some(d.join("cfg"));
+        s.agentes_tem = Some(vec!["claude"]);
+        s.resize(80, 20.0);
+        s.term_resize(14, 100);
+        // sem diagnóstico na linha: avisa e não abre o agente
+        s.feed(" Ax");
+        assert!(modelo(&mut s).term.is_none());
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.1.contains("Sem diagnóstico")));
+        // com diagnóstico: abre o agente e entrega o pedido quando ele terminar de subir
+        s.lsp_diags = std::sync::Arc::new(vec![lsp::Diag { row: 0, col: 3, end_row: 0, end_col: 8, severity: 1, message: "tipo errado aqui".into() }]);
+        s.feed(" Ax");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.contains("tipo errado aqui")));
+        let txt = linhas_do_terminal(&m).join("\n");
+        assert!(txt.contains("claude ARGS:--permission-mode default"), "{txt}");
+        assert!(txt.contains("Corrija o erro na linha 1 de src/alfa.rs: tipo errado aqui"), "{txt}");
+        // com o agente já aberto, os outros pedidos vão na hora
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed(" Ar");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("Revise as alterações"));
+        assert!(linhas_do_terminal(&m).join("\n").contains("Revise as alterações"));
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed(" Am");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("mensagem de commit"));
+        assert!(linhas_do_terminal(&m).join("\n").contains("mensagem de commit"));
+        // explicar: a linha do cursor; na seleção visual, o trecho
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed("Vj<Esc>ggVj");
+        s.feed(" Ai");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"));
+        assert!(linhas_do_terminal(&m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"), "{:?}", linhas_do_terminal(&m));
+        s.term_close();
+        std::env::set_var("PATH", path_antes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retomar_conversa_do_claude_na_pasta_dela() {
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (_bin, path_antes) = agentes_falsos("sessoes");
+        let home = std::env::temp_dir().join(format!("astrograph-home-{}", std::process::id()));
+        let projeto_a = home.join("proj a");
+        let dir_claude = home.join(".claude/projects/-proj-a");
+        std::fs::create_dir_all(&dir_claude).unwrap();
+        std::fs::create_dir_all(&projeto_a).unwrap();
+        std::fs::write(
+            dir_claude.join("abc-123.jsonl"),
+            format!(r#"{{"type":"user","cwd":"{}","message":{{"role":"user","content":"arruma o login"}}}}"#, projeto_a.display()),
+        )
+        .unwrap();
+        let home_antes = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.agentes_pasta = Some(home.join("cfg"));
+        s.agentes_tem = Some(vec!["claude"]);
+        s.resize(80, 20.0);
+        s.feed(" AS");
+        let p = modelo(&mut s).picker.expect("conversas");
+        assert_eq!((p.title.as_str(), p.items.len(), p.items[0].text.as_str()), ("Conversas do agente", 1, "arruma o login"));
+        assert!(p.items[0].detail.starts_with("proj a · "), "{}", p.items[0].detail);
+        s.feed("<CR>");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.contains("--resume abc-123")));
+        let txt = linhas_do_terminal(&m).join("\n");
+        assert!(txt.contains("--resume abc-123"), "{txt}");
+        assert!(txt.contains(&format!("PWD:{}", projeto_a.display())) || txt.contains("PWD:") && txt.contains("proj a"), "abre na pasta do projeto: {txt}");
+        s.term_close();
+        match home_antes {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        std::env::set_var("PATH", path_antes);
+    }
+
+    #[test]
+    fn arquivo_editado_por_fora_recarrega_sem_perder_alteracoes_nao_salvas() {
+        let d = projeto("recarrega");
+        let arq = d.join("src/alfa.rs");
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        modelo(&mut s);
+        // o agente (outro processo) edita o arquivo: sem alterações suas, o texto novo entra
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        std::fs::write(&arq, "fn novo() {}\nfn outro() {}\n").unwrap();
+        let m = espera_term(&mut s, |m| m.rope.to_string().starts_with("fn novo"));
+        assert_eq!(m.rope.to_string(), "fn novo() {}\nfn outro() {}");
+        assert!(!m.modified, "recarregado = igual ao disco");
+        // com alterações não salvas: não recarrega, só avisa
+        s.feed("ggx");
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        std::fs::write(&arq, "fn terceiro() {}\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let m = modelo(&mut s);
+        assert!(m.rope.to_string().starts_with("n novo"), "{:?}", m.rope.to_string());
+        assert!(m.modified);
+        assert!(m.toast.is_some_and(|t| t.2 == ToastKind::Error && t.1.contains("mudou no disco")));
+        // gravar pelo editor não conta como mudança de fora
+        s.feed(":w<CR>");
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let m = modelo(&mut s);
+        assert!(!m.modified);
+        assert!(m.rope.to_string().starts_with("n novo"));
     }
 
     #[test]
