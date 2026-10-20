@@ -12,6 +12,7 @@ mod config;
 mod grid;
 mod realce;
 mod render;
+mod native;
 mod servicos;
 
 use std::num::NonZeroU32;
@@ -1236,7 +1237,13 @@ fn main() {
             .enable_all()
             .build()
             .expect("runtime tokio");
-        runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
+        // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
+        if std::env::var("ASTROGRAPH_ENGINE").is_ok_and(|v| v == "native") {
+            let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
+            runtime.block_on(native::native_task(front_for_nvim, rx, proxy, file));
+        } else {
+            runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
+        }
     });
 
     if std::env::var("SPIKE_SMOKE").is_ok()

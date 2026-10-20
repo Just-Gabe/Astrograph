@@ -184,6 +184,27 @@ impl Editor {
         self.buf.lines()
     }
 
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Há teclas de um comando ainda incompleto (`d`, `2`, `"`...).
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Seleção do modo visual: (tipo, ponta fixa).
+    pub fn selection(&self) -> Option<(VKind, Pos)> {
+        self.vis.map(|v| (v.kind, v.anchor))
+    }
+
+    /// Texto do buffer inteiro com `\n` no fim (como o arquivo).
+    pub fn to_file_text(&self) -> String {
+        let mut t = self.buf.text();
+        t.push('\n');
+        t
+    }
+
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         self.cursor = Pos::new(row.min(self.buf.line_count() - 1), col);
         self.fix_cursor();
@@ -1508,6 +1529,7 @@ impl Editor {
         // nada mudou entre os dois textos: volta o cursor guardado
         if self.buf.rope == snap.rope && from_undo {
             self.buf.rope = snap.rope;
+            self.buf.rev += 1;
             self.cursor = snap.cursor;
             self.fix_cursor();
             self.curswant = self.want_here();
@@ -1518,6 +1540,7 @@ impl Editor {
         // linhas do trecho que volta (as que o Vim chama de `newsize`)
         let newsize = new_len.saturating_sub(p + q);
         self.buf.rope = snap.rope;
+        self.buf.rev += 1;
         let last = self.last_row();
         // se o cursor guardado cai dentro do trecho, volta exatamente para ele;
         // senão vai para a primeira linha que mudou, na coluna desejada

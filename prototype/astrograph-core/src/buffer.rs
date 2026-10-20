@@ -18,22 +18,24 @@ impl Pos {
 #[derive(Debug, Clone)]
 pub struct Buffer {
     pub rope: Rope,
+    /// sobe a cada alteração (o app só refaz o realce quando muda)
+    pub rev: u64,
 }
 
 impl Default for Buffer {
     fn default() -> Self {
-        Buffer { rope: Rope::new() }
+        Buffer { rope: Rope::new(), rev: 0 }
     }
 }
 
 impl Buffer {
     pub fn from_lines<S: AsRef<str>>(lines: &[S]) -> Self {
         let text = lines.iter().map(|l| l.as_ref()).collect::<Vec<_>>().join("\n");
-        Buffer { rope: Rope::from_str(&text) }
+        Buffer { rope: Rope::from_str(&text), rev: 0 }
     }
 
     pub fn from_text(text: &str) -> Self {
-        Buffer { rope: Rope::from_str(text.strip_suffix('\n').unwrap_or(text)) }
+        Buffer { rope: Rope::from_str(text.strip_suffix('\n').unwrap_or(text)), rev: 0 }
     }
 
     pub fn line_count(&self) -> usize {
@@ -92,16 +94,19 @@ impl Buffer {
         }
         let out = self.rope.slice(i..j).to_string();
         self.rope.remove(i..j);
+        self.rev += 1;
         out
     }
 
     pub fn insert(&mut self, at: Pos, text: &str) {
         let i = self.idx(at);
         self.rope.insert(i, text);
+        self.rev += 1;
     }
 
     /// Insere uma linha inteira antes de `row` (`row == line_count()` acrescenta no fim).
     pub fn insert_line(&mut self, row: usize, text: &str) {
+        self.rev += 1;
         if row >= self.line_count() {
             let end = self.rope.len_chars();
             self.rope.insert(end, &format!("\n{text}"));
@@ -114,6 +119,7 @@ impl Buffer {
     /// Remove as linhas `[a, b]` (inclusive). Se for o buffer todo, sobra uma linha vazia.
     pub fn delete_lines(&mut self, a: usize, b: usize) -> Vec<String> {
         let removed: Vec<String> = (a..=b).map(|r| self.line(r)).collect();
+        self.rev += 1;
         let n = self.line_count();
         if a == 0 && b + 1 >= n {
             self.rope = Rope::new();

@@ -37,7 +37,18 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Visual em bloco (`<C-v>`), `p` no visual, busca (`/ ? n N * #`), marcas, macros (`q @`), comandos `:` | próximo |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Janelas/abas, explorador, busca de arquivos (ripgrep/fd como crates), git, LSP, completar, agentes | roadmap (S3, S4...) |
-| Camada de tela do app lendo o motor (em vez do Neovim) | próximo marco |
+| Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
+
+## Experimentar
+
+```
+ASTROGRAPH_ENGINE=native astrograph arquivo.rs
+```
+
+Abre o arquivo no motor nativo (sem Neovim): todos os movimentos, operadores,
+objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`,
+`:wq`, `:e arquivo` e `:<número>`. O padrão do app continua sendo o Neovim até o
+motor nativo cobrir busca, janelas e as funções dos plugins.
 
 ## Divergências conhecidas
 
