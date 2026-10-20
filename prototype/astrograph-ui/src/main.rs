@@ -10,6 +10,7 @@
 
 mod config;
 mod grid;
+mod realce;
 mod render;
 
 use std::num::NonZeroU32;
@@ -76,6 +77,10 @@ struct UiHandler {
     front: Arc<Mutex<Grid>>,
     proxy: EventLoopProxy<UserEvent>,
     last_copy: LastCopy,
+    /// eventos de buffer para o realce em Rust (`ASTROGRAPH_REALCE=nvim` desliga)
+    realce: Option<UnboundedSender<realce::Event>>,
+    /// copias dos buffers do realce; responde a `indentexpr` (`astrograph_indent`)
+    estado: realce::Shared,
 }
 
 #[async_trait::async_trait]
@@ -83,6 +88,12 @@ impl Handler for UiHandler {
     type Writer = Compat<ChildStdin>;
 
     async fn handle_notify(&self, name: String, args: Vec<Value>, _nvim: Neovim<Self::Writer>) {
+        if let Some(tx) = &self.realce {
+            if let Some(ev) = realce::parse_notify(&name, &args) {
+                let _ = tx.send(ev);
+                return;
+            }
+        }
         match name.as_str() {
             "redraw" => {
                 let mut back = self.back.lock().unwrap();
@@ -125,11 +136,12 @@ impl Handler for UiHandler {
     async fn handle_request(
         &self,
         name: String,
-        _args: Vec<Value>,
+        args: Vec<Value>,
         _nvim: Neovim<Self::Writer>,
     ) -> Result<Value, Value> {
         match name.as_str() {
             "astrograph_clipboard_paste" => Ok(self.paste()),
+            "astrograph_indent" => Ok(realce::indent(&self.estado, &args).await),
             _ => Err(Value::from(format!("metodo desconhecido: {name}"))),
         }
     }
@@ -209,11 +221,20 @@ async fn nvim_task(
     mut rx: UnboundedReceiver<UiCommand>,
     proxy: EventLoopProxy<UserEvent>,
 ) {
+    let estado = realce::Shared::default();
+    let (realce_tx, realce_rx) = if realce::enabled() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let handler = UiHandler {
         back,
         front,
         proxy: proxy.clone(),
         last_copy: Arc::new(Mutex::new(None)),
+        realce: realce_tx,
+        estado: estado.clone(),
     };
     let nvim_bin = std::env::var("NVIM_BIN").unwrap_or_else(|_| "nvim".to_string());
     // so `--embed` (sem `--headless`): o Neovim espera o `ui_attach` para ler a
@@ -272,6 +293,10 @@ async fn nvim_task(
         eprintln!("ASTROGRAPH_UI: ui_attach falhou: {err:?}");
         let _ = proxy.send_event(UserEvent::Quit);
         return;
+    }
+
+    if let Some(rx) = realce_rx {
+        tokio::spawn(realce::run(nvim.clone(), estado, rx));
     }
 
     let mut queued = pending.into_iter();
@@ -1179,6 +1204,7 @@ fn main() {
         || std::env::var("SPIKE_KEYS").is_ok()
         || std::env::var("SPIKE_SCROLL").is_ok()
         || std::env::var("SPIKE_FLOATS").is_ok()
+        || std::env::var("SPIKE_REALCE").is_ok()
     {
         spawn_smoke(Arc::clone(&grid), tx.clone(), event_loop.create_proxy());
     }
@@ -1199,7 +1225,25 @@ fn spawn_smoke(grid: Arc<Mutex<Grid>>, tx: UnboundedSender<UiCommand>, proxy: Ev
         };
         let screen = || grid.lock().unwrap().to_text();
         std::thread::sleep(Duration::from_millis(4000));
-        if scroll {
+        if let Ok(file) = std::env::var("SPIKE_REALCE") {
+            // realce em Rust no app de verdade: abre o arquivo e grava em
+            // SPIKE_REALCE_OUT os extmarks do Rust e se o nativo ficou ligado
+            let out = std::env::var("SPIKE_REALCE_OUT").unwrap_or_else(|_| "realce-smoke.txt".into());
+            send(&format!(":e {}<CR>", file.replace(' ', "\\ ")));
+            std::thread::sleep(Duration::from_millis(1500));
+            send(&format!(
+                ":lua local ns = vim.api.nvim_get_namespaces().astrograph_realce; local b = vim.api.nvim_get_current_buf(); \
+                 vim.fn.writefile({{'extmarks=' .. (ns and #vim.api.nvim_buf_get_extmarks(b, ns, 0, -1, {{}}) or -1), \
+                 'nativo=' .. tostring(vim.treesitter.highlighter.active[b] ~= nil), 'syntax=' .. vim.bo.syntax}}, [[{}]])<CR>",
+                out
+            ));
+            std::thread::sleep(Duration::from_millis(500));
+            println!("--- TELA ---\n{}--- FIM ---", screen());
+            // SPIKE_REALCE_HOLD=ms: segura a janela aberta (para um print)
+            if let Some(ms) = std::env::var("SPIKE_REALCE_HOLD").ok().and_then(|v| v.parse().ok()) {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
+        } else if scroll {
             // arquivo longo, desce meia tela e volta: o App conta os quadros animados
             match std::env::var("SPIKE_SCROLL_FILE") {
                 Ok(file) => send(&format!(":e {file}<CR>")),

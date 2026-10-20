@@ -36,3 +36,19 @@ jobs:
           workspaces: prototype/astrograph-agent
       - name: Testes da ponte ACP
         run: cargo test
+
+  # realce em Rust (ROADMAP, S1): tipo de arquivo, parse incremental e as
+  # consultas do Neovim compilando com as gramaticas embutidas
+  rust-syntax:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: prototype/astrograph-syntax
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-syntax
+      - name: Testes do realce
+        run: cargo test
