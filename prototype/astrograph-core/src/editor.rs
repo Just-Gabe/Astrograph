@@ -1153,6 +1153,18 @@ impl Editor {
                     ex(Pos::new(cur.row, col))
                 }
             }
+            '%' if count.is_some() => {
+                // `N%`: vai para a linha que fica a N por cento do arquivo
+                let n = c1;
+                if n > 100 {
+                    return None;
+                }
+                let row = ((n * b.line_count() + 99) / 100).saturating_sub(1).min(self.last_row());
+                if op_pending && row == cur.row {
+                    return None;
+                }
+                Some(Res { pos: Pos::new(row, b.first_nonblank(row)), kind: Kind::Line, vertical: true, fail: false })
+            }
             '%' => {
                 // o Vim apita mas não descarta o que vem depois num `%` sem par
                 match motion::match_pair(b, cur) {
@@ -1335,6 +1347,20 @@ impl Editor {
                     } else {
                         kind = Kind::Excl;
                     }
+                }
+                // inclusivo terminando num NUL (linha vazia): o `d` leva a quebra de linha junto
+                if kind == Kind::Incl && op == 'd' && m.c == '%' && e.col >= self.buf.line_len(e.row) && e.row < self.last_row() && self.buf.line_len(e.row) == 0 {
+                    // charwise: apaga só a quebra de linha, guardada no registrador
+                    self.ops_change = false;
+                    self.checkpoint();
+                    let old = self.buf.rope.clone();
+                    self.buf.delete(Pos::new(e.row, 0), Pos::new(e.row + 1, 0));
+                    self.store(reg, "\n".to_string(), false, false);
+                    self.adjust_marks(&old);
+                    self.cursor = Pos::new(e.row, 0);
+                    self.fix_cursor();
+                    self.curswant = 0;
+                    return;
                 }
                 (s, e, kind)
             }
