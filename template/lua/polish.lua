@@ -57,3 +57,7 @@ require("astrograph.treesitter").setup()
 -- Preparo em segundo plano: parsers, ferramentas e git do projeto prontos ao
 -- abrir (e ao trocar de pasta); ícone de carregamento no canto inferior direito
 require("astrograph.prepare").setup()
+
+-- Textobjects (vaf, ]f, >F...) pelo app em Rust quando ele está rodando; o
+-- nvim-treesitter-textobjects continua como reserva e no editor do terminal
+require("astrograph.textobjects").setup()

@@ -142,6 +142,8 @@ impl Handler for UiHandler {
         match name.as_str() {
             "astrograph_clipboard_paste" => Ok(self.paste()),
             "astrograph_indent" => Ok(realce::indent(&self.estado, &args).await),
+            "astrograph_textobject" => Ok(realce::textobject(&self.estado, &args).await),
+            "astrograph_textobject_ranges" => Ok(realce::textobject_ranges(&self.estado, &args).await),
             _ => Err(Value::from(format!("metodo desconhecido: {name}"))),
         }
     }
