@@ -13,6 +13,15 @@ pub struct Config {
     pub scroll: ScrollCfg,
     pub keys: KeysCfg,
     pub clock: ClockCfg,
+    pub engine: EngineCfg,
+}
+
+/// Qual motor edita: o Neovim (padrão) ou o motor nativo em Rust.
+#[derive(Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct EngineCfg {
+    /// `true` abre sempre no motor nativo (sem Neovim). `ASTROGRAPH_ENGINE=nvim` ainda força o Neovim.
+    pub native: bool,
 }
 
 /// Relógio pequeno no canto inferior direito.
@@ -104,6 +113,7 @@ impl Default for Config {
             scroll: ScrollCfg::default(),
             keys: KeysCfg::default(),
             clock: ClockCfg::default(),
+            engine: EngineCfg::default(),
         }
     }
 }

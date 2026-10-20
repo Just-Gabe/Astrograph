@@ -1351,7 +1351,12 @@ fn main() {
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     let leader_key = cfg.keys.leader_char();
-    let native_on = std::env::var("ASTROGRAPH_ENGINE").is_ok_and(|v| v == "native");
+    // motor: ASTROGRAPH_ENGINE=native|nvim manda; sem ela vale `[engine] native` do config.toml
+    let native_on = match std::env::var("ASTROGRAPH_ENGINE").as_deref() {
+        Ok("native") => true,
+        Ok("nvim") => false,
+        _ => cfg.engine.native,
+    };
     let native_shared = nview::shared();
     let app_native = native_on.then(|| native_shared.clone());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<UiCommand>();
