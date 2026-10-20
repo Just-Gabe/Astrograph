@@ -20,6 +20,7 @@ mod busca;
 mod design;
 mod native;
 mod lsp;
+mod janelas;
 mod nscene;
 mod nview;
 mod paint;

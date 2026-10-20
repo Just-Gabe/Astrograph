@@ -178,7 +178,7 @@ impl Editor {
                     i += 1;
                 }
             }
-        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype") {
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only") {
             // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
             let primeiro = nome.chars().next().unwrap();
             if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {

@@ -17,6 +17,7 @@ use crate::design::{classify, ModeKind};
 use crate::arvore::Arvore;
 use crate::busca;
 use crate::git;
+use crate::janelas::{Dir, Lado, Layout, PaneId};
 use crate::lsp::{self, Cliente};
 use crate::nview::{CompItem, CompView, GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
@@ -63,6 +64,30 @@ pub enum PedidoAba {
     Proxima,
     Anterior,
     So,
+}
+
+/// Pedidos de janela (divisões) que a sessão faz ao espaço de trabalho.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PedidoJanela {
+    /// `:split`/`:vsplit`/`:new`/`:vnew`: o novo painel mostra o mesmo arquivo, `arquivo` ou um buffer vazio
+    Dividir { dir: Dir, arquivo: Option<PathBuf>, vazio: bool },
+    Foco(Lado),
+    /// `<C-w>w` (+1), `<C-w>W` (-1)
+    Ciclo(i32),
+    /// `<C-w>p`: o painel anterior
+    Anterior,
+    Fechar { forcar: bool },
+    So,
+    Igualar,
+    Maximizar(Dir),
+}
+
+/// Os outros painéis de uma aba. Mora na sessão focada: trocar o foco troca quem a carrega.
+pub struct Splits {
+    pub layout: Layout,
+    pub outros: Vec<Session>,
+    pub proximo_id: PaneId,
+    pub ultimo: Option<PaneId>,
 }
 
 static PROXIMO_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -124,6 +149,14 @@ pub struct Session {
     pub modo_abas: bool,
     pub abrir_pedido: Option<(PathBuf, Option<(usize, usize)>)>,
     pub aba_pedido: Option<PedidoAba>,
+    pub jan_pedido: Option<PedidoJanela>,
+    /// apertou <C-w> e espera a segunda tecla
+    jan_espera: bool,
+    /// identifica o painel dentro da aba
+    pub pane_id: PaneId,
+    pub splits: Option<Box<Splits>>,
+    /// outro painel da aba mostra o mesmo arquivo (o buffer é compartilhado)
+    pub irmao: bool,
 }
 
 const SCROLLOFF: f32 = 3.0;
@@ -197,6 +230,11 @@ impl Session {
             modo_abas: false,
             abrir_pedido: None,
             aba_pedido: None,
+            jan_pedido: None,
+            jan_espera: false,
+            pane_id: 0,
+            splits: None,
+            irmao: false,
         }
     }
 
@@ -231,6 +269,11 @@ impl Session {
 
     pub fn modified(&self) -> bool {
         self.ed.buf.rev != self.saved_rev
+    }
+
+    /// Este painel ou algum outro da aba tem alterações não salvas.
+    fn tem_alteracoes(&self) -> bool {
+        self.modified() || self.splits.as_ref().is_some_and(|sp| sp.outros.iter().any(Session::modified))
     }
 
     fn say(&mut self, text: String, kind: ToastKind) {
@@ -386,6 +429,15 @@ impl Session {
             return;
         }
         let livre = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
+        if self.jan_espera {
+            self.jan_espera = false;
+            self.janela_tecla(k);
+            return;
+        }
+        if livre && k == Key::Ctrl('w') {
+            self.jan_espera = true;
+            return;
+        }
         if self.dash && livre {
             match k {
                 Key::Char('n') => {
@@ -928,8 +980,12 @@ impl Session {
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
         let pool = self.lsp_pool.clone();
+        let (pane_id, splits, jan) = (self.pane_id, self.splits.take(), self.jan_pedido.take());
         let (term, term_focus, term_zen, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_zen, self.term_dims, self.term_screen.take(), self.notify.take());
         *self = Session::open(path);
+        self.pane_id = pane_id;
+        self.splits = splits;
+        self.jan_pedido = jan;
         self.root = root;
         self.leader_key = lider;
         self.term = term;
@@ -1029,6 +1085,34 @@ impl Session {
     // comandos `:`
     // ------------------------------------------------------------------
 
+    /// Segunda tecla do `<C-w>`.
+    fn janela_tecla(&mut self, k: Key) {
+        let c = match k {
+            Key::Char(c) => c,
+            Key::Ctrl(c) => c,
+            _ => return,
+        };
+        self.jan_pedido = match c {
+            's' | 'S' => Some(PedidoJanela::Dividir { dir: Dir::Col, arquivo: None, vazio: false }),
+            'v' => Some(PedidoJanela::Dividir { dir: Dir::Row, arquivo: None, vazio: false }),
+            'n' => Some(PedidoJanela::Dividir { dir: Dir::Col, arquivo: None, vazio: true }),
+            'h' => Some(PedidoJanela::Foco(Lado::Esquerda)),
+            'j' => Some(PedidoJanela::Foco(Lado::Baixo)),
+            'k' => Some(PedidoJanela::Foco(Lado::Cima)),
+            'l' => Some(PedidoJanela::Foco(Lado::Direita)),
+            'w' => Some(PedidoJanela::Ciclo(1)),
+            'W' => Some(PedidoJanela::Ciclo(-1)),
+            'p' => Some(PedidoJanela::Anterior),
+            'c' => Some(PedidoJanela::Fechar { forcar: false }),
+            'q' => Some(PedidoJanela::Fechar { forcar: false }),
+            'o' => Some(PedidoJanela::So),
+            '=' => Some(PedidoJanela::Igualar),
+            '_' => Some(PedidoJanela::Maximizar(Dir::Col)),
+            '|' => Some(PedidoJanela::Maximizar(Dir::Row)),
+            _ => None,
+        };
+    }
+
     fn exec_ex(&mut self, line: &str) {
         // o núcleo já aplicou a faixa (`1,3`, `%`, `'<,'>`): aqui só interessa o nome do comando
         let line = line.trim().trim_start_matches(|c: char| c.is_ascii_digit() || ",.$%'<>+-; :".contains(c)).trim();
@@ -1054,7 +1138,7 @@ impl Session {
                 self.git_load();
             }
             "q" | "quit" => {
-                if self.modified() && !bang {
+                if self.modified() && !bang && !self.irmao {
                     self.say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
                 } else {
                     self.quit = true;
@@ -1077,6 +1161,13 @@ impl Session {
                     self.open_file_aqui(Path::new(arg), None);
                 }
             }
+            "sp" | "split" | "new" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" => {
+                let dir = if name.starts_with('v') { Dir::Row } else { Dir::Col };
+                let vazio = name.ends_with("new") || name == "vne";
+                self.jan_pedido = Some(PedidoJanela::Dividir { dir, arquivo: (!arg.is_empty()).then(|| PathBuf::from(arg)), vazio });
+            }
+            "clo" | "close" => self.jan_pedido = Some(PedidoJanela::Fechar { forcar: bang }),
+            "on" | "only" => self.jan_pedido = Some(PedidoJanela::So),
             "tabnew" | "tabe" | "tabedit" => self.aba_pedido = Some(PedidoAba::Nova((!arg.is_empty()).then(|| PathBuf::from(arg)))),
             "tabc" | "tabclose" => self.aba_pedido = Some(PedidoAba::Fechar { forcar: bang }),
             "tabn" | "tabnext" => self.aba_pedido = Some(PedidoAba::Proxima),
@@ -1291,8 +1382,17 @@ impl Session {
                 let (id, a, b, _) = self.ed.last_yank;
                 ((a.row, a.col), (b.row, b.col), id)
             }),
+            layout: None,
+            pane: self.pane_id,
+            panes: Vec::new(),
         }
     }
+}
+
+/// `<C-w>o` só descarta painéis se nenhuma alteração se perder (os do mesmo arquivo do focado
+/// compartilham o texto, então valem como salvos).
+fn forcar_so(sp: &Splits) -> bool {
+    sp.outros.iter().all(|o| !o.modified() || o.irmao)
 }
 
 /// Passa o que é "do espaço de trabalho" (explorador, terminal, líder) de uma aba para outra.
@@ -1393,14 +1493,14 @@ impl Workspace {
     fn fechar_aba(&mut self, forcar: bool) {
         if self.abas.len() == 1 {
             // última aba: `:q` normal
-            if self.atual().modified() && !forcar {
+            if self.atual().tem_alteracoes() && !forcar {
                 self.atual().say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
             } else {
                 self.sair = true;
             }
             return;
         }
-        if self.atual().modified() && !forcar {
+        if self.atual().tem_alteracoes() && !forcar {
             self.atual().say("Alterações não salvas. Use :tabc! para fechar sem salvar.".into(), ToastKind::Error);
             return;
         }
@@ -1411,9 +1511,197 @@ impl Workspace {
         mover_paineis(&mut velha, &mut self.abas[nova]);
     }
 
+    // ------------------------------------------------------------------
+    // janelas divididas
+    // ------------------------------------------------------------------
+
+    fn janela(&mut self, p: PedidoJanela) {
+        use crate::janelas::{vizinho, Rect};
+        let ativa = self.ativa;
+        match p {
+            PedidoJanela::Dividir { dir, arquivo, vazio } => {
+                let foco = &self.abas[ativa];
+                let (cols, rows) = (foco.cols, foco.rows);
+                let mut nova = match (&arquivo, vazio) {
+                    (Some(a), _) => self.nova_sessao(Some(a)),
+                    (None, true) => self.nova_sessao(None),
+                    (None, false) => {
+                        let origem = &self.abas[ativa];
+                        let mut n = self.nova_sessao(origem.path.as_deref());
+                        n.ed.sincronizar(&origem.ed.buf.rope);
+                        if !origem.modified() {
+                            n.saved_rev = n.ed.buf.rev;
+                        }
+                        n.ed.set_cursor(origem.ed.cursor.row, origem.ed.cursor.col);
+                        n.top = origem.top;
+                        n.left = origem.left;
+                        n
+                    }
+                };
+                nova.resize(cols, rows);
+                let foco = &mut self.abas[ativa];
+                let mut sp = foco.splits.take().unwrap_or_else(|| Box::new(Splits { layout: Layout::leaf(foco.pane_id), outros: Vec::new(), proximo_id: foco.pane_id + 1, ultimo: None }));
+                let id = sp.proximo_id;
+                sp.proximo_id += 1;
+                sp.layout.dividir(foco.pane_id, dir, id, false);
+                nova.pane_id = id;
+                let mut velho = std::mem::replace(&mut self.abas[ativa], nova);
+                mover_paineis(&mut velho, &mut self.abas[ativa]);
+                sp.ultimo = Some(velho.pane_id);
+                sp.outros.push(velho);
+                self.abas[ativa].splits = Some(sp);
+            }
+            PedidoJanela::Foco(lado) => {
+                let Some(sp) = self.abas[ativa].splits.as_ref() else { return };
+                let rects = sp.layout.rects(Rect::new(0.0, 0.0, 1000.0, 1000.0), 0.0);
+                if let Some(id) = vizinho(&rects, self.abas[ativa].pane_id, lado) {
+                    self.focar(id);
+                }
+            }
+            PedidoJanela::Ciclo(d) => {
+                let Some(sp) = self.abas[ativa].splits.as_ref() else { return };
+                let ids = sp.layout.ids();
+                let i = ids.iter().position(|x| *x == self.abas[ativa].pane_id).unwrap_or(0) as i32;
+                let n = ids.len() as i32;
+                self.focar(ids[(i + d).rem_euclid(n) as usize]);
+            }
+            PedidoJanela::Anterior => {
+                if let Some(id) = self.abas[ativa].splits.as_ref().and_then(|sp| sp.ultimo) {
+                    self.focar(id);
+                }
+            }
+            PedidoJanela::Fechar { forcar } => self.fechar_painel(forcar),
+            PedidoJanela::So => {
+                let foco = &mut self.abas[ativa];
+                let Some(sp) = foco.splits.as_ref() else { return };
+                if !forcar_so(sp) {
+                    foco.say("Há painéis com alterações não salvas.".into(), ToastKind::Error);
+                    return;
+                }
+                foco.splits = None;
+            }
+            PedidoJanela::Igualar => {
+                if let Some(sp) = self.abas[ativa].splits.as_mut() {
+                    sp.layout.igualar();
+                }
+            }
+            PedidoJanela::Maximizar(dir) => {
+                let id = self.abas[ativa].pane_id;
+                if let Some(sp) = self.abas[ativa].splits.as_mut() {
+                    sp.layout.maximizar(id, dir);
+                }
+            }
+        }
+    }
+
+    /// Dá o foco ao painel `id` da aba ativa (o editor vai para a lista de painéis do outro).
+    pub fn focar(&mut self, id: PaneId) {
+        let ativa = self.ativa;
+        if self.abas[ativa].pane_id == id {
+            return;
+        }
+        let Some(mut sp) = self.abas[ativa].splits.take() else { return };
+        let Some(pos) = sp.outros.iter().position(|s| s.pane_id == id) else {
+            self.abas[ativa].splits = Some(sp);
+            return;
+        };
+        let novo = sp.outros.remove(pos);
+        let mut velho = std::mem::replace(&mut self.abas[ativa], novo);
+        mover_paineis(&mut velho, &mut self.abas[ativa]);
+        sp.ultimo = Some(velho.pane_id);
+        sp.outros.push(velho);
+        self.abas[ativa].splits = Some(sp);
+    }
+
+    /// `:close` / `:q` com painéis: fecha o focado e o espaço vai para o vizinho. Alterações só
+    /// se perdem se forem do único painel com aquele buffer.
+    fn fechar_painel(&mut self, forcar: bool) {
+        let ativa = self.ativa;
+        let foco = &mut self.abas[ativa];
+        let Some(sp) = foco.splits.as_ref() else {
+            foco.say("Último painel da aba (use :tabc ou :q).".into(), ToastKind::Error);
+            return;
+        };
+        if foco.modified() && !forcar && !foco.irmao {
+            foco.say("Alterações não salvas. Use :close! para fechar sem salvar.".into(), ToastKind::Error);
+            return;
+        }
+        let id = foco.pane_id;
+        let ids = sp.layout.ids();
+        let i = ids.iter().position(|x| *x == id).unwrap_or(0);
+        let destino = sp.ultimo.filter(|u| *u != id && ids.contains(u)).unwrap_or(if i > 0 { ids[i - 1] } else { ids[1] });
+        self.focar(destino);
+        // o painel que perdeu o foco é o fechado: sai da lista e do layout
+        let foco = &mut self.abas[ativa];
+        if let Some(sp) = foco.splits.as_mut() {
+            sp.outros.retain(|s| s.pane_id != id);
+            sp.layout.fechar(id);
+            sp.ultimo = None;
+            if sp.outros.is_empty() {
+                foco.splits = None;
+            }
+        }
+    }
+
+    /// Painéis do mesmo arquivo compartilham o texto: o que o focado mudou vai para os outros (que
+    /// guardam o texto antigo no desfazer) e o estado de "salvo" acompanha.
+    fn sincronizar_irmaos(&mut self) {
+        let foco = &mut self.abas[self.ativa];
+        if foco.splits.is_none() {
+            foco.irmao = false;
+            return;
+        }
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let meu = foco.path.as_deref().map(canon);
+        let rope = foco.ed.buf.rope.clone();
+        let modificado = foco.modified();
+        let sp = foco.splits.as_mut().unwrap();
+        let mut algum = false;
+        for o in sp.outros.iter_mut() {
+            let mesmo = meu.is_some() && o.path.as_deref().map(canon) == meu;
+            o.irmao = mesmo;
+            if !mesmo {
+                continue;
+            }
+            algum = true;
+            if o.ed.buf.rope != rope {
+                o.ed.sincronizar(&rope);
+            }
+            if modificado {
+                if o.saved_rev == o.ed.buf.rev {
+                    o.saved_rev = o.ed.buf.rev.wrapping_sub(1);
+                }
+            } else {
+                o.saved_rev = o.ed.buf.rev;
+            }
+        }
+        foco.irmao = algum;
+    }
+
+    /// Tamanho de cada painel (colunas, linhas), calculado pela tela a partir do layout.
+    pub fn tamanhos_paineis(&mut self, tam: &[(PaneId, usize, f32)]) {
+        let foco = &mut self.abas[self.ativa];
+        for &(id, c, r) in tam {
+            if foco.pane_id == id {
+                foco.resize(c, r);
+            } else if let Some(o) = foco.splits.as_mut().and_then(|sp| sp.outros.iter_mut().find(|o| o.pane_id == id)) {
+                o.resize(c, r);
+            }
+        }
+    }
+
+    /// Arrasta um divisor do layout (a tela manda o índice e a posição em pixels).
+    pub fn arrastar_divisor(&mut self, idx: usize, area: crate::janelas::Rect, gap: f32, pos: f32) {
+        if let Some(sp) = self.abas[self.ativa].splits.as_mut() {
+            sp.layout.arrastar(idx, area, gap, pos);
+        }
+    }
+
     /// Resolve o que a aba ativa pediu (abrir arquivo, comandos de aba, sair).
     fn depois(&mut self) {
         for _ in 0..8 {
+            // as edições do painel focado chegam aos irmãos antes de qualquer pedido (fechar, dividir)
+            self.sincronizar_irmaos();
             let s = self.atual();
             if let Some((p, g)) = s.abrir_pedido.take() {
                 self.abrir_em_aba(&p, g);
@@ -1445,10 +1733,16 @@ impl Workspace {
                 }
                 continue;
             }
+            if let Some(p) = s.jan_pedido.take() {
+                self.janela(p);
+                continue;
+            }
             if s.quit {
                 s.quit = false;
-                // `:q` com várias abas fecha a ativa; na última, sai
-                if self.abas.len() > 1 {
+                // `:q` com painéis divididos fecha o painel; com várias abas, a aba; na última, sai
+                if s.splits.is_some() {
+                    self.janela(PedidoJanela::Fechar { forcar: true });
+                } else if self.abas.len() > 1 {
                     self.fechar_aba(true);
                 } else {
                     self.sair = true;
@@ -1462,11 +1756,15 @@ impl Workspace {
     pub fn feed(&mut self, teclas: &str) {
         self.atual().feed(teclas);
         self.depois();
+        self.sincronizar_irmaos();
     }
 
     pub fn resize(&mut self, cols: usize, rows: f32) {
         self.dims = (cols, rows);
-        self.atual().resize(cols, rows);
+        // com painéis, o tamanho de cada um vem de `tamanhos_paineis`
+        if self.atual().splits.is_none() {
+            self.atual().resize(cols, rows);
+        }
     }
 
     pub fn scroll(&mut self, linhas: f32) {
@@ -1494,6 +1792,13 @@ impl Workspace {
             .map(|s| crate::nview::TabInfo { name: s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
             .collect();
         vm.tab_active = self.ativa;
+        if let Some(sp) = self.abas[self.ativa].splits.as_mut() {
+            vm.layout = Some(sp.layout.clone());
+            for o in sp.outros.iter_mut() {
+                let id = o.pane_id;
+                vm.panes.push(crate::nview::PaneView { id, vm: Box::new(o.view_model()) });
+            }
+        }
         vm
     }
 
@@ -1910,6 +2215,85 @@ mod testes {
         s.feed("G$p");
         assert_eq!(s.ed.lines()[2], "Xijkl!ad");
         assert_eq!(s.ed.lines()[3], "      eh");
+    }
+
+    fn texto(vm: &ViewModel) -> String {
+        vm.rope.to_string()
+    }
+
+    #[test]
+    fn janelas_dividir_compartilha_o_buffer_e_foca_pelo_teclado() {
+        let d = projeto("jan");
+        let mut w = Workspace::new(Some(d.join("src/alfa.rs")), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d.clone();
+        assert!(w.view_model().layout.is_none(), "uma janela só: sem layout");
+        // :vsplit — o novo fica à esquerda e com o foco; os dois mostram o mesmo arquivo
+        w.feed(":vsplit<CR>");
+        let vm = w.view_model();
+        let ids = vm.layout.as_ref().unwrap().ids();
+        assert_eq!(ids, vec![1, 0], "novo à esquerda");
+        assert_eq!((vm.pane, vm.panes.len(), vm.panes[0].id), (1, 1, 0));
+        assert_eq!(vm.name, "alfa.rs");
+        // editar num painel aparece no outro (mesmo buffer)
+        w.feed("ggdd");
+        let vm = w.view_model();
+        assert_eq!(texto(&vm), "fn agulha() {}");
+        assert_eq!(texto(&vm.panes[0].vm), "fn agulha() {}", "o outro painel recebeu a edição");
+        assert!(vm.modified && vm.panes[0].vm.modified, "os dois ficam modificados");
+        // <C-w>l vai para o painel da direita (o original); <C-w>h volta
+        w.feed("<C-w>l");
+        assert_eq!(w.view_model().pane, 0);
+        w.feed("<C-w>h");
+        assert_eq!(w.view_model().pane, 1);
+        // salvar num painel limpa o aviso nos dois
+        w.feed(":w<CR>");
+        let vm = w.view_model();
+        assert!(!vm.modified && !vm.panes[0].vm.modified, "salvo nos dois");
+        // o desfazer do painel focado traz a linha de volta nos dois
+        w.feed("u");
+        let vm = w.view_model();
+        assert_eq!(texto(&vm).lines().count(), 2);
+        assert_eq!(texto(&vm.panes[0].vm).lines().count(), 2);
+        // <C-w>s divide o focado em baixo da esquerda: três painéis; <C-w>w percorre em ordem
+        w.feed("<C-w>s");
+        let vm = w.view_model();
+        assert_eq!(vm.layout.as_ref().unwrap().len(), 3);
+        let atual = vm.pane;
+        w.feed("<C-w>w");
+        assert_ne!(w.view_model().pane, atual);
+        // :close fecha o focado; o último painel não fecha
+        w.feed(":close<CR>");
+        assert_eq!(w.view_model().layout.as_ref().unwrap().len(), 2);
+        w.feed("<C-w>o");
+        let vm = w.view_model();
+        assert!(vm.layout.is_none() && vm.panes.is_empty(), "só restou um");
+        w.feed(":close<CR>");
+        assert!(w.view_model().toast.is_some_and(|t| t.2 == ToastKind::Error), "último painel");
+    }
+
+    #[test]
+    fn janelas_q_fecha_so_o_painel_e_protege_alteracoes_unicas() {
+        let d = projeto("jq");
+        let mut w = Workspace::new(Some(d.join("src/alfa.rs")), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d.clone();
+        w.feed(":split<CR>");
+        assert_eq!(w.n_abas(), 1);
+        // buffer compartilhado e alterado: :q fecha o painel sem perder nada (o outro tem o texto)
+        w.feed("x:q<CR>");
+        let vm = w.view_model();
+        assert!(vm.layout.is_none() && !w.sair, "ficou um painel e o app continua");
+        assert!(vm.modified, "a alteração não se perdeu");
+        // :new abre um buffer vazio e separado; alterá-lo protege o :q
+        w.feed(":new<CR>");
+        let vm = w.view_model();
+        assert_eq!(vm.panes.len(), 1);
+        w.feed("ihello<Esc>:q<CR>");
+        assert_eq!(w.view_model().layout.as_ref().unwrap().len(), 2, "alteração única: o :q recusa");
+        w.feed(":q!<CR>");
+        assert!(w.view_model().layout.is_none());
+        assert_eq!(texto(&w.view_model()), "n alfa() {}\nfn agulha() {}", "o painel original ficou como estava");
     }
 
     #[test]

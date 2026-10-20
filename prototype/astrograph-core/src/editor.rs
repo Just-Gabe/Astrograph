@@ -2087,6 +2087,27 @@ impl Editor {
         (p, q)
     }
 
+    /// Adota o texto de outro painel do mesmo arquivo (janelas divididas). Entra no desfazer como
+    /// uma alteração qualquer, e o cursor acompanha: linhas inseridas/removidas acima dele o
+    /// empurram, uma alteração por cima dele só o mantém dentro do texto.
+    pub fn sincronizar(&mut self, rope: &Rope) {
+        if self.buf.rope == *rope {
+            return;
+        }
+        let (_, q) = Self::common_lines(&self.buf.rope, rope);
+        let (velho, novo) = (self.buf.rope.len_lines() as i64, rope.len_lines() as i64);
+        self.checkpoint();
+        self.buf.rope = rope.clone();
+        self.buf.rev += 1;
+        let row = self.cursor.row as i64;
+        if row >= velho - q as i64 {
+            self.cursor.row = (row + novo - velho).max(0) as usize;
+        }
+        self.cursor.row = self.cursor.row.min(self.last_row());
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
     fn restore(&mut self, snap: Snap, from_undo: bool) {
         self.emptied = false;
         // nada mudou entre os dois textos: volta o cursor guardado
@@ -2261,5 +2282,44 @@ fn parse_motion(keys: &[Key]) -> MParse {
             None => MParse::Incomplete,
         },
         _ => MParse::Invalid,
+    }
+}
+
+#[cfg(test)]
+mod testes_sincronizar {
+    use super::*;
+
+    fn ed(t: &str) -> Editor {
+        Editor::new(&t.split('\n').collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn texto_de_outro_painel_entra_e_o_cursor_acompanha() {
+        let mut b = ed("a\nb\nc\nd");
+        b.set_cursor(2, 0);
+        // o outro painel inseriu duas linhas no começo
+        let novo = Rope::from_str("x\ny\na\nb\nc\nd");
+        b.sincronizar(&novo);
+        assert_eq!(b.lines(), vec!["x", "y", "a", "b", "c", "d"]);
+        assert_eq!(b.cursor.row, 4, "continua em `c`");
+        // apagar linhas acima também puxa o cursor
+        b.sincronizar(&Rope::from_str("c\nd"));
+        assert_eq!(b.cursor.row, 0);
+        assert_eq!(b.lines(), vec!["c", "d"]);
+    }
+
+    #[test]
+    fn alteracao_abaixo_do_cursor_nao_mexe_nele_e_desfazer_volta() {
+        let mut b = ed("a\nb\nc");
+        b.set_cursor(0, 0);
+        b.sincronizar(&Rope::from_str("a\nb\nc\nnova"));
+        assert_eq!(b.cursor.row, 0);
+        assert_eq!(b.lines().len(), 4);
+        b.feed_str("u");
+        assert_eq!(b.lines(), vec!["a", "b", "c"], "o desfazer deste painel desfaz a alteração vinda do outro");
+        // igual: não vira alteração nenhuma
+        let r = b.buf.rev;
+        b.sincronizar(&Rope::from_str("a\nb\nc"));
+        assert_eq!(b.buf.rev, r);
     }
 }
