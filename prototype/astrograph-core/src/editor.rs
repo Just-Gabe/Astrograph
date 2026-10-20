@@ -144,6 +144,8 @@ struct Insert {
     typed: Vec<Key>,
     /// linha que recebeu só recuo automático (some se nada for digitado)
     ai_row: Option<usize>,
+    /// onde a inserção começou (`<C-w>` e `<C-u>` param aqui na primeira vez)
+    start: Pos,
 }
 
 pub struct Editor {
@@ -239,6 +241,8 @@ pub struct Editor {
     join_raw: bool,
     /// a inserção atual já mudou o texto (para `']` no <Esc>)
     ins_mudou: bool,
+    /// `<C-o>` na inserção: volta a inserir depois de um comando; guarda se o cursor estava depois do fim
+    ins_o: Option<bool>,
     /// seleção visual mais recente (para `'<` e `'>`)
     vmarks: Option<(Pos, Pos, VKind)>,
     /// marcas que o desfazer/refazer devolve (aplicadas depois do reajuste por linhas)
@@ -323,6 +327,7 @@ impl Editor {
             new_change: false,
             join_raw: false,
             ins_mudou: false,
+            ins_o: None,
             vmarks: None,
             marks_back: None,
             put_end: None,
@@ -1155,6 +1160,15 @@ impl Editor {
         if jump && !falhou_marca {
             self.set_pcmark(pc_before);
         }
+        if let Some(fim) = self.ins_o.take() {
+            if self.mode == Mode::Normal && self.pending.is_empty() {
+                let len = self.buf.line_len(self.cursor.row);
+                if len > 0 && self.cursor.col + 1 == len && ((fim && self.cursor.row == pc_before.row) || self.curswant > self.want_here()) {
+                    self.cursor.col = len;
+                }
+                self.mode = Mode::Insert;
+            }
+        }
         self.failed |= failed_before;
     }
 
@@ -1854,6 +1868,18 @@ impl Editor {
         self.unnamed = Some(r);
     }
 
+    /// Como `shift_line`, mas também mexe em linha vazia (`<C-t>` na inserção).
+    fn shift_line_forcado(&mut self, row: usize, right: bool) {
+        if right && self.buf.line(row).is_empty() {
+            let w = self.shiftwidth;
+            let ts = motion::tabstop();
+            let ind = if self.expandtab { " ".repeat(w) } else { format!("{}{}", "\t".repeat(w / ts), " ".repeat(w % ts)) };
+            self.buf.insert(Pos::new(row, 0), &ind);
+        } else {
+            self.shift_line(row, right);
+        }
+    }
+
     fn shift_line(&mut self, row: usize, right: bool) {
         let line = self.buf.line(row);
         if line.is_empty() && right {
@@ -2481,7 +2507,7 @@ impl Editor {
     fn begin_insert_state(&mut self, cmd: char, count: usize, ai_row: Option<usize>) {
         self.mode = Mode::Insert;
         self.ins_mudou = false;
-        self.ins = Insert { cmd, count, typed: Vec::new(), ai_row };
+        self.ins = Insert { cmd, count, typed: Vec::new(), ai_row, start: self.cursor };
     }
 
     /// `<C-r>{reg}` na inserção: o texto do registrador entra como se fosse digitado (e é isso que o
@@ -2514,6 +2540,18 @@ impl Editor {
         }
         if k == Key::Ctrl('r') {
             self.ins_reg_wait = true;
+            return;
+        }
+        if k == Key::Ctrl('o') {
+            // um comando do modo normal e volta; no fim da linha o cursor fica depois do último caractere
+            let len = self.buf.line_len(self.cursor.row);
+            let fim = len > 0 && self.cursor.col >= len;
+            self.clear_autoindent();
+            self.mode = Mode::Normal;
+            if fim {
+                self.cursor.col = len - 1;
+            }
+            self.ins_o = Some(fim);
             return;
         }
         if self.dot_recording && !self.replaying && k != Key::Esc {
@@ -2650,8 +2688,65 @@ impl Editor {
                     self.cursor = Pos::new(self.cursor.row - 1, prev_len);
                 }
             }
+            Key::Ctrl('h') => self.insert_raw(Key::Backspace),
+            Key::Ctrl('w') => self.ins_apagar(false),
+            Key::Ctrl('u') => self.ins_apagar(true),
+            Key::Ctrl('t') | Key::Ctrl('d') => {
+                let row = self.cursor.row;
+                let antes = self.buf.line(row);
+                let ind0 = antes.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+                self.shift_line_forcado(row, k == Key::Ctrl('t'));
+                let depois = self.buf.line(row);
+                let ind1 = depois.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+                self.cursor.col = (self.cursor.col + ind1).saturating_sub(ind0);
+            }
             _ => {}
         }
+    }
+
+    /// `<C-w>` (palavra) e `<C-u>` (linha) na inserção: param no começo da inserção na primeira vez.
+    fn ins_apagar(&mut self, linha: bool) {
+        let row = self.cursor.row;
+        if self.cursor.col == 0 {
+            self.insert_raw(Key::Backspace);
+            return;
+        }
+        let start = self.ins.start;
+        let texto = self.buf.line(row);
+        let mincol = if linha {
+            // com autoindent mantém o recuo
+            let fnb = self.buf.first_nonblank(row);
+            if fnb < self.cursor.col { fnb } else { 0 }
+        } else {
+            0
+        };
+        let mut col = self.cursor.col;
+        let mut modo_palavra_nao_espaco = false;
+        let mut classe = 0u8;
+        loop {
+            col -= 1;
+            let c = self.buf.char_at(Pos::new(row, col));
+            let cl = motion::cls(&self.buf, Pos::new(row, col), false);
+            if !linha {
+                if !modo_palavra_nao_espaco {
+                    if cl != 0 {
+                        modo_palavra_nao_espaco = true;
+                        classe = cl;
+                    }
+                } else if cl != classe {
+                    col += 1;
+                    break;
+                }
+            }
+            let _ = c;
+            let na_partida = start.row == row && col == start.col;
+            if !(col > mincol && !na_partida) {
+                break;
+            }
+        }
+        let _ = texto;
+        self.buf.delete(Pos::new(row, col), self.cursor);
+        self.cursor.col = col;
     }
 
     // ------------------------------------------------------------------

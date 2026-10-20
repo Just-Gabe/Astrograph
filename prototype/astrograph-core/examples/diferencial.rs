@@ -115,6 +115,17 @@ fn vocabulario_ex() -> Vec<&'static str> {
     ]
 }
 
+fn vocabulario_ins() -> Vec<&'static str> {
+    let mut v = vec![
+        "ifoo bar<C-w>baz<Esc>", "ifoo<C-w><Esc>", "ione two<C-w><C-w>x<Esc>", "A  a.b<C-w><C-w><Esc>", "Ahey<C-u><Esc>", "Iab<C-u>c<Esc>", "ox<C-u>y<Esc>", "A<C-t>x<Esc>", "Ax<C-d><Esc>", "A<C-t><C-t>y<Esc>",
+        "Afoo<C-o>0X<Esc>", "ifoo<C-o>$X<Esc>", "Afoo<C-o>xY<Esc>", "Afoo bar<C-o>bX<Esc>", "ifoo<C-o>wX<Esc>", "Abc<C-o>ddX<Esc>", "Abc<C-o>yyx<Esc>p", "ia<C-o>uX<Esc>", "Ia b<C-h><C-h>X<Esc>", "A.. a.b..<C-w>X<Esc>",
+        "i  x<C-u>y<Esc>", "A<C-u>q<Esc>", "ofoo<CR>bar<C-w><C-w>q<Esc>", "A foo.bar  <C-w>X<Esc>", "A<C-w>X<Esc>", "jI<C-w>X<Esc>", "jI<C-u>X<Esc>", "jA  <C-u>X<Esc>",
+        "ix<Esc>", "ayy<Esc>", "ofoo<Esc>", "Obar<Esc>", "u", ".", "ix<Esc>.",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
 fn vocabulario_bloco() -> Vec<&'static str> {
     let inicio = ["<C-v>"];
     let mov = ["", "l", "j", "jl", "jj", "jjl", "2l", "3j", "$", "j$", "jj$", "w", "e", "b", "0", "^", "ll", "jw", "je", "G", "gg", "k", "h", "jh", "jjh", "fo", "}", "jlj", "lj"];
@@ -200,6 +211,7 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
         "marc2" => return vocabulario_marcas2(),
         "pct" => return vocabulario_pct(),
         "blk" => return vocabulario_bloco(),
+        "ins" => return vocabulario_ins(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),
