@@ -113,6 +113,7 @@ checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 name = "astrograph-core"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "ropey",
  "unicode-width",
 ]

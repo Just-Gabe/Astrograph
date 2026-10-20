@@ -8,6 +8,7 @@ use ropey::Rope;
 use crate::buffer::{Buffer, Pos};
 use crate::keys::Key;
 use crate::motion;
+use crate::search;
 use crate::textobj;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +95,8 @@ struct Parsed {
     cmd: Cmd,
     /// teclas do prefixo (registrador e contagem), fora do que o `.` repete
     prefix: usize,
+    /// padrão digitado em `/texto<CR>` ou `?texto<CR>`
+    search: Option<(String, bool)>,
 }
 
 enum Parse {
@@ -145,6 +148,12 @@ pub struct Editor {
     failed: bool,
     /// todas as linhas foram apagadas (buffer "vazio" do Vim): `dd` não faz mais nada
     emptied: bool,
+    /// último padrão buscado e a direção (para `n`/`N`)
+    last_search: Option<(String, bool)>,
+    /// padrão do comando em execução (`/texto<CR>`)
+    search_now: Option<(String, bool)>,
+    /// mensagem da última busca ("search hit BOTTOM..." ou erro)
+    pub msg: String,
     /// seleção do modo visual
     vis: Option<VState>,
     /// o operador em curso vem do modo visual (sem a regra de `d` multilinha → linhas)
@@ -175,6 +184,9 @@ impl Editor {
             ops_change: false,
             failed: false,
             emptied: false,
+            last_search: None,
+            search_now: None,
+            msg: String::new(),
             vis: None,
             visual_op: false,
         }
@@ -186,6 +198,40 @@ impl Editor {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// Texto do que está sendo digitado: `/padrão` ou `?padrão` durante uma busca.
+    pub fn search_line(&self) -> Option<String> {
+        let k = &self.pending;
+        let mut i = 0;
+        while i < k.len() {
+            match k[i] {
+                Key::Char('"') => i += 2,
+                Key::Char(c) if c.is_ascii_digit() || matches!(c, 'd' | 'c' | 'y' | '<' | '>') => i += 1,
+                _ => break,
+            }
+        }
+        match k.get(i) {
+            Some(Key::Char(c @ ('/' | '?'))) => {
+                let text: String = k[i + 1..].iter().filter_map(|x| x.as_char()).collect();
+                Some(format!("{c}{text}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Teclas pendentes para mostrar (`2d`, `"a`...), como o `showcmd` do Vim.
+    pub fn showcmd(&self) -> String {
+        self.pending
+            .iter()
+            .map(|k| match k {
+                Key::Char(c) => c.to_string(),
+                Key::Esc => "^[".into(),
+                Key::Enter => "^M".into(),
+                Key::Ctrl(c) => format!("^{}", c.to_ascii_uppercase()),
+                _ => String::new(),
+            })
+            .collect()
     }
 
     /// Há teclas de um comando ainda incompleto (`d`, `2`, `"`...).
@@ -267,6 +313,17 @@ impl Editor {
                     self.pending.clear();
                     return;
                 }
+                // apagar durante `/texto`: tira uma tecla; sem texto, cancela a busca
+                if k == Key::Backspace {
+                    if let Some(l) = self.search_line() {
+                        if l.chars().count() <= 1 {
+                            self.pending.clear();
+                        } else {
+                            self.pending.pop();
+                        }
+                        return;
+                    }
+                }
                 self.pending.push(k);
                 match self.parse(&self.pending.clone()) {
                     Parse::Incomplete => {}
@@ -311,7 +368,8 @@ impl Editor {
         let prefix = i;
         let Some(&k) = keys.get(i) else { return Parse::Incomplete };
         i += 1;
-        let done = |cmd: Cmd| Parse::Done(Parsed { reg, count, cmd, prefix });
+        let done = |cmd: Cmd| Parse::Done(Parsed { reg, count, cmd, prefix, search: None });
+        let done_s = |cmd: Cmd, search: Option<(String, bool)>| Parse::Done(Parsed { reg, count, cmd, prefix, search });
         match k {
             Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) => {
                 let mut count2: Option<usize> = None;
@@ -337,12 +395,12 @@ impl Editor {
                     Some(_) => match parse_motion(&keys[i..]) {
                         MParse::Incomplete => Parse::Incomplete,
                         MParse::Invalid => Parse::Invalid,
-                        MParse::Done(m, _) => done(Cmd::Op { op, count2, target: Target::Motion(m) }),
+                        MParse::Done(m, _) => done_s(Cmd::Op { op, count2, target: Target::Motion(m) }, extract_search(&keys[i..], m)),
                     },
                 }
             }
             _ => match parse_motion(&keys[i - 1..]) {
-                MParse::Done(m, _) => done(Cmd::Motion(m)),
+                MParse::Done(m, _) => done_s(Cmd::Motion(m), extract_search(&keys[i - 1..], m)),
                 MParse::Incomplete => Parse::Incomplete,
                 MParse::Invalid => match k {
                     Key::Char(c @ ('x' | 'X' | 'D' | 'C' | 's' | 'S' | 'Y' | 'p' | 'P' | 'u' | 'J' | 'i' | 'a' | 'I' | 'A' | 'o' | 'O' | '~' | '.')) => {
@@ -372,6 +430,20 @@ impl Editor {
             Cmd::Op { op, .. } => *op != 'y',
             Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V'),
         };
+        self.search_now = p.search.clone();
+        // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
+        let sm = match &p.cmd {
+            Cmd::Motion(m) => Some(*m),
+            Cmd::Op { target: Target::Motion(m), .. } => Some(*m),
+            _ => None,
+        };
+        if let Some(m) = sm {
+            if matches!(m.c, '/' | '?' | '*' | '#') {
+                if let Some(t) = self.search_target(m) {
+                    self.last_search = Some(t);
+                }
+            }
+        }
         // `failed` de comandos anteriores não pode contaminar este
         let failed_before = std::mem::take(&mut self.failed);
         // guarda o anterior: se este comando falhar, o `.` continua repetindo o de antes
@@ -402,6 +474,10 @@ impl Editor {
                     None => {
                         if m.c == '$' && !m.g {
                             self.curswant = MAXWANT;
+                        }
+                        // uma busca que falha também refaz a coluna desejada
+                        if matches!(m.c, '/' | '?' | 'n' | 'N' | '*' | '#') {
+                            self.curswant = self.want_here();
                         }
                         self.failed = true;
                     }
@@ -507,6 +583,15 @@ impl Editor {
                 '_' => {
                     let row = (cur.row + c1 - 1).min(self.last_row());
                     Some(Res { pos: Pos::new(row, b.line_len(row).saturating_sub(1)), kind: Kind::Incl, vertical: false, fail: false })
+                }
+                '*' | '#' => {
+                    let (pat, fwd) = self.search_target(m)?;
+                    let re = search::compile(&pat)?;
+                    let mut pos = self.word_start();
+                    for _ in 0..c1 {
+                        pos = search::find(b, &re, pos, fwd)?.0;
+                    }
+                    Some(Res { pos, kind: Kind::Excl, vertical: false, fail: false })
                 }
                 _ => None,
             };
@@ -645,7 +730,78 @@ impl Editor {
                 let (pos, incl) = motion::paragraph(b, cur, m.c == '}', c1)?;
                 Some(Res { pos, kind: if incl { Kind::Incl } else { Kind::Excl }, vertical: false, fail: false })
             }
+            '/' | '?' | 'n' | 'N' | '*' | '#' => {
+                let (pat, fwd) = self.search_target(m)?;
+                let re = search::compile(&pat)?;
+                let mut pos = if matches!(m.c, '*' | '#') { self.word_start() } else { cur };
+                for _ in 0..c1 {
+                    let (p, _wrapped) = search::find(b, &re, pos, fwd)?;
+                    pos = p;
+                }
+                if pos == cur && !matches!(m.c, 'n' | 'N' | '*' | '#' | '/' | '?') {
+                    return None;
+                }
+                Some(Res { pos, kind: Kind::Excl, vertical: false, fail: false })
+            }
             _ => None,
+        }
+    }
+
+    /// Início da palavra sob o cursor (ou da próxima na linha): de onde `*` e `#` buscam.
+    fn word_start(&self) -> Pos {
+        let line: Vec<char> = self.buf.line(self.cursor.row).chars().collect();
+        let kw = |c: char| c.is_alphanumeric() || c == '_';
+        if line.is_empty() {
+            return self.cursor;
+        }
+        let mut i = self.cursor.col.min(line.len() - 1);
+        if !kw(line[i]) {
+            match (i..line.len()).find(|&j| kw(line[j])) {
+                Some(j) => i = j,
+                None => return self.cursor,
+            }
+        }
+        while i > 0 && kw(line[i - 1]) {
+            i -= 1;
+        }
+        Pos::new(self.cursor.row, i)
+    }
+
+    /// Padrão e direção de um movimento de busca (e grava como último).
+    fn search_target(&self, m: Mo) -> Option<(String, bool)> {
+        match m.c {
+            '/' | '?' => {
+                let (mut pat, fwd) = self.search_now.clone()?;
+                if pat.is_empty() {
+                    pat = self.last_search.as_ref()?.0.clone();
+                }
+                Some((pat, fwd))
+            }
+            'n' => self.last_search.clone(),
+            'N' => self.last_search.clone().map(|(p, f)| (p, !f)),
+            _ => {
+                // * e #: a palavra sob o cursor (ou depois dele, na linha)
+                let line: Vec<char> = self.buf.line(self.cursor.row).chars().collect();
+                let kw = |c: char| c.is_alphanumeric() || c == '_';
+                let mut i = self.cursor.col.min(line.len().saturating_sub(1));
+                if line.is_empty() {
+                    return None;
+                }
+                if !kw(line[i]) {
+                    i = (i..line.len()).find(|&j| kw(line[j]))?;
+                }
+                let (mut a, mut b) = (i, i);
+                while a > 0 && kw(line[a - 1]) {
+                    a -= 1;
+                }
+                while b + 1 < line.len() && kw(line[b + 1]) {
+                    b += 1;
+                }
+                let word: String = line[a..=b].iter().collect();
+                let esc: String = word.chars().flat_map(|c| if "\\/.*$^~[]".contains(c) { vec!['\\', c] } else { vec![c] }).collect();
+                let pat = if m.g { esc } else { format!("\\<{esc}\\>") };
+                Some((pat, m.c == '*'))
+            }
         }
     }
 
@@ -1615,6 +1771,15 @@ impl Editor {
     }
 }
 
+/// Padrão de um movimento `/texto<CR>` / `?texto<CR>` (as teclas começam na barra).
+fn extract_search(keys: &[Key], m: Mo) -> Option<(String, bool)> {
+    if m.g || !matches!(m.c, '/' | '?') {
+        return None;
+    }
+    let text: String = keys[1..].iter().take_while(|k| **k != Key::Enter).filter_map(|k| k.as_char()).collect();
+    Some((text, m.c == '/'))
+}
+
 enum MParse {
     Incomplete,
     Invalid,
@@ -1627,13 +1792,18 @@ fn parse_motion(keys: &[Key]) -> MParse {
     match k {
         Key::Char(c @ ('h' | 'j' | 'k' | 'l' | 'w' | 'W' | 'b' | 'B' | 'e' | 'E' | '0' | '^' | '$' | '_' | 'G' | ';' | ',' | '%' | '{' | '}' | '+' | '-' | ' ')) => mo(c),
         Key::Enter => mo('\r'),
+        Key::Char(c @ ('n' | 'N' | '*' | '#')) => mo(c),
+        Key::Char(c @ ('/' | '?')) => match keys[1..].iter().position(|k| *k == Key::Enter) {
+            Some(n) => MParse::Done(Mo { c, g: false, arg: None }, n + 2),
+            None => MParse::Incomplete,
+        },
         Key::Char(c @ ('f' | 'F' | 't' | 'T')) => match keys.get(1) {
             Some(Key::Char(a)) => MParse::Done(Mo { c, g: false, arg: Some(*a) }, 2),
             Some(_) => MParse::Invalid,
             None => MParse::Incomplete,
         },
         Key::Char('g') => match keys.get(1) {
-            Some(Key::Char(c @ ('g' | 'e' | 'E' | '_'))) => MParse::Done(Mo { c: *c, g: true, arg: None }, 2),
+            Some(Key::Char(c @ ('g' | 'e' | 'E' | '_' | '*' | '#'))) => MParse::Done(Mo { c: *c, g: true, arg: None }, 2),
             Some(_) => MParse::Invalid,
             None => MParse::Incomplete,
         },

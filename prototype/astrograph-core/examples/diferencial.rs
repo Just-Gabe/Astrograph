@@ -72,7 +72,18 @@ fn vocabulario_visual() -> Vec<&'static str> {
     out
 }
 
+fn vocabulario_busca() -> Vec<&'static str> {
+    vec![
+        "/o<CR>", "/wo<CR>", "?e<CR>", "?o<CR>", "/\\<t<CR>", "/o\\><CR>", "/foo<CR>", "/a.b<CR>", "/\\vo+<CR>", "/<CR>", "?<CR>", "n", "N", "2n", "3N", "*", "#", "2*", "g*",
+        "d/e<CR>", "d?o<CR>", "dn", "dN", "d*", "y/o<CR>", "yn", "c/e<CR>X<Esc>", "cnX<Esc>", "d2/o<CR>", "/[aeiou]<CR>", "/\\s<CR>", "/\\d<CR>", "/x\\|y<CR>",
+        "w", "j", "$", "0", "e", "b", "G", "gg", "fo", "2w", "}", "x", "u", ".", "p",
+    ]
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
+    if nome == "bus" {
+        return vocabulario_busca();
+    }
     if nome == "vis" {
         return vocabulario_visual();
     }
@@ -107,6 +118,8 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
 async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, usize), String, String)> {
     let code = r#"
         local lines, keys = ...
+        vim.o.more = false
+        vim.o.shortmess = vim.o.shortmess .. 'sSI'
         local tmp = vim.fn.tempname()
         vim.fn.writefile(lines, tmp)
         vim.cmd('silent edit! ' .. vim.fn.fnameescape(tmp))
@@ -125,7 +138,8 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
     cmd.args(["--embed", "--headless", "--clean", "-n"]);
     let (nvim, _io, _child) = create::new_child_cmd(&mut cmd, Nada).await.ok()?;
     let args = vec![Value::from(lines.iter().map(|l| Value::from(*l)).collect::<Vec<_>>()), Value::from(keys)];
-    let r = nvim.exec_lua(code, args).await.ok();
+    // um caso que trava o nvim (pergunta, prompt) não pode travar o teste
+    let r = tokio::time::timeout(std::time::Duration::from_secs(4), nvim.exec_lua(code, args)).await.ok().and_then(|r| r.ok());
     let _ = nvim.command("qa!").await;
     let r = r?;
     let a = r.as_array()?;

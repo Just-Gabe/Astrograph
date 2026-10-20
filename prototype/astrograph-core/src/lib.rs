@@ -9,6 +9,7 @@ pub mod buffer;
 pub mod editor;
 pub mod keys;
 pub mod motion;
+pub mod search;
 pub mod textobj;
 
 pub use buffer::{Buffer, Pos};

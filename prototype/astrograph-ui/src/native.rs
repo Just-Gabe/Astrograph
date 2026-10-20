@@ -540,8 +540,8 @@ impl Session {
         // linha de comando / mensagem
         let crow = rows - 1;
         let mut cursor = None;
-        if let Some(c) = &self.cmdline {
-            let text = format!(":{c}");
+        let typed = self.cmdline.as_ref().map(|c| format!(":{c}")).or_else(|| self.ed.search_line());
+        if let Some(text) = typed {
             for (i, ch) in text.chars().enumerate() {
                 if i < cols {
                     put(&mut cells, cols, crow, i, ch, 0);
