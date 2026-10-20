@@ -57,6 +57,7 @@ pub struct Reg {
 struct Snap {
     rope: Rope,
     cursor: Pos,
+    marks: HashMap<char, Pos>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +169,14 @@ pub struct Editor {
     in_macro: bool,
     last_macro: Option<char>,
     macro_depth: usize,
+    /// marcas `a-z`/`A-Z`
+    marks: HashMap<char, Pos>,
+    /// marca de contexto (`''` e ``` `` ```): de onde o último salto saiu
+    pcmark: Option<Pos>,
+    /// seleção visual mais recente (para `'<` e `'>`)
+    vmarks: Option<(Pos, Pos, VKind)>,
+    /// marcas que o desfazer/refazer devolve (aplicadas depois do reajuste por linhas)
+    marks_back: Option<HashMap<char, Pos>>,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -205,6 +214,10 @@ impl Editor {
             in_macro: false,
             last_macro: None,
             macro_depth: 0,
+            marks: HashMap::new(),
+            pcmark: Some(Pos::new(0, 0)),
+            vmarks: None,
+            marks_back: None,
         }
     }
 
@@ -324,6 +337,73 @@ impl Editor {
         self.key(k);
     }
 
+    fn set_mark(&mut self, c: char) {
+        match c {
+            'a'..='z' | 'A'..='Z' => {
+                self.marks.insert(c, self.cursor);
+            }
+            '\'' | '`' => self.pcmark = Some(self.cursor),
+            _ => self.failed = true,
+        }
+    }
+
+    /// Posição da marca `c` (a-z, A-Z, `'`, `` ` ``, `<`, `>`).
+    fn mark_pos(&self, c: char) -> Option<Pos> {
+        match c {
+            'a'..='z' | 'A'..='Z' => self.marks.get(&c).copied(),
+            '\'' | '`' => self.pcmark,
+            '<' | '>' => {
+                let (a, b, kind) = self.vmarks?;
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                Some(match (c, kind) {
+                    ('<', VKind::Line) => Pos::new(lo.row, 0),
+                    ('<', _) => lo,
+                    ('>', VKind::Line) => Pos::new(hi.row, usize::MAX),
+                    _ => hi,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Reajusta as marcas depois de uma edição que inseriu ou apagou linhas.
+    fn adjust_marks(&mut self, old: &Rope) {
+        let (n0, n1) = (old.len_lines(), self.buf.rope.len_lines());
+        if n0 == n1 {
+            return;
+        }
+        let old_line = |r: usize| -> String {
+            let l = old.line(r).to_string();
+            l.strip_suffix('\n').unwrap_or(&l).to_string()
+        };
+        let common = n0.min(n1);
+        let f = (0..common).find(|&r| old_line(r) != self.buf.line(r)).unwrap_or(common);
+        let shift = |row: usize, d: i64| (row as i64 + d).max(0) as usize;
+        if n1 < n0 {
+            let k = n0 - n1;
+            let pure = f >= n1 || old_line(f + k) == self.buf.line(f);
+            let adj = |p: Pos, keep: bool| -> Option<Pos> {
+                if pure && p.row >= f && p.row < f + k {
+                    return if keep { Some(Pos::new(f.min(n1 - 1), p.col)) } else { None };
+                }
+                if !pure && p.row > f && p.row <= f + k {
+                    return Some(Pos::new(f, p.col));
+                }
+                if p.row >= f + k { Some(Pos::new(shift(p.row, -(k as i64)), p.col)) } else { Some(p) }
+            };
+            self.marks = self.marks.iter().filter_map(|(c, p)| adj(*p, false).map(|q| (*c, q))).collect();
+            self.pcmark = self.pcmark.and_then(|p| adj(p, false));
+        } else {
+            let n = n1 - n0;
+            let pure = f < n0 && old_line(f) == self.buf.line(f + n);
+            let adj = |p: Pos| -> Pos {
+                if (pure && p.row >= f) || (!pure && p.row > f) { Pos::new(p.row + n, p.col) } else { p }
+            };
+            self.marks = self.marks.iter().map(|(c, p)| (*c, adj(*p))).collect();
+            self.pcmark = self.pcmark.map(adj);
+        }
+    }
+
     /// `@r`: executa o conteúdo do registrador como teclas; um comando que falha encerra o macro.
     fn run_macro(&mut self, r: char, count: usize) {
         let r = if r == '@' {
@@ -377,6 +457,20 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn key(&mut self, k: Key) {
+        // marcas acompanham linhas inseridas/apagadas: compara o texto de antes e depois
+        let old = (!self.marks.is_empty() || self.pcmark.is_some()).then(|| self.buf.rope.clone());
+        self.key_raw(k);
+        if let Some(old) = old {
+            self.adjust_marks(&old);
+        }
+        if let Some(back) = self.marks_back.take() {
+            for (c, p) in back {
+                self.marks.insert(c, p);
+            }
+        }
+    }
+
+    fn key_raw(&mut self, k: Key) {
         match self.mode {
             Mode::Insert => self.insert_key(k),
             Mode::Visual => {
@@ -501,6 +595,11 @@ impl Editor {
                         Some(_) => Parse::Invalid,
                         None => Parse::Incomplete,
                     },
+                    Key::Char('m') => match keys.get(i) {
+                        Some(Key::Char(c)) => done(Cmd::Simple('m', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
                     Key::Char('@') => match keys.get(i) {
                         Some(Key::Char(c)) => done(Cmd::Simple('@', Some(*c))),
                         Some(_) => Parse::Invalid,
@@ -519,10 +618,16 @@ impl Editor {
 
     fn exec(&mut self, p: Parsed, keys: &[Key]) {
         let count1 = p.count.unwrap_or(1);
+        let pc_before = self.cursor;
+        let had_search = self.last_search.is_some();
+        let jump = match &p.cmd {
+            Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } => is_jump(m),
+            _ => false,
+        };
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
             Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@'),
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm'),
         };
         self.search_now = p.search.clone();
         // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
@@ -593,6 +698,12 @@ impl Editor {
             self.dot = prev_dot.0;
             self.dot_count = prev_dot.1;
         }
+        // movimento por marca que falha (marca não definida) não grava o contexto
+        let falhou_marca = (self.failed && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, '\'' | '`')))
+            || (!had_search && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, 'n' | 'N')));
+        if jump && !falhou_marca {
+            self.pcmark = Some(pc_before);
+        }
         self.failed |= failed_before;
     }
 
@@ -613,6 +724,7 @@ impl Editor {
             'J' => {
                 self.join(count1.max(2));
             }
+            'm' => self.set_mark(arg.unwrap()),
             '@' => self.run_macro(arg.unwrap(), count1),
             'r' => self.replace_chars(arg.unwrap(), count1),
             '~' => self.toggle_case(count1),
@@ -748,6 +860,16 @@ impl Editor {
             '_' => {
                 let row = (cur.row + c1 - 1).min(self.last_row());
                 Some(Res { pos: Pos::new(row, b.first_nonblank(row).min(b.line_len(row).saturating_sub(1))), kind: Kind::Line, vertical: false, fail: false })
+            }
+            '\'' | '`' => {
+                let p = self.mark_pos(m.arg?)?;
+                let row = p.row.min(self.last_row());
+                if m.c == '\'' {
+                    let col = b.first_nonblank(row).min(b.line_len(row).saturating_sub(1));
+                    Some(Res { pos: Pos::new(row, col), kind: Kind::Line, vertical: false, fail: false })
+                } else {
+                    ex(Pos::new(row, p.col.min(b.line_len(row).saturating_sub(1))))
+                }
             }
             'G' => {
                 let row = count.map_or(self.last_row(), |n| n.saturating_sub(1).min(self.last_row()));
@@ -1362,6 +1484,7 @@ impl Editor {
             self.mode = Mode::Normal;
             return;
         };
+        self.vmarks = Some((vs.anchor, self.cursor, vs.kind));
         match c {
             VCmd::Esc => self.visual_exit(),
             VCmd::Kind(k) => {
@@ -1764,7 +1887,7 @@ impl Editor {
         if self.replaying && false {
             return;
         }
-        self.undo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor });
+        self.undo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor, marks: self.marks.clone() });
         self.redo.clear();
     }
 
@@ -1822,7 +1945,8 @@ impl Editor {
                 self.failed = true;
                 return;
             };
-            self.redo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor });
+            self.redo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor, marks: self.marks.clone() });
+            self.marks_back = Some(snap.marks.clone());
             self.restore(snap, true);
         }
     }
@@ -1833,7 +1957,8 @@ impl Editor {
                 self.failed = true;
                 return;
             };
-            self.undo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor });
+            self.undo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor, marks: self.marks.clone() });
+            self.marks_back = Some(snap.marks.clone());
             self.restore(snap, false);
         }
     }
@@ -1870,6 +1995,15 @@ impl Editor {
             Mode::Visual => self.cursor.col = self.cursor.col.min(len),
             Mode::Insert => {}
         }
+    }
+}
+
+/// Movimentos que gravam a posição anterior na marca de contexto (`''`).
+fn is_jump(m: &Mo) -> bool {
+    match m.c {
+        'G' | 'n' | 'N' | '*' | '#' | '%' | '{' | '}' | '/' | '?' | '\'' | '`' => true,
+        'g' => m.g,
+        _ => false,
     }
 }
 
@@ -1927,6 +2061,11 @@ fn parse_motion(keys: &[Key]) -> MParse {
         Key::Char(c @ ('n' | 'N' | '*' | '#')) => mo(c),
         Key::Char(c @ ('/' | '?')) => match keys[1..].iter().position(|k| *k == Key::Enter) {
             Some(n) => MParse::Done(Mo { c, g: false, arg: None }, n + 2),
+            None => MParse::Incomplete,
+        },
+        Key::Char(c @ ('\'' | '`')) => match keys.get(1) {
+            Some(Key::Char(a)) => MParse::Done(Mo { c, g: false, arg: Some(*a) }, 2),
+            Some(_) => MParse::Invalid,
             None => MParse::Incomplete,
         },
         Key::Char(c @ ('f' | 'F' | 't' | 'T')) => match keys.get(1) {
