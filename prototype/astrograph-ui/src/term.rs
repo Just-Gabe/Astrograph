@@ -122,7 +122,7 @@ pub fn agente_instalado() -> Option<&'static str> {
     ["claude", "opencode", "codex", "gemini"].into_iter().find(|n| em_path(n))
 }
 
-fn em_path(nome: &str) -> bool {
+pub(crate) fn em_path(nome: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else { return false };
     let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
     std::env::split_paths(&path).any(|d| exts.iter().any(|e| d.join(format!("{nome}{e}")).is_file()))
