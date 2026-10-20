@@ -16,6 +16,21 @@ pub struct Config {
     pub engine: EngineCfg,
     pub lsp: LspCfg,
     pub editor: EditorCfg,
+    pub theme: ThemeCfg,
+}
+
+/// Tema do app nativo.
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct ThemeCfg {
+    /// `"dark"` (padrão), `"light"` ou `"auto"` (segue o tema do sistema). `:set background=light|dark` troca na hora.
+    pub mode: String,
+}
+
+impl Default for ThemeCfg {
+    fn default() -> Self {
+        ThemeCfg { mode: "dark".into() }
+    }
 }
 
 /// Opções do editor nativo (as de `:set`).
@@ -156,6 +171,7 @@ impl Default for Config {
             engine: EngineCfg::default(),
             lsp: LspCfg::default(),
             editor: EditorCfg::default(),
+            theme: ThemeCfg::default(),
         }
     }
 }

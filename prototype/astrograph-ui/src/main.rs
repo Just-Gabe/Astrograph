@@ -123,7 +123,7 @@ fn paint_paineis(
     let gap = shell.gap_paineis();
     let rects = layout.rects(area, gap);
     pool.retain(|id, _| rects.iter().any(|(i, _)| i == id));
-    c.clear(design::BG);
+    c.clear(design::bg());
     let (mut animating, mut wake) = (false, None::<Duration>);
     let mut juntar = |f: nscene::Frame| {
         animating |= f.animating;
@@ -160,7 +160,7 @@ fn paint_paineis(
         if !foco {
             // painéis sem o foco ficam um pouco apagados
             let (sw, sh) = (sub.w, sub.h);
-            sub.rect(0, 0, sw, sh, design::BG, 0.28);
+            sub.rect(0, 0, sw, sh, design::bg(), 0.28);
         }
     }
     // divisores finos no espaço entre os painéis e o contorno do painel focado
@@ -170,11 +170,11 @@ fn paint_paineis(
             janelas::Dir::Row => ((rc.x + rc.w / 2.0).floor() as i32, rc.y as i32, 1.max(scale as i32), rc.h as i32),
             janelas::Dir::Col => (rc.x as i32, (rc.y + rc.h / 2.0).floor() as i32, rc.w as i32, 1.max(scale as i32)),
         };
-        c.rect(x, y, dw, dh, design::WHITE, 0.10);
+        c.rect(x, y, dw, dh, design::white(), 0.10);
     }
     if rects.len() > 1 {
         if let Some((_, r)) = rects.iter().find(|(i, _)| *i == vm.pane) {
-            c.rrect_border(r.x, r.y, r.w, r.h, 0.0, 1.0 * scale.max(1.0), design::ACCENT_SOFT, 0.35);
+            c.rrect_border(r.x, r.y, r.w, r.h, 0.0, 1.0 * scale.max(1.0), design::accent_soft(), 0.35);
         }
     }
     juntar(shell.paint_camada(c, vm, now, Camada::Casca));
@@ -1158,6 +1158,9 @@ impl ApplicationHandler<UserEvent> for App {
         let context = Context::new(window.clone()).expect("softbuffer context");
         let surface = Surface::new(&context, window.clone()).expect("softbuffer surface");
         let scale = window.scale_factor() as f32;
+        if self.cfg.theme.mode == "auto" {
+            design::set_light(window.theme() == Some(winit::window::Theme::Light));
+        }
         let mut renderer =
             Renderer::new(&self.cfg.font, self.cfg.cursor.animation_ms).expect("renderer");
         renderer.set_size(self.base_font * scale);
@@ -1257,6 +1260,12 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => self.request_close(event_loop),
             WindowEvent::Resized(_) => self.request_redraw(),
+            WindowEvent::ThemeChanged(tema) => {
+                if self.cfg.theme.mode == "auto" {
+                    design::set_light(tema == winit::window::Theme::Light);
+                    self.request_redraw();
+                }
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let scale = scale_factor as f32;
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -1686,6 +1695,7 @@ fn main() {
         g
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
+    design::set_light(cfg.theme.mode == "light");
     let leader_key = cfg.keys.leader_char();
     let format_on_save = cfg.lsp.format_on_save;
     let mapeamentos = cfg.keys.mapeamentos();
@@ -1901,7 +1911,7 @@ mod testes_paineis {
             for y in (r.y as u32)..((r.y + r.h) as u32) {
                 for x in (r.x as u32)..((r.x + r.w) as u32) {
                     let p = buf[(y * largura + x) as usize] & 0xffffff;
-                    if p != design::BG && p != 0 {
+                    if p != design::bg() && p != 0 {
                         diferentes += 1;
                     }
                 }

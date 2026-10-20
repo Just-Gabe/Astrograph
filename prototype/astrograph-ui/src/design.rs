@@ -45,8 +45,41 @@ pub fn classify(group: &str) -> Option<Cls> {
     })
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static LIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Liga o tema claro (`true`) ou o escuro. Vale para a cena nativa inteira.
+pub fn set_light(light: bool) {
+    LIGHT.store(light, Ordering::Relaxed);
+}
+
+pub fn is_light() -> bool {
+    LIGHT.load(Ordering::Relaxed)
+}
+
+fn pick(dark: u32, light: u32) -> u32 {
+    if is_light() { light } else { dark }
+}
+
 /// Cor, negrito, itálico de cada classe.
 pub fn syntax(c: Cls) -> (u32, bool, bool) {
+    if is_light() {
+        // claro: as cores do Xcode Light
+        return match c {
+            Cls::Comment => (0x005d_6c79, false, true),
+            Cls::Str => (0x00c4_1a16, false, false),
+            Cls::Number => (0x001c_00cf, false, false),
+            Cls::Keyword => (0x00aa_0d91, true, false),
+            Cls::Function => (0x0032_6d74, false, false),
+            Cls::Type => (0x000b_4f79, false, false),
+            Cls::Operator => (0x003f_3f44, false, false),
+            Cls::Punct => (0x005a_5a60, false, false),
+            Cls::Property => (0x0064_3820, false, false),
+            Cls::Variable => (0x001d_1d1f, false, false),
+            Cls::Tag => (0x00aa_0d91, false, false),
+        };
+    }
     match c {
         Cls::Comment => (0x006c_7986, false, true),
         Cls::Str => (0x00fc_6a5d, false, false),
@@ -62,21 +95,45 @@ pub fn syntax(c: Cls) -> (u32, bool, bool) {
     }
 }
 
-pub const BG: u32 = 0x001e_1e22;
-pub const SURFACE: u32 = 0x002c_2c31;
-pub const SURFACE_HI: u32 = 0x0036_3640;
-pub const TEXT: u32 = 0x00df_dfe0;
-pub const TEXT_STRONG: u32 = 0x00f5_f5f7;
-pub const DIM: u32 = 0x008e_8e96;
-pub const FAINT: u32 = 0x0058_5860;
+/// Quanto das sombras e do véu escuro vale no tema atual (no claro, bem mais leve).
+pub fn k_sombra() -> f32 {
+    if is_light() { 0.32 } else { 1.0 }
+}
+
+pub fn bg() -> u32 {
+    pick(0x001e_1e22, 0x00f7_f7f9)
+}
+pub fn surface() -> u32 {
+    pick(0x002c_2c31, 0x00ec_eef2)
+}
+pub fn surface_hi() -> u32 {
+    pick(0x0036_3640, 0x00ff_ffff)
+}
+pub fn text() -> u32 {
+    pick(0x00df_dfe0, 0x001d_1d1f)
+}
+pub fn text_strong() -> u32 {
+    pick(0x00f5_f5f7, 0x0000_0000)
+}
+pub fn dim() -> u32 {
+    pick(0x008e_8e96, 0x006e_6e73)
+}
+pub fn faint() -> u32 {
+    pick(0x0058_5860, 0x00a8_a8b0)
+}
+/// acento para texto destacado (claro sobre fundo escuro, mais fechado no claro)
+pub fn accent_soft() -> u32 {
+    pick(0x0064_b5ff, 0x0000_5fd6)
+}
+/// cor das camadas translúcidas (bordas, realces): branco no escuro, preto no claro
+pub fn white() -> u32 {
+    pick(0x00ff_ffff, 0x0000_0000)
+}
 pub const ACCENT: u32 = 0x000a_84ff;
-/// acento claro para texto destacado sobre fundo escuro
-pub const ACCENT_SOFT: u32 = 0x0064_b5ff;
 pub const GREEN: u32 = 0x0030_d158;
 pub const ORANGE: u32 = 0x00ff_9f0a;
 pub const PURPLE: u32 = 0x00bf_5af2;
 pub const RED: u32 = 0x00ff_453a;
-pub const WHITE: u32 = 0x00ff_ffff;
 pub const BLACK: u32 = 0x0000_0000;
 
 /// Modo mostrado na pílula de status.

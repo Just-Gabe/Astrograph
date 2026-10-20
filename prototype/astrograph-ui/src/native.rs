@@ -2315,7 +2315,12 @@ impl Session {
                     self.ed.clipboard_unnamedplus = v.contains("unnamedplus");
                 }
                 // opções que o app não implementa mas que não devem incomodar
-                "hlsearch" | "hls" | "incsearch" | "is" | "wrap" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" | "background" | "bg" => {}
+                "background" | "bg" => match valor {
+                    Some("light") => crate::design::set_light(true),
+                    Some("dark") => crate::design::set_light(false),
+                    _ => self.say(format!("E474: Argumento inválido: {t}"), ToastKind::Error),
+                },
+                "hlsearch" | "hls" | "incsearch" | "is" | "wrap" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" => {}
                 _ => self.say(format!("E518: Opção desconhecida: {t}"), ToastKind::Error),
             }
         }
