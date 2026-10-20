@@ -1,135 +1,41 @@
-//! Editor nativo: o motor modal em Rust (`astrograph-core`) desenhando direto na
-//! grade do renderer, sem Neovim. `ASTROGRAPH_ENGINE=native [arquivo]`.
+//! Editor nativo: o motor modal em Rust (`astrograph-core`) sem Neovim.
+//! `ASTROGRAPH_ENGINE=native [arquivo]`.
 //!
-//! `Session` não conhece janela nem threads: recebe teclas, redimensionamentos e
-//! cliques, e preenche uma `Grid` (o mesmo formato que o renderer já consome).
-//! Por isso é testável sem GUI.
+//! `Session` não conhece janela nem threads: recebe teclas, redimensionamentos,
+//! cliques e rolagem, e publica um `ViewModel` (texto, cores, cursor, estado). Quem
+//! desenha e anima é a cena (`nscene`). Por isso é testável sem GUI.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use astrograph_core::motion::{char_width, vcol_cursor, vcol_start};
-use astrograph_core::{parse_keys, Editor, Key, Mode, Pos, VKind};
+use astrograph_core::motion::{col_for_vcol, vcol_cursor, vcol_start};
+use astrograph_core::{parse_keys, Editor, Key, Mode, VKind};
 use astrograph_syntax::{detect, lang, Document, Lang};
 
-use crate::grid::{Cell, CellText, Grid, Hl};
-
-/// Cores do tema Astrograph (escuro).
-mod cor {
-    pub const FG: u32 = 0x00dcdce0;
-    pub const BG: u32 = 0x001f1f24;
-    pub const DIM: u32 = 0x00686878;
-    pub const NUM_CUR: u32 = 0x00c8c8d4;
-    pub const STATUS_BG: u32 = 0x002a2a32;
-    pub const SEL_BG: u32 = 0x003c3c56;
-    pub const ACCENT: u32 = 0x007aa2f7;
-    pub const GREEN: u32 = 0x009ece6a;
-    pub const PURPLE: u32 = 0x00bb9af7;
-    pub const ORANGE: u32 = 0x00ff9e64;
-    pub const YELLOW: u32 = 0x00e0af68;
-    pub const RED: u32 = 0x00f7768e;
-    pub const CYAN: u32 = 0x007dcfff;
-    pub const GRAY: u32 = 0x0056566a;
-}
-
-/// Classes de realce (o que o renderer pinta) a partir do nome da captura.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Cls {
-    Comment,
-    Str,
-    Number,
-    Keyword,
-    Function,
-    Type,
-    Operator,
-    Punct,
-    Property,
-    Variable,
-    Tag,
-}
-
-fn classify(group: &str) -> Option<Cls> {
-    let g = group.trim_start_matches('@');
-    let head = g.split('.').next().unwrap_or(g);
-    Some(match head {
-        "comment" => Cls::Comment,
-        "string" | "character" => Cls::Str,
-        "number" | "boolean" | "constant" | "float" => Cls::Number,
-        "keyword" | "conditional" | "repeat" | "include" | "exception" | "label" | "storageclass" => Cls::Keyword,
-        "function" | "method" | "constructor" => Cls::Function,
-        "type" | "namespace" | "module" | "attribute" => Cls::Type,
-        "operator" => Cls::Operator,
-        "punctuation" | "delimiter" => Cls::Punct,
-        "property" | "field" | "parameter" => Cls::Property,
-        "variable" => {
-            if g.contains("builtin") {
-                Cls::Keyword
-            } else if g.contains("member") || g.contains("parameter") {
-                Cls::Property
-            } else {
-                return None;
-            }
-        }
-        "tag" => Cls::Tag,
-        _ => return None,
-    })
-}
-
-fn cls_fg(c: Cls) -> (u32, bool, bool) {
-    match c {
-        Cls::Comment => (cor::GRAY, false, true),
-        Cls::Str => (cor::GREEN, false, false),
-        Cls::Number => (cor::ORANGE, false, false),
-        Cls::Keyword => (cor::PURPLE, false, false),
-        Cls::Function => (cor::ACCENT, false, false),
-        Cls::Type => (cor::YELLOW, false, false),
-        Cls::Operator => (cor::CYAN, false, false),
-        Cls::Punct => (cor::DIM, false, false),
-        Cls::Property => (cor::RED, false, false),
-        Cls::Variable => (cor::FG, false, false),
-        Cls::Tag => (cor::RED, false, false),
-    }
-}
-
-/// Estilos fixos da interface.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Ui {
-    Num,
-    NumCur,
-    Status,
-    ModeNormal,
-    ModeInsert,
-    ModeVisual,
-    ModeCmd,
-    Msg,
-    Tilde,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Key2 {
-    Text(Option<Cls>, bool),
-    Ui(Ui),
-}
+use crate::design::{classify, ModeKind};
+use crate::nview::{Shared, Span, ToastKind, ViewModel};
 
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
     saved_rev: u64,
-    top: usize,
+    /// linha de cima desejada (a cena suaviza)
+    top: f32,
     left: usize,
     cols: usize,
-    rows: usize,
+    rows: f32,
     lang: Option<&'static Lang>,
     doc: Option<(Document, u64)>,
     cmdline: Option<String>,
-    pub message: String,
-    ids: HashMap<Key2, u64>,
-    hl_dirty: bool,
+    toast: Option<(u64, String, ToastKind)>,
+    toast_id: u64,
+    seq: u64,
     pub quit: bool,
 }
 
-const GUTTER_MIN: usize = 3;
-const SCROLLOFF: usize = 3;
+const SCROLLOFF: f32 = 3.0;
+/// linhas de realce calculadas além da tela, para a rolagem suave não ficar sem cor
+const SPAN_MARGIN: usize = 80;
 
 impl Session {
     pub fn new(text: &str, path: Option<PathBuf>) -> Self {
@@ -141,16 +47,16 @@ impl Session {
             ed,
             path,
             saved_rev,
-            top: 0,
+            top: 0.0,
             left: 0,
             cols: 80,
-            rows: 24,
+            rows: 24.0,
             lang,
             doc: None,
             cmdline: None,
-            message: String::new(),
-            ids: HashMap::new(),
-            hl_dirty: true,
+            toast: None,
+            toast_id: 0,
+            seq: 0,
             quit: false,
         }
     }
@@ -159,18 +65,24 @@ impl Session {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
         if !path.exists() {
-            s.message = format!("\"{}\" [novo]", path.display());
+            s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
         s
     }
 
-    pub fn resize(&mut self, cols: usize, rows: usize) {
+    /// Tamanho da área de texto em colunas e linhas (a cena informa).
+    pub fn resize(&mut self, cols: usize, rows: f32) {
         self.cols = cols.max(10);
-        self.rows = rows.max(3);
+        self.rows = rows.max(3.0);
     }
 
     pub fn modified(&self) -> bool {
         self.ed.buf.rev != self.saved_rev
+    }
+
+    fn say(&mut self, text: String, kind: ToastKind) {
+        self.toast_id += 1;
+        self.toast = Some((self.toast_id, text, kind));
     }
 
     // ------------------------------------------------------------------
@@ -207,38 +119,35 @@ impl Session {
                 self.ed.feed(&[Key::Esc]);
             }
             self.cmdline = Some(String::new());
-            self.message.clear();
             return;
         }
-        self.message.clear();
         self.ed.feed(&[k]);
-    }
-
-    /// Clique: `row`/`col` em células da janela.
-    pub fn click(&mut self, row: usize, col: usize) {
-        let (gutter, text_rows) = (self.gutter(), self.rows.saturating_sub(2));
-        if row >= text_rows || col < gutter {
-            return;
+        if self.ed.beeped() && self.ed.mode() == Mode::Normal {
+            // o Vim apita; aqui só ignoramos (sem aviso na tela)
         }
-        let r = (self.top + row).min(self.ed.buf.line_count() - 1);
-        let line = self.ed.buf.line(r);
-        let want = self.left + (col - gutter);
-        let c = astrograph_core::motion::col_for_vcol(&line, want);
-        let len = line.chars().count();
-        self.ed.set_cursor(r, if want >= vcol_start(&line, len) { len.saturating_sub(1) } else { c });
     }
 
-    /// Roda da tela: `lines > 0` desce.
-    pub fn scroll(&mut self, lines: i64) {
-        let max = self.ed.buf.line_count().saturating_sub(1) as i64;
-        self.top = (self.top as i64 + lines).clamp(0, max) as usize;
+    /// Clique: `row` é a linha do buffer e `vcol` a coluna visual (a cena já fez a conta).
+    pub fn click(&mut self, row: usize, vcol: usize) {
+        let r = row.min(self.ed.buf.line_count() - 1);
+        let line = self.ed.buf.line(r);
+        let len = line.chars().count();
+        let c = if vcol >= vcol_start(&line, len) { len.saturating_sub(1) } else { col_for_vcol(&line, vcol) };
+        self.ed.set_cursor(r, c);
+    }
+
+    /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
+    pub fn scroll(&mut self, lines: f32) {
+        let max = self.ed.buf.line_count().saturating_sub(1) as f32;
+        self.top = (self.top + lines).clamp(0.0, max);
         // o cursor acompanha para não sair da tela
-        let text_rows = self.rows.saturating_sub(2).max(1);
-        let row = self.ed.cursor.row;
-        if row < self.top {
-            self.ed.set_cursor(self.top, self.ed.cursor.col);
-        } else if row >= self.top + text_rows {
-            self.ed.set_cursor(self.top + text_rows - 1, self.ed.cursor.col);
+        let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
+        let row = self.ed.cursor.row as f32;
+        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
+        if row < lo {
+            self.ed.set_cursor(lo.ceil() as usize, self.ed.cursor.col);
+        } else if row > hi {
+            self.ed.set_cursor(hi.floor().max(0.0) as usize, self.ed.cursor.col);
         }
     }
 
@@ -267,7 +176,7 @@ impl Session {
             "w" | "write" => self.write(arg),
             "q" | "quit" => {
                 if self.modified() && !bang {
-                    self.message = "E37: Alterações não salvas (acrescente ! para forçar)".into();
+                    self.say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
                 } else {
                     self.quit = true;
                 }
@@ -283,7 +192,7 @@ impl Session {
                     return;
                 }
                 if self.modified() && !bang {
-                    self.message = "E37: Alterações não salvas (acrescente ! para forçar)".into();
+                    self.say("Alterações não salvas. Use :e! para descartar.".into(), ToastKind::Error);
                 } else {
                     let (cols, rows) = (self.cols, self.rows);
                     *self = Session::open(Path::new(arg));
@@ -291,88 +200,33 @@ impl Session {
                 }
             }
             "noh" | "nohlsearch" | "set" | "syntax" | "filetype" => {}
-            _ => self.message = format!("E492: Comando desconhecido: {name}"),
+            _ => self.say(format!("Comando desconhecido: {name}"), ToastKind::Error),
         }
     }
 
     fn write(&mut self, arg: &str) {
         let target = if arg.is_empty() { self.path.clone() } else { Some(PathBuf::from(arg)) };
         let Some(p) = target else {
-            self.message = "E32: Sem nome de arquivo".into();
+            self.say("Sem nome de arquivo. Use :w nome".into(), ToastKind::Error);
             return;
         };
         let text = self.ed.to_file_text();
         match std::fs::write(&p, &text) {
             Ok(()) => {
-                self.message = format!("\"{}\" {}L, {}B gravado", p.display(), self.ed.buf.line_count(), text.len());
+                let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.say(format!("{nome} salvo · {} linhas", self.ed.buf.line_count()), ToastKind::Done);
                 if self.path.is_none() {
                     self.path = Some(p);
                 }
                 self.saved_rev = self.ed.buf.rev;
             }
-            Err(e) => self.message = format!("E212: Não consegui gravar: {e}"),
+            Err(e) => self.say(format!("Não consegui salvar: {e}"), ToastKind::Error),
         }
     }
 
     // ------------------------------------------------------------------
-    // desenho
+    // modelo da tela
     // ------------------------------------------------------------------
-
-    fn gutter(&self) -> usize {
-        let digits = self.ed.buf.line_count().to_string().len();
-        digits.max(GUTTER_MIN) + 1
-    }
-
-    fn id(&mut self, k: Key2) -> u64 {
-        if let Some(&i) = self.ids.get(&k) {
-            return i;
-        }
-        let id = self.ids.len() as u64 + 1;
-        self.ids.insert(k, id);
-        self.hl_dirty = true;
-        id
-    }
-
-    fn hl_of(k: Key2) -> Hl {
-        let mut h = Hl::default();
-        match k {
-            Key2::Text(c, sel) => {
-                if let Some(c) = c {
-                    let (fg, bold, italic) = cls_fg(c);
-                    h.fg = Some(fg);
-                    h.bold = bold;
-                    h.italic = italic;
-                }
-                if sel {
-                    h.bg = Some(cor::SEL_BG);
-                }
-            }
-            Key2::Ui(u) => match u {
-                Ui::Num => h.fg = Some(cor::DIM),
-                Ui::NumCur => {
-                    h.fg = Some(cor::NUM_CUR);
-                    h.bold = true;
-                }
-                Ui::Status => {
-                    h.fg = Some(cor::NUM_CUR);
-                    h.bg = Some(cor::STATUS_BG);
-                }
-                Ui::ModeNormal | Ui::ModeInsert | Ui::ModeVisual | Ui::ModeCmd => {
-                    h.fg = Some(cor::BG);
-                    h.bg = Some(match u {
-                        Ui::ModeNormal => cor::ACCENT,
-                        Ui::ModeInsert => cor::GREEN,
-                        Ui::ModeVisual => cor::PURPLE,
-                        _ => cor::ORANGE,
-                    });
-                    h.bold = true;
-                }
-                Ui::Msg => h.fg = Some(cor::YELLOW),
-                Ui::Tilde => h.fg = Some(cor::DIM),
-            },
-        }
-        h
-    }
 
     fn refresh_syntax(&mut self) {
         let Some(l) = self.lang else { return };
@@ -384,260 +238,96 @@ impl Session {
         self.doc = Some((Document::new(l, &lines), rev));
     }
 
+    /// Mantém o cursor à vista: rola o mínimo (ou centraliza num salto longe).
     fn follow_cursor(&mut self) {
-        let text_rows = self.rows.saturating_sub(2).max(1);
-        let so = SCROLLOFF.min((text_rows - 1) / 2);
-        let row = self.ed.cursor.row;
-        if row < self.top + so {
-            self.top = row.saturating_sub(so);
+        let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
+        let row = self.ed.cursor.row as f32;
+        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
+        if row < self.top - self.rows || row > self.top + 2.0 * self.rows {
+            self.top = (row - self.rows / 3.0).max(0.0);
+        } else if row < lo {
+            self.top = (row - so).max(0.0);
+        } else if row > hi {
+            self.top = row - self.rows + 1.0 + so;
         }
-        if row + so >= self.top + text_rows {
-            self.top = row + so + 1 - text_rows;
-        }
-        let last = self.ed.buf.line_count().saturating_sub(1);
-        if self.top > last {
-            self.top = last;
-        }
-        // horizontal
-        let text_cols = self.cols.saturating_sub(self.gutter()).max(1);
-        let line = self.ed.buf.line(row);
+        let last = self.ed.buf.line_count().saturating_sub(1) as f32;
+        self.top = self.top.clamp(0.0, last);
+        // horizontal (em colunas visuais)
+        let line = self.ed.buf.line(self.ed.cursor.row);
         let v = vcol_cursor(&line, self.ed.cursor.col);
         if v < self.left {
             self.left = v;
-        } else if v >= self.left + text_cols {
-            self.left = v + 1 - text_cols;
+        } else if v >= self.left + self.cols {
+            self.left = v + 1 - self.cols;
         }
     }
 
-    /// Preenche `g` (do tamanho da sessão) e marca só as linhas que mudaram.
-    pub fn render(&mut self, g: &mut Grid) {
-        if (g.width, g.height) != (self.cols, self.rows) {
-            *g = Grid::new(self.cols, self.rows);
-            self.hl_dirty = true;
-        }
+    pub fn view_model(&mut self) -> ViewModel {
         self.follow_cursor();
         self.refresh_syntax();
-        let (cols, rows) = (self.cols, self.rows);
-        let gutter = self.gutter();
-        let text_cols = cols.saturating_sub(gutter);
-        let text_rows = rows.saturating_sub(2);
-        let mut cells: Vec<Cell> = vec![Cell::default(); cols * rows];
-
+        self.seq += 1;
+        let line_count = self.ed.buf.line_count();
+        let lo = (self.top as usize).saturating_sub(SPAN_MARGIN);
+        let hi = (self.top as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
+        let mut spans: Vec<Vec<Span>> = vec![Vec::new(); hi.saturating_sub(lo)];
+        if let Some((doc, _)) = &self.doc {
+            for sp in doc.highlights(lo..hi) {
+                let Some(cls) = classify(sp.group) else { continue };
+                let line = self.ed.buf.line(sp.row);
+                let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count() as u32;
+                spans[sp.row - lo].push(Span { start: to_char(sp.start_col), end: to_char(sp.end_col), cls });
+            }
+        }
         let sel = self.ed.selection().map(|(k, a)| {
             let c = self.ed.cursor;
             let (lo, hi) = if a <= c { (a, c) } else { (c, a) };
-            (k, lo, hi)
+            (k, (lo.row, lo.col), (hi.row, hi.col))
         });
-        let cur_row = self.ed.cursor.row;
-        let line_count = self.ed.buf.line_count();
-        let doc_spans = self.doc.as_ref().map(|(d, _)| d.highlights(self.top..(self.top + text_rows).min(line_count)));
-
-        for sr in 0..text_rows {
-            let row = self.top + sr;
-            if row >= line_count {
-                let id = self.id(Key2::Ui(Ui::Tilde));
-                put(&mut cells, cols, sr, 0, '~', id);
-                continue;
-            }
-            // número
-            let num = format!("{:>w$} ", row + 1, w = gutter - 1);
-            let nid = self.id(Key2::Ui(if row == cur_row { Ui::NumCur } else { Ui::Num }));
-            for (i, ch) in num.chars().enumerate() {
-                put(&mut cells, cols, sr, i, ch, nid);
-            }
-            // texto
-            let line = self.ed.buf.line(row);
-            let chars: Vec<char> = line.chars().collect();
-            let mut groups: Vec<Option<Cls>> = vec![None; chars.len() + 1];
-            if let Some(spans) = &doc_spans {
-                // colunas dos spans são bytes: converte para índice de caractere
-                let byte_to_char: Vec<usize> = {
-                    let mut v = Vec::with_capacity(line.len() + 1);
-                    for (ci, ch) in chars.iter().enumerate() {
-                        for _ in 0..ch.len_utf8() {
-                            v.push(ci);
-                        }
-                    }
-                    v.push(chars.len());
-                    v
-                };
-                for s in spans.iter().filter(|s| s.row == row) {
-                    let (a, b) = (byte_to_char.get(s.start_col).copied().unwrap_or(chars.len()), byte_to_char.get(s.end_col).copied().unwrap_or(chars.len()));
-                    if let Some(c) = classify(s.group) {
-                        for g in groups.iter_mut().take(b).skip(a) {
-                            *g = Some(c);
-                        }
-                    }
-                }
-            }
-            let mut v = 0usize;
-            for (ci, ch) in chars.iter().enumerate() {
-                let w = char_width(*ch, v);
-                let selected = sel.is_some_and(|(k, lo, hi)| in_selection(k, lo, hi, row, ci, chars.len()));
-                let id = self.id(Key2::Text(groups[ci], selected));
-                if *ch == '\t' {
-                    for t in 0..w {
-                        put_text(&mut cells, cols, sr, gutter, text_cols, self.left, v + t, ' ', id, false);
-                    }
-                } else {
-                    put_text(&mut cells, cols, sr, gutter, text_cols, self.left, v, *ch, id, false);
-                    if w == 2 {
-                        put_text(&mut cells, cols, sr, gutter, text_cols, self.left, v + 1, ' ', id, true);
-                    }
-                }
-                v += w;
-            }
-            // a quebra de linha selecionada (visual sobre o fim da linha)
-            if sel.is_some_and(|(k, lo, hi)| in_selection(k, lo, hi, row, chars.len(), chars.len())) && sel.is_some_and(|(k, ..)| k == VKind::Char) {
-                let id = self.id(Key2::Text(None, true));
-                put_text(&mut cells, cols, sr, gutter, text_cols, self.left, v, ' ', id, false);
-            } else if sel.is_some_and(|(k, lo, hi)| k == VKind::Line && row >= lo.row && row <= hi.row) {
-                let id = self.id(Key2::Text(None, true));
-                for x in v..text_cols + self.left {
-                    put_text(&mut cells, cols, sr, gutter, text_cols, self.left, x, ' ', id, false);
-                }
-            }
-        }
-
-        // linha de status
-        let (mode_txt, mode_ui) = if self.cmdline.is_some() {
-            ("COMANDO", Ui::ModeCmd)
+        let search = self.ed.search_line();
+        let mode = if self.cmdline.is_some() {
+            ModeKind::Command
+        } else if search.is_some() {
+            ModeKind::Search
         } else {
             match self.ed.mode() {
-                Mode::Normal => ("NORMAL", Ui::ModeNormal),
-                Mode::Insert => ("INSERT", Ui::ModeInsert),
-                Mode::Visual => match self.ed.selection().map(|s| s.0) {
-                    Some(VKind::Line) => ("V-LINHA", Ui::ModeVisual),
-                    _ => ("VISUAL", Ui::ModeVisual),
+                Mode::Normal => ModeKind::Normal,
+                Mode::Insert => ModeKind::Insert,
+                Mode::Visual => match sel.map(|s| s.0) {
+                    Some(VKind::Line) => ModeKind::VisualLine,
+                    _ => ModeKind::Visual,
                 },
             }
         };
-        let st = self.id(Key2::Ui(Ui::Status));
-        let mid = self.id(Key2::Ui(mode_ui));
-        let srow = rows - 2;
-        for c in 0..cols {
-            put(&mut cells, cols, srow, c, ' ', st);
-        }
-        let badge = format!(" {mode_txt} ");
-        for (i, ch) in badge.chars().enumerate() {
-            put(&mut cells, cols, srow, i, ch, mid);
-        }
-        let name = self.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "[sem nome]".into());
-        let left = format!(" {name}{}", if self.modified() { " [+]" } else { "" });
-        for (i, ch) in left.chars().enumerate() {
-            if badge.chars().count() + i < cols {
-                put(&mut cells, cols, srow, badge.chars().count() + i, ch, st);
-            }
-        }
-        let pos = format!("{}:{}  {}% ", self.ed.cursor.row + 1, self.ed.cursor.col + 1, (self.ed.cursor.row + 1) * 100 / line_count.max(1));
-        let start = cols.saturating_sub(pos.chars().count());
-        for (i, ch) in pos.chars().enumerate() {
-            if start + i < cols {
-                put(&mut cells, cols, srow, start + i, ch, st);
-            }
-        }
-
-        // linha de comando / mensagem
-        let crow = rows - 1;
-        let mut cursor = None;
-        let typed = self.cmdline.as_ref().map(|c| format!(":{c}")).or_else(|| self.ed.search_line());
-        if let Some(text) = typed {
-            for (i, ch) in text.chars().enumerate() {
-                if i < cols {
-                    put(&mut cells, cols, crow, i, ch, 0);
-                }
-            }
-            cursor = Some((crow, text.chars().count().min(cols - 1)));
-        } else if !self.message.is_empty() {
-            let mid = self.id(Key2::Ui(Ui::Msg));
-            for (i, ch) in self.message.chars().enumerate() {
-                if i < cols {
-                    put(&mut cells, cols, crow, i, ch, mid);
-                }
-            }
-        }
-
-        // cursor
-        let cursor = cursor.unwrap_or_else(|| {
-            let line = self.ed.buf.line(self.ed.cursor.row);
-            let v = if self.ed.mode() == Mode::Insert { vcol_start(&line, self.ed.cursor.col) } else { vcol_cursor(&line, self.ed.cursor.col) };
-            (self.ed.cursor.row.saturating_sub(self.top).min(text_rows.saturating_sub(1)), (gutter + v.saturating_sub(self.left)).min(cols - 1))
-        });
-
-        // publica: só as linhas que mudaram
-        if self.hl_dirty {
-            g.highlights.clear();
-            for (&k, &id) in &self.ids {
-                g.highlights.insert(id, Self::hl_of(k));
-            }
-            g.hl_changed = true;
-            g.all_dirty = true;
-            self.hl_dirty = false;
-        }
-        for r in 0..rows {
-            let new = &cells[r * cols..(r + 1) * cols];
-            let old = &g.cells[r * cols..(r + 1) * cols];
-            if g.all_dirty || !row_eq(new, old) {
-                g.cells[r * cols..(r + 1) * cols].clone_from_slice(new);
-                g.dirty[r] = true;
-            }
-        }
-        g.cursor = cursor;
-        g.mode = if self.cmdline.is_some() {
-            "cmdline_normal".into()
-        } else {
-            match self.ed.mode() {
-                Mode::Normal => "normal",
-                Mode::Insert => "insert",
-                Mode::Visual => "visual",
-            }
-            .into()
-        };
-        g.title = Some(format!("{} — Astrograph", self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "sem nome".into())));
-        g.flushed = true;
-    }
-}
-
-fn in_selection(kind: VKind, lo: Pos, hi: Pos, row: usize, col: usize, line_len: usize) -> bool {
-    match kind {
-        VKind::Line => row >= lo.row && row <= hi.row,
-        VKind::Char => {
-            if row < lo.row || row > hi.row {
-                return false;
-            }
-            let starts = row > lo.row || col >= lo.col;
-            let ends = row < hi.row || col <= hi.col;
-            let _ = line_len;
-            starts && ends
+        let cmd = self
+            .cmdline
+            .as_ref()
+            .map(|c| (':', c.clone()))
+            .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
+        ViewModel {
+            seq: self.seq,
+            rev: self.ed.buf.rev,
+            rope: self.ed.buf.rope.clone(),
+            lines: line_count,
+            span_lo: lo,
+            spans,
+            top: self.top,
+            left: self.left,
+            cursor: (self.ed.cursor.row, self.ed.cursor.col),
+            mode,
+            selection: sel,
+            name: self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()),
+            modified: self.modified(),
+            cmd,
+            toast: self.toast.clone(),
+            showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
+            flash: None,
         }
     }
 }
 
-fn put(cells: &mut [Cell], cols: usize, row: usize, col: usize, ch: char, hl: u64) {
-    if col < cols {
-        cells[row * cols + col] = Cell { text: CellText::Char(ch), hl, cont: false };
-    }
-}
-
-/// Coloca na coluna visual `v` (com rolagem horizontal `left`) dentro da área de texto.
-#[allow(clippy::too_many_arguments)]
-fn put_text(cells: &mut [Cell], cols: usize, row: usize, gutter: usize, text_cols: usize, left: usize, v: usize, ch: char, hl: u64, cont: bool) {
-    if v < left || v - left >= text_cols {
-        return;
-    }
-    let col = gutter + v - left;
-    if col < cols {
-        cells[row * cols + col] = Cell { text: CellText::Char(ch), hl, cont };
-    }
-}
-
-fn row_eq(a: &[Cell], b: &[Cell]) -> bool {
-    a.iter().zip(b).all(|(x, y)| x.hl == y.hl && x.cont == y.cont && x.text.first() == y.text.first())
-}
-
-/// Tarefa do editor nativo: lê a fila de comandos da UI e publica quadros.
+/// Tarefa do editor nativo: lê a fila de comandos da UI e publica o modelo.
 pub async fn native_task(
-    front: std::sync::Arc<std::sync::Mutex<Grid>>,
+    shared: Shared,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::UiCommand>,
     proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
     file: Option<PathBuf>,
@@ -647,16 +337,14 @@ pub async fn native_task(
         Some(p) => Session::open(p),
         None => Session::new("", None),
     };
-    let mut back = Grid::new(80, 24);
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => s.feed(&k),
-            UiCommand::Resize(c, r) => s.resize(c.max(1) as usize, r.max(1) as usize),
+            UiCommand::Resize(c, r) => s.resize(c.max(1) as usize, r.max(1) as f32),
             UiCommand::Focus(_) => continue,
+            UiCommand::Scroll(lines) => s.scroll(lines as f32),
             UiCommand::Mouse { button, action, row, col, .. } => match (button, action) {
                 ("left", "press") => s.click(row.max(0) as usize, col.max(0) as usize),
-                ("wheel", "down") => s.scroll(3),
-                ("wheel", "up") => s.scroll(-3),
                 _ => continue,
             },
         }
@@ -664,8 +352,7 @@ pub async fn native_task(
             let _ = proxy.send_event(crate::UserEvent::Quit);
             return;
         }
-        s.render(&mut back);
-        back.publish(&mut front.lock().unwrap());
+        *shared.lock().unwrap() = Arc::new(s.view_model());
         let _ = proxy.send_event(crate::UserEvent::Redraw);
     }
 }
@@ -674,35 +361,34 @@ pub async fn native_task(
 mod testes {
     use super::*;
 
-    fn tela(s: &mut Session) -> String {
-        let mut g = Grid::new(s.cols, s.rows);
-        s.render(&mut g);
-        g.to_text()
+    fn modelo(s: &mut Session) -> ViewModel {
+        s.view_model()
     }
 
     #[test]
-    fn mostra_texto_numeros_e_status() {
+    fn publica_texto_cursor_e_modo() {
         let mut s = Session::new("hello\nworld\n", Some(PathBuf::from("a.txt")));
-        s.resize(40, 8);
-        let t = tela(&mut s);
-        assert!(t.contains("  1 hello"), "{t}");
-        assert!(t.contains("  2 world"), "{t}");
-        assert!(t.contains("NORMAL"), "{t}");
-        assert!(t.contains("1:1"), "{t}");
-        assert!(t.lines().nth(2).unwrap().starts_with("~"), "linhas vazias com til: {t}");
+        s.resize(40, 8.0);
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "hello");
+        assert_eq!(m.line(1), "world");
+        assert_eq!(m.cursor, (0, 0));
+        assert_eq!(m.mode, ModeKind::Normal);
+        assert_eq!(m.name, "a.txt");
+        assert!(!m.modified);
     }
 
     #[test]
     fn edita_com_o_motor_e_marca_modificado() {
         let mut s = Session::new("one two\nthree\n", Some(PathBuf::from("a.txt")));
-        s.resize(40, 8);
+        s.resize(40, 8.0);
         s.feed("dwjA!<Esc>");
-        let t = tela(&mut s);
-        assert!(t.contains("  1 two"), "{t}");
-        assert!(t.contains("  2 three!"), "{t}");
-        assert!(t.contains("[+]"), "{t}");
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "two");
+        assert_eq!(m.line(1), "three!");
+        assert!(m.modified);
         s.feed("u");
-        assert!(tela(&mut s).contains("  2 three"));
+        assert_eq!(modelo(&mut s).line(1), "three");
     }
 
     #[test]
@@ -711,57 +397,81 @@ mod testes {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("x.txt");
         let mut s = Session::new("abc\n", Some(f.clone()));
-        s.resize(40, 6);
+        s.resize(40, 6.0);
         s.feed("xx:q<CR>");
         assert!(!s.quit, "não sai com alterações");
-        assert!(tela(&mut s).contains("E37"));
+        let m = modelo(&mut s);
+        assert!(m.toast.as_ref().is_some_and(|t| t.2 == ToastKind::Error), "avisa por toast");
         s.feed(":w<CR>");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "c\n");
         assert!(!s.modified());
+        assert!(modelo(&mut s).toast.as_ref().is_some_and(|t| t.2 == ToastKind::Done));
         s.feed(":q<CR>");
         assert!(s.quit);
-        let mut t = Session::new("abc\n", Some(f));
-        t.feed("x:q!<CR>");
-        assert!(t.quit);
     }
 
     #[test]
-    fn modo_visual_na_status_e_cursor() {
+    fn linha_de_comando_e_busca_no_modelo() {
         let mut s = Session::new("abc def\n", None);
-        s.resize(40, 6);
+        s.resize(40, 6.0);
+        s.feed(":w");
+        let m = modelo(&mut s);
+        assert_eq!(m.mode, ModeKind::Command);
+        assert_eq!(m.cmd, Some((':', "w".to_string())));
+        s.feed("<Esc>/de");
+        let m = modelo(&mut s);
+        assert_eq!(m.mode, ModeKind::Search);
+        assert_eq!(m.cmd, Some(('/', "de".to_string())));
+        s.feed("<CR>");
+        let m = modelo(&mut s);
+        assert_eq!(m.cursor, (0, 4));
+        assert!(m.cmd.is_none());
+    }
+
+    #[test]
+    fn visual_tem_selecao_e_modo() {
+        let mut s = Session::new("abc def\n", None);
+        s.resize(40, 6.0);
         s.feed("vee");
-        let mut g = Grid::new(40, 6);
-        s.render(&mut g);
-        assert!(g.to_text().contains("VISUAL"));
-        assert_eq!(g.mode, "visual");
-        // cursor na coluna do 'f' (4 do gutter + 6)
-        assert_eq!(g.cursor, (0, 4 + 6));
-        // célula selecionada tem fundo diferente
-        let sel = g.resolve(g.cells[4].hl);
-        let normal = g.resolve(g.cells[4 + 8].hl);
-        assert_ne!(sel.bg, normal.bg);
+        let m = modelo(&mut s);
+        assert_eq!(m.mode, ModeKind::Visual);
+        assert_eq!(m.selection, Some((VKind::Char, (0, 0), (0, 6))));
+        s.feed("<Esc>V");
+        assert_eq!(modelo(&mut s).mode, ModeKind::VisualLine);
     }
 
     #[test]
-    fn realce_de_sintaxe_do_tree_sitter() {
+    fn realce_de_sintaxe_vira_spans() {
         let mut s = Session::new("local x = 1 -- ok\n", Some(PathBuf::from("a.lua")));
-        s.resize(40, 6);
-        let mut g = Grid::new(40, 6);
-        s.render(&mut g);
-        let cor_kw = g.resolve(g.cells[4].hl).fg; // 'local'
-        let cor_x = g.resolve(g.cells[4 + 6].hl).fg; // 'x'
-        assert_ne!(cor_kw, cor_x, "palavra-chave e variável com cores diferentes");
+        s.resize(40, 6.0);
+        let m = modelo(&mut s);
+        let sp = m.spans_of(0);
+        assert!(sp.iter().any(|x| x.cls == crate::design::Cls::Keyword && x.start == 0 && x.end == 5), "local é palavra-chave: {sp:?}");
+        assert!(sp.iter().any(|x| x.cls == crate::design::Cls::Comment));
     }
 
     #[test]
-    fn tab_e_rolagem() {
-        let linhas: Vec<String> = (1..=50).map(|i| format!("\tlinha {i}")).collect();
+    fn rolagem_segue_o_cursor_e_a_roda_move_a_vista() {
+        let linhas: Vec<String> = (1..=100).map(|i| format!("linha {i}")).collect();
         let mut s = Session::new(&linhas.join("\n"), None);
-        s.resize(40, 10);
-        assert!(tela(&mut s).contains("  1         linha 1"));
+        s.resize(40, 10.0);
         s.feed("30G");
-        let t = tela(&mut s);
-        assert!(t.contains(" 30 "), "a linha 30 apareceu: {t}");
-        assert!(!t.contains("  1 "), "rolou: {t}");
+        let m = modelo(&mut s);
+        assert!(m.top > 15.0 && m.top < 30.0, "cursor à vista: top={}", m.top);
+        let antes = m.top;
+        s.scroll(-5.0);
+        assert_eq!(modelo(&mut s).top, antes - 5.0 + 0.0 * 1.0 - 0.0, "a roda sobe 5 linhas");
+        s.feed("gg");
+        assert_eq!(modelo(&mut s).top, 0.0);
+    }
+
+    #[test]
+    fn clique_leva_o_cursor_a_linha_e_coluna_visual() {
+        let mut s = Session::new("\tabc\nxyz\n", None);
+        s.resize(40, 6.0);
+        s.click(0, 9);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (0, 2));
+        s.click(1, 50);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 2));
     }
 }
