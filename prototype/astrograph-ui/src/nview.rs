@@ -109,6 +109,8 @@ pub struct ViewModel {
     pub cursor: (usize, usize),
     pub mode: ModeKind,
     pub selection: Option<(VKind, (usize, usize), (usize, usize))>,
+    /// seleção em bloco com `$`: vai até o fim de cada linha
+    pub sel_eol: bool,
     pub name: String,
     pub modified: bool,
     /// `:`, `/` ou `?` com o texto digitado
@@ -150,6 +152,7 @@ impl ViewModel {
             cursor: (0, 0),
             mode: ModeKind::Normal,
             selection: None,
+            sel_eol: false,
             name: String::new(),
             modified: false,
             cmd: None,

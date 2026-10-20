@@ -691,7 +691,7 @@ impl Scene {
             let line = vm.line(row);
             let len = line.chars().count();
             let (a, b) = match kind {
-                VKind::Line => (0, vcol_start(&line, len) + 1),
+                VKind::Line | VKind::Block => (0, vcol_start(&line, len) + 1),
                 VKind::Char => {
                     let a = if row == lo.0 { vcol_start(&line, lo.1.min(len)) } else { 0 };
                     let b = if row == hi.0 { vcol_cursor(&line, hi.1.min(len.saturating_sub(1))) + 1 } else { vcol_start(&line, len) + 1 };
@@ -707,7 +707,15 @@ impl Scene {
 
     fn paint_selection(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, kind: VKind, lo: (usize, usize), hi: (usize, usize), top_px: f32, alpha: f32) {
         let s = self.scale;
-        for row in lo.0..=hi.0.min(vm.lines.saturating_sub(1)) {
+        // bloco: um retângulo de colunas visuais entre os dois cantos
+        let bloco = (kind == VKind::Block).then(|| {
+            let (la, lb) = (vm.line(lo.0), vm.line(hi.0));
+            let ini = vcol_start(&la, lo.1).min(vcol_start(&lb, hi.1));
+            let fim = (vcol_cursor(&la, lo.1) + 1).max(vcol_cursor(&lb, hi.1) + 1);
+            (ini, fim)
+        });
+        let (r0, r1) = (lo.0.min(hi.0), lo.0.max(hi.0));
+        for row in r0..=r1.min(vm.lines.saturating_sub(1)) {
             let y = lay.text_y + row as f32 * lay.line_h - top_px;
             if y + lay.line_h < 0.0 || y > c.h as f32 {
                 continue;
@@ -715,6 +723,10 @@ impl Scene {
             let line = vm.line(row);
             let len = line.chars().count();
             let (a, b) = match kind {
+                VKind::Block => {
+                    let (ini, fim) = bloco.unwrap();
+                    (ini, if vm.sel_eol { vcol_start(&line, len).max(ini) + 1 } else { fim })
+                }
                 VKind::Line => (0, vcol_start(&line, len) + 1),
                 VKind::Char => {
                     let a = if row == lo.0 { vcol_start(&line, lo.1.min(len)) } else { 0 };

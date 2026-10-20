@@ -1079,7 +1079,8 @@ impl Session {
         }
         let sel = self.ed.selection().map(|(k, a)| {
             let c = self.ed.cursor;
-            let (lo, hi) = if a <= c { (a, c) } else { (c, a) };
+            // em bloco os dois cantos ficam como estão (o retângulo vem das colunas visuais de cada um)
+            let (lo, hi) = if a <= c || k == VKind::Block { (a, c) } else { (c, a) };
             (k, (lo.row, lo.col), (hi.row, hi.col))
         });
         let search = self.ed.search_line();
@@ -1123,6 +1124,7 @@ impl Session {
                 Mode::Insert => ModeKind::Insert,
                 Mode::Visual => match sel.map(|s| s.0) {
                     Some(VKind::Line) => ModeKind::VisualLine,
+                    Some(VKind::Block) => ModeKind::VisualBlock,
                     _ => ModeKind::Visual,
                 },
             }
@@ -1144,6 +1146,7 @@ impl Session {
             cursor: (self.ed.cursor.row, self.ed.cursor.col),
             mode,
             selection: sel,
+            sel_eol: self.ed.bloco_ate_o_fim(),
             name: self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()),
             modified: self.modified(),
             cmd,
@@ -1571,6 +1574,28 @@ mod testes {
         // Esc fecha o popup sem sair do que foi digitado
         s.feed("<Esc>");
         std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn visual_em_bloco_modelo_e_edicao() {
+        let mut s = Session::new("abcd\nefgh\nijkl\n", None);
+        s.resize(40, 8.0);
+        s.feed("l<C-v>jl");
+        let m = modelo(&mut s);
+        assert_eq!(m.mode, ModeKind::VisualBlock);
+        assert_eq!(m.selection, Some((VKind::Block, (0, 1), (1, 2))), "os dois cantos, sem ordenar");
+        s.feed("d");
+        assert_eq!(s.ed.lines(), vec!["ad", "eh", "ijkl"]);
+        // I em todas as linhas, A no fim com $
+        s.feed("gg0<C-v>jjIX<Esc>");
+        assert_eq!(s.ed.lines(), vec!["Xad", "Xeh", "Xijkl"]);
+        s.feed("gg0<C-v>jj$A!<Esc>");
+        assert_eq!(s.ed.lines(), vec!["Xad!", "Xeh!", "Xijkl!"]);
+        // y e p em bloco: cola na mesma coluna das linhas de baixo
+        s.feed("gg0l<C-v>jly");
+        s.feed("G$p");
+        assert_eq!(s.ed.lines()[2], "Xijkl!ad");
+        assert_eq!(s.ed.lines()[3], "      eh");
     }
 
     #[test]

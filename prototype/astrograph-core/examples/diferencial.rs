@@ -112,8 +112,27 @@ fn vocabulario_ex() -> Vec<&'static str> {
     ]
 }
 
+fn vocabulario_bloco() -> Vec<&'static str> {
+    let inicio = ["<C-v>"];
+    let mov = ["", "l", "j", "jl", "jj", "jjl", "2l", "3j", "$", "j$", "jj$", "w", "e", "b", "0", "^", "ll", "jw", "je", "G", "gg", "k", "h", "jh", "jjh", "fo", "}", "jlj", "lj"];
+    let ops = ["d", "x", "y", "cX<Esc>", "cXY<Esc>", "IX<Esc>", "AX<Esc>", "AXY<Esc>", "rz", "~", "u", "U", "oy", "Od", "od", "Oy", "J", "<Esc>", "s-<Esc>", "<Esc>"];
+    let mut v: Vec<&'static str> = Vec::new();
+    for i in inicio {
+        for m in mov {
+            for o in ops {
+                // monta como texto estático: usa Box::leak (só o harness)
+                let t: &'static str = Box::leak(format!("{i}{m}{o}").into_boxed_str());
+                v.push(t);
+            }
+        }
+    }
+    v.extend(["w", "j", "k", "$", "0", "G", "gg", "u", "<C-r>", ".", "x", "dd", "p", "P", "yy", "ohi<Esc>", "3j", "fo", "e", "b", "p", "P", "p", "2p", "P"]);
+    v
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
     match nome {
+        "blk" => return vocabulario_bloco(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),
@@ -193,7 +212,19 @@ fn rust_run(lines: &[&str], keys: &str) -> (Vec<String>, (usize, usize), String,
     let mut ed = Editor::new(lines);
     ed.feed_str(keys);
     ed.feed_str("<Esc>");
-    let reg = ed.register('"').map(|r| format!("{}|{}", if r.linewise { format!("{}\n", r.text) } else { r.text.clone() }, if r.linewise { "V" } else { "v" })).unwrap_or_else(|| "|v".into());
+    let reg = ed
+        .register('"')
+        .map(|r| {
+            let tipo = if r.block {
+                format!("\u{16}{}", r.bwidth)
+            } else if r.linewise {
+                "V".to_string()
+            } else {
+                "v".to_string()
+            };
+            format!("{}|{}", if r.linewise { format!("{}\n", r.text) } else { r.text.clone() }, tipo)
+        })
+        .unwrap_or_else(|| "|v".into());
     (ed.lines(), (ed.cursor.row, ed.cursor.col), "n".into(), reg)
 }
 

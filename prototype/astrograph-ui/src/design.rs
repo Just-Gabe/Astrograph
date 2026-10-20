@@ -86,6 +86,7 @@ pub enum ModeKind {
     Insert,
     Visual,
     VisualLine,
+    VisualBlock,
     Command,
     Search,
     Terminal,
@@ -98,6 +99,7 @@ impl ModeKind {
             ModeKind::Insert => "Inserir",
             ModeKind::Visual => "Visual",
             ModeKind::VisualLine => "Linhas",
+            ModeKind::VisualBlock => "Bloco",
             ModeKind::Command => "Comando",
             ModeKind::Search => "Buscar",
             ModeKind::Terminal => "Terminal",
@@ -108,7 +110,7 @@ impl ModeKind {
         match self {
             ModeKind::Normal => ACCENT,
             ModeKind::Insert => GREEN,
-            ModeKind::Visual | ModeKind::VisualLine => PURPLE,
+            ModeKind::Visual | ModeKind::VisualLine | ModeKind::VisualBlock => PURPLE,
             ModeKind::Command | ModeKind::Search => ORANGE,
             ModeKind::Terminal => GREEN,
         }

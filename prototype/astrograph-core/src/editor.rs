@@ -11,6 +11,7 @@ use crate::motion;
 use crate::search;
 use crate::textobj;
 
+mod bloco;
 mod ex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,8 @@ pub enum Mode {
 pub enum VKind {
     Char,
     Line,
+    /// seleção em bloco (`<C-v>`): um retângulo de colunas visuais
+    Block,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +47,10 @@ enum VCmd {
     Op(char, Option<usize>),
     Obj(bool, char, Option<usize>),
     Replace(char),
+    /// `I` / `A` na seleção em bloco
+    BlockIns(bool),
+    /// `O` no bloco: troca só o lado (colunas)
+    SwapH,
     /// `p` / `P` sobre a seleção
     Put(bool, Option<usize>, bool),
     Swap,
@@ -55,6 +62,10 @@ enum VCmd {
 pub struct Reg {
     pub text: String,
     pub linewise: bool,
+    /// registro em bloco (`<C-v>y`): cada linha do texto vai para uma linha do buffer, na mesma coluna
+    pub block: bool,
+    /// largura em colunas visuais do bloco (só em registros em bloco)
+    pub bwidth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +195,12 @@ pub struct Editor {
     /// onde o último `p` terminou: (por linhas?, posição logo depois do texto) — para `gp`
     put_end: Option<(bool, Pos)>,
     /// linha de comando (`:`) em edição
+    /// o próximo `store` guarda um registro em bloco
+    store_bwidth: usize,
+    /// inserção em bloco (`I`, `A`, `c`) a replicar nas outras linhas ao sair do modo de inserção
+    block_ins: Option<bloco::BlocoIns>,
+    /// o <Esc> da inserção em bloco já deixou o cursor onde deve ficar
+    esc_sem_recuo: bool,
     cmdline: Option<String>,
     /// comando `:` que o editor não conhece (para quem hospeda)
     host_cmd: Option<String>,
@@ -229,6 +246,9 @@ impl Editor {
             vmarks: None,
             marks_back: None,
             put_end: None,
+            store_bwidth: 0,
+            block_ins: None,
+            esc_sem_recuo: false,
             cmdline: None,
             host_cmd: None,
         }
@@ -287,6 +307,11 @@ impl Editor {
     }
 
     /// Seleção do modo visual: (tipo, ponta fixa).
+    /// Seleção em bloco com `$`: vai até o fim de cada linha.
+    pub fn bloco_ate_o_fim(&self) -> bool {
+        self.vis.is_some_and(|v| v.kind == VKind::Block) && self.curswant == MAXWANT
+    }
+
     pub fn selection(&self) -> Option<(VKind, Pos)> {
         self.vis.map(|v| (v.kind, v.anchor))
     }
@@ -365,7 +390,7 @@ impl Editor {
                     let text = macro_text(&keys);
                     let lower = r.to_ascii_lowercase();
                     let prev = if r.is_ascii_uppercase() { self.regs.get(&lower).map(|x| x.text.clone()) } else { None };
-                    self.regs.insert(lower, Reg { text: prev.unwrap_or_default() + &text, linewise: false });
+                    self.regs.insert(lower, Reg { text: prev.unwrap_or_default() + &text, linewise: false, block: false, bwidth: 0 });
                 } else {
                     self.q_wait = true;
                 }
@@ -653,6 +678,7 @@ impl Editor {
                         Some(_) => Parse::Invalid,
                         None => Parse::Incomplete,
                     },
+                    Key::Ctrl('v') => done(Cmd::Simple('\u{16}', None)),
                     Key::Ctrl('r') => done(Cmd::Simple('R', None)),
                     _ => Parse::Invalid,
                 },
@@ -675,7 +701,7 @@ impl Editor {
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
             Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm'),
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}'),
         };
         self.search_now = p.search.clone();
         // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
@@ -777,8 +803,8 @@ impl Editor {
             'r' => self.replace_chars(arg.unwrap(), count1),
             '~' => self.toggle_case(count1),
             'i' | 'a' | 'I' | 'A' | 'o' | 'O' => self.start_insert(c, count1),
-            'v' | 'V' => {
-                self.vis = Some(VState { kind: if c == 'v' { VKind::Char } else { VKind::Line }, anchor: self.cursor });
+            'v' | 'V' | '\u{16}' => {
+                self.vis = Some(VState { kind: match c { 'v' => VKind::Char, 'V' => VKind::Line, _ => VKind::Block }, anchor: self.cursor });
                 self.mode = Mode::Visual;
             }
             _ => {}
@@ -1299,7 +1325,8 @@ impl Editor {
     }
 
     fn store(&mut self, reg: Option<char>, text: String, linewise: bool, delete: bool) {
-        let r = Reg { text, linewise };
+        let bw = std::mem::take(&mut self.store_bwidth);
+        let r = Reg { text, linewise, block: bw > 0, bwidth: bw };
         match reg {
             Some(c) if c != '"' => {
                 self.regs.insert(c.to_ascii_lowercase(), r.clone());
@@ -1359,7 +1386,7 @@ impl Editor {
         let Some(vs) = self.vis else { return };
         // registrador vazio: o Vim apaga a seleção mesmo assim e avisa que não há o que colar
         let vazio = self.unnamed.is_none();
-        let r = self.unnamed.clone().unwrap_or(Reg { text: String::new(), linewise: false });
+        let r = self.unnamed.clone().unwrap_or(Reg { text: String::new(), linewise: false, block: false, bwidth: 0 });
         // `P` simples deixa o registrador; `p`, `gp` e `gP` o trocam pelo texto apagado
         let keep = !replace_reg && !cursor_after;
         let saved = keep.then(|| (self.regs.clone(), self.unnamed.clone()));
@@ -1428,6 +1455,10 @@ impl Editor {
             self.buf.insert_line(row + 1, &rest);
             self.cursor = Pos::new(row, 0);
             after = true;
+        }
+        if r.block {
+            self.put_bloco(&r, after, count);
+            return;
         }
         if r.linewise {
             let lines: Vec<&str> = r.text.split('\n').collect();
@@ -1579,6 +1610,9 @@ impl Editor {
             Key::Esc | Key::Ctrl('c') => VParse::Done(VCmd::Esc),
             Key::Char('v') => VParse::Done(VCmd::Kind(VKind::Char)),
             Key::Char('V') => VParse::Done(VCmd::Kind(VKind::Line)),
+            Key::Ctrl('v') => VParse::Done(VCmd::Kind(VKind::Block)),
+            Key::Char(c @ ('I' | 'A')) if self.vis.is_some_and(|v| v.kind == VKind::Block) => VParse::Done(VCmd::BlockIns(c == 'A')),
+            Key::Char('O') if self.vis.is_some_and(|v| v.kind == VKind::Block) => VParse::Done(VCmd::SwapH),
             Key::Char('o' | 'O') => VParse::Done(VCmd::Swap),
             Key::Char(c @ ('p' | 'P')) => VParse::Done(VCmd::Put(c == 'p', count, false)),
             Key::Char('g') if matches!(keys.get(i + 1), Some(Key::Char('p' | 'P'))) => {
@@ -1652,7 +1686,16 @@ impl Editor {
                 }
             },
             VCmd::Obj(include, ch, count) => self.visual_object(include, ch, count.unwrap_or(1)),
+            VCmd::Replace(ch) if vs.kind == VKind::Block => self.bloco_replace(ch),
             VCmd::Replace(ch) => self.visual_replace(ch),
+            VCmd::BlockIns(append) => self.bloco_inserir(append),
+            VCmd::SwapH => {
+                let (an, cu) = (vs.anchor, self.cursor);
+                self.cursor = Pos::new(cu.row, an.col);
+                self.vis = Some(VState { anchor: Pos::new(an.row, cu.col), ..vs });
+                self.curswant = self.want_here();
+            }
+            VCmd::Op(op, count) if vs.kind == VKind::Block && !matches!(op, 'J' | '<' | '>') => self.bloco_op(op, count),
             VCmd::Op(op, count) => self.visual_operate(op, count),
             VCmd::Put(replace, count, cursor_after) => self.visual_put(replace, count.unwrap_or(1), cursor_after),
         }
@@ -1930,9 +1973,14 @@ impl Editor {
                     }
                 }
                 self.mode = Mode::Normal;
-                if self.cursor.col > 0 {
+                let bi = self.block_ins.take();
+                if let Some(bi) = bi {
+                    self.bloco_replicar(bi);
+                }
+                if self.cursor.col > 0 && !std::mem::take(&mut self.esc_sem_recuo) {
                     self.cursor.col -= 1;
                 }
+                self.esc_sem_recuo = false;
                 self.fix_cursor();
                 self.curswant = self.want_here();
                 self.dot_recording = false;

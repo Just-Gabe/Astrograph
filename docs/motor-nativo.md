@@ -39,7 +39,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
 | `p`/`P`/`gp`/`gP` no visual (substitui a seleção; linha x caractere, registrador, um passo de desfazer) | **97%** (145/150) |
 | Comandos `:` do núcleo: faixas (`%`, `1,3`, `'<,'>`, `.+1`, `'a`), `:s` (grupos, `&`, `\\u \\U`, flags `g i I e`), `:d`, `:y`, `:j`, `:>` `:<`, `:g`/`:v`, `:normal` e `:N` | **98%** (196/200) |
-| Visual em bloco (`<C-v>`) | próximo |
+| Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **96%** (138/150; sobram blocos que cortam tab ou caractere largo) |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
