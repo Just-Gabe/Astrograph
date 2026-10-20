@@ -50,6 +50,8 @@ enum Tipo {
     Hover,
     Definicao,
     Completar,
+    /// resposta crua guardada em `Estado::respostas` (renomear, ações, formatar, assinatura...)
+    Generico,
 }
 
 /// O que o servidor já contou (lido pela UI).
@@ -59,6 +61,12 @@ pub struct Estado {
     pub hover: Option<(i64, String)>,
     pub definicao: Option<(i64, Vec<Local>)>,
     pub completar: Option<(i64, Vec<Item>)>,
+    /// respostas dos pedidos genéricos, por id (`null` e erro chegam como `Value::Null`)
+    pub respostas: HashMap<i64, Value>,
+    /// `workspace/applyEdit` pedidos pelo servidor (ações que rodam comandos)
+    pub edicoes_externas: Vec<Value>,
+    /// `window/showMessage`: (tipo 1 erro..4 log, texto)
+    pub mensagens: Vec<(u8, String)>,
     pub pronto: bool,
 }
 
@@ -194,12 +202,27 @@ impl Cliente {
                 while let Some(msg) = ler(&mut r) {
                     let id = msg.get("id").and_then(Value::as_i64);
                     if msg.get("method").is_some() && id.is_some() {
-                        // pedido do servidor (registro de capacidades, configuração...): responde vazio
-                        let resp = json!({"jsonrpc": "2.0", "id": msg["id"], "result": Value::Null});
+                        // pedido do servidor: `applyEdit` vira edição pendente; o resto (registro de
+                        // capacidades, configuração...) é respondido vazio
+                        let resultado = if msg["method"] == "workspace/applyEdit" {
+                            estado.lock().unwrap().edicoes_externas.push(msg["params"]["edit"].clone());
+                            notify();
+                            json!({"applied": true})
+                        } else {
+                            Value::Null
+                        };
+                        let resp = json!({"jsonrpc": "2.0", "id": msg["id"], "result": resultado});
                         let _ = escrever(&mut *stdin.lock().unwrap(), &resp);
                         continue;
                     }
                     if let Some(m) = msg.get("method").and_then(Value::as_str) {
+                        if m == "window/showMessage" {
+                            let p = &msg["params"];
+                            if let Some(t) = p["message"].as_str() {
+                                estado.lock().unwrap().mensagens.push((p["type"].as_u64().unwrap_or(3) as u8, t.to_string()));
+                                notify();
+                            }
+                        }
                         if m == "textDocument/publishDiagnostics" {
                             let p = &msg["params"];
                             if let Some(u) = p["uri"].as_str() {
@@ -235,6 +258,11 @@ impl Cliente {
                             estado.lock().unwrap().definicao = Some((id, locais(&msg["result"])));
                             notify();
                         }
+                        Some(Tipo::Generico) => {
+                            let r = if msg.get("error").is_some() { Value::Null } else { msg["result"].clone() };
+                            estado.lock().unwrap().respostas.insert(id, r);
+                            notify();
+                        }
                         None => {}
                     }
                 }
@@ -251,9 +279,19 @@ impl Cliente {
                     "publishDiagnostics": {"relatedInformation": false},
                     "hover": {"contentFormat": ["plaintext", "markdown"]},
                     "definition": {"linkSupport": false},
-                    "completion": {"completionItem": {"snippetSupport": false, "documentationFormat": ["plaintext"]}}
+                    "completion": {"completionItem": {"snippetSupport": false, "documentationFormat": ["plaintext"]}},
+                    "rename": {"prepareSupport": false},
+                    "codeAction": {"codeActionLiteralSupport": {"codeActionKind": {"valueSet": ["", "quickfix", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite", "source", "source.organizeImports"]}}, "resolveSupport": {"properties": ["edit"]}},
+                    "formatting": {},
+                    "rangeFormatting": {},
+                    "signatureHelp": {"signatureInformation": {"documentationFormat": ["plaintext"], "parameterInformation": {"labelOffsetSupport": true}}},
+                    "references": {},
+                    "implementation": {"linkSupport": false},
+                    "typeDefinition": {"linkSupport": false},
+                    "documentSymbol": {"hierarchicalDocumentSymbolSupport": true}
                 },
-                "workspace": {"workspaceFolders": true}
+                "window": {"showMessage": {}},
+                "workspace": {"workspaceFolders": true, "applyEdit": true, "workspaceEdit": {"documentChanges": true}}
             }
         });
         c.pedido("initialize", init, Tipo::Init);
@@ -335,6 +373,79 @@ impl Cliente {
     /// `gd`: pede a definição.
     pub fn definicao(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
         self.pedido("textDocument/definition", json!({"textDocument": {"uri": uri(arquivo)}, "position": {"line": row, "character": col16}}), Tipo::Definicao)
+    }
+
+    /// Pedido genérico: a resposta crua aparece em `resposta(id)`.
+    pub fn requisitar(&self, metodo: &str, params: Value) -> i64 {
+        self.pedido(metodo, params, Tipo::Generico)
+    }
+
+    /// Pega (e tira) a resposta de um pedido genérico, se já chegou.
+    pub fn resposta(&self, id: i64) -> Option<Value> {
+        self.estado.lock().unwrap().respostas.remove(&id)
+    }
+
+    fn pos(arquivo: &Path, row: usize, col16: usize) -> Value {
+        json!({"textDocument": {"uri": uri(arquivo)}, "position": {"line": row, "character": col16}})
+    }
+
+    pub fn renomear(&self, arquivo: &Path, row: usize, col16: usize, novo: &str) -> i64 {
+        let mut p = Self::pos(arquivo, row, col16);
+        p["newName"] = json!(novo);
+        self.requisitar("textDocument/rename", p)
+    }
+
+    /// Ações de código para o trecho `(linha, coluna UTF-16)` início–fim, com os diagnósticos dele.
+    pub fn acoes(&self, arquivo: &Path, ini: (usize, usize), fim: (usize, usize), diags: Vec<Value>) -> i64 {
+        self.requisitar(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": {"uri": uri(arquivo)},
+                "range": {"start": {"line": ini.0, "character": ini.1}, "end": {"line": fim.0, "character": fim.1}},
+                "context": {"diagnostics": diags}
+            }),
+        )
+    }
+
+    pub fn formatar(&self, arquivo: &Path, tab: usize, espacos: bool) -> i64 {
+        self.requisitar("textDocument/formatting", json!({"textDocument": {"uri": uri(arquivo)}, "options": {"tabSize": tab, "insertSpaces": espacos}}))
+    }
+
+    pub fn formatar_trecho(&self, arquivo: &Path, ini: (usize, usize), fim: (usize, usize), tab: usize, espacos: bool) -> i64 {
+        self.requisitar(
+            "textDocument/rangeFormatting",
+            json!({
+                "textDocument": {"uri": uri(arquivo)},
+                "range": {"start": {"line": ini.0, "character": ini.1}, "end": {"line": fim.0, "character": fim.1}},
+                "options": {"tabSize": tab, "insertSpaces": espacos}
+            }),
+        )
+    }
+
+    pub fn assinatura(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
+        self.requisitar("textDocument/signatureHelp", Self::pos(arquivo, row, col16))
+    }
+
+    pub fn referencias(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
+        let mut p = Self::pos(arquivo, row, col16);
+        p["context"] = json!({"includeDeclaration": true});
+        self.requisitar("textDocument/references", p)
+    }
+
+    pub fn implementacao(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
+        self.requisitar("textDocument/implementation", Self::pos(arquivo, row, col16))
+    }
+
+    pub fn tipo_da_definicao(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
+        self.requisitar("textDocument/typeDefinition", Self::pos(arquivo, row, col16))
+    }
+
+    pub fn simbolos(&self, arquivo: &Path) -> i64 {
+        self.requisitar("textDocument/documentSymbol", json!({"textDocument": {"uri": uri(arquivo)}}))
+    }
+
+    pub fn executar(&self, comando: &str, args: Vec<Value>) -> i64 {
+        self.requisitar("workspace/executeCommand", json!({"command": comando, "arguments": args}))
     }
 
     pub fn diagnosticos(&self, arquivo: &Path) -> Vec<Diag> {
@@ -487,6 +598,147 @@ fn locais(r: &Value) -> Vec<Local> {
     }
 }
 
+/// Uma troca de texto do servidor: posições (linha, coluna UTF-16) do texto de antes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edicao {
+    pub arquivo: PathBuf,
+    pub ini: (usize, usize),
+    pub fim: (usize, usize),
+    pub novo: String,
+}
+
+fn edicao_de(arquivo: &Path, v: &Value) -> Option<Edicao> {
+    let r = v.get("range")?;
+    Some(Edicao {
+        arquivo: arquivo.to_path_buf(),
+        ini: (r["start"]["line"].as_u64()? as usize, r["start"]["character"].as_u64()? as usize),
+        fim: (r["end"]["line"].as_u64()? as usize, r["end"]["character"].as_u64()? as usize),
+        novo: v["newText"].as_str()?.to_string(),
+    })
+}
+
+/// `[TextEdit]` de um arquivo só (formatação).
+pub fn edicoes_do_arquivo(arquivo: &Path, r: &Value) -> Vec<Edicao> {
+    r.as_array().map(|a| a.iter().filter_map(|v| edicao_de(arquivo, v)).collect()).unwrap_or_default()
+}
+
+/// `WorkspaceEdit` (`changes` ou `documentChanges`): as trocas de texto de todos os arquivos.
+/// Criar, renomear e apagar arquivos não são tratados.
+pub fn edicoes_de(r: &Value) -> Vec<Edicao> {
+    let mut out = Vec::new();
+    if let Some(ch) = r["changes"].as_object() {
+        for (u, lista) in ch {
+            if let (Some(p), Some(a)) = (de_uri(u), lista.as_array()) {
+                out.extend(a.iter().filter_map(|v| edicao_de(&p, v)));
+            }
+        }
+    }
+    if let Some(dc) = r["documentChanges"].as_array() {
+        for d in dc {
+            let (Some(u), Some(a)) = (d["textDocument"]["uri"].as_str(), d["edits"].as_array()) else { continue };
+            if let Some(p) = de_uri(u) {
+                out.extend(a.iter().filter_map(|v| edicao_de(&p, v)));
+            }
+        }
+    }
+    out
+}
+
+/// Uma ação de código: título e o que fazer (edição, comando ou os dois).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Acao {
+    pub titulo: String,
+    pub tipo: String,
+    pub edicao: Option<Value>,
+    pub comando: Option<(String, Vec<Value>)>,
+}
+
+pub fn acoes_de(r: &Value) -> Vec<Acao> {
+    let Some(a) = r.as_array() else { return Vec::new() };
+    a.iter()
+        .filter_map(|v| {
+            let titulo = v["title"].as_str()?.to_string();
+            // `Command` puro: `command` é o nome e `arguments` ficam no mesmo nível
+            let comando = match &v["command"] {
+                Value::String(c) => Some((c.clone(), v["arguments"].as_array().cloned().unwrap_or_default())),
+                Value::Object(o) => o.get("command").and_then(Value::as_str).map(|c| (c.to_string(), o.get("arguments").and_then(Value::as_array).cloned().unwrap_or_default())),
+                _ => None,
+            };
+            let edicao = v.get("edit").filter(|e| !e.is_null()).cloned();
+            Some(Acao { titulo, tipo: v["kind"].as_str().unwrap_or("").to_string(), edicao, comando })
+        })
+        .collect()
+}
+
+/// Um símbolo do documento (função, struct...), em ordem de leitura; `nivel` é o aninhamento.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Simbolo {
+    pub nome: String,
+    pub tipo: u8,
+    pub detalhe: String,
+    pub row: usize,
+    pub col: usize,
+    pub nivel: usize,
+}
+
+pub fn simbolos_de(r: &Value) -> Vec<Simbolo> {
+    fn rec(v: &Value, nivel: usize, out: &mut Vec<Simbolo>) {
+        let Some(nome) = v["name"].as_str() else { return };
+        // DocumentSymbol: selectionRange; SymbolInformation: location.range
+        let rg = v.get("selectionRange").or_else(|| v.get("range")).or_else(|| v["location"].get("range"));
+        if let Some(rg) = rg {
+            if let (Some(row), Some(col)) = (rg["start"]["line"].as_u64(), rg["start"]["character"].as_u64()) {
+                out.push(Simbolo { nome: nome.to_string(), tipo: v["kind"].as_u64().unwrap_or(0) as u8, detalhe: v["detail"].as_str().unwrap_or("").to_string(), row: row as usize, col: col as usize, nivel });
+            }
+        }
+        if let Some(f) = v["children"].as_array() {
+            for c in f {
+                rec(c, nivel + 1, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(a) = r.as_array() {
+        for v in a {
+            rec(v, 0, &mut out);
+        }
+    }
+    out
+}
+
+/// A assinatura da função em edição: o texto, o trecho do parâmetro ativo (em caracteres) e a doc.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Assinatura {
+    pub texto: String,
+    pub ativo: Option<(usize, usize)>,
+    pub doc: String,
+}
+
+pub fn assinatura_de(r: &Value) -> Option<Assinatura> {
+    let sigs = r["signatures"].as_array()?;
+    let i = r["activeSignature"].as_u64().unwrap_or(0) as usize;
+    let s = sigs.get(i).or_else(|| sigs.first())?;
+    let texto = s["label"].as_str()?.to_string();
+    let p = s["activeParameter"].as_u64().or_else(|| r["activeParameter"].as_u64()).unwrap_or(0) as usize;
+    let ativo = s["parameters"].as_array().and_then(|ps| ps.get(p)).and_then(|par| match &par["label"] {
+        Value::Array(o) => Some((o.first()?.as_u64()? as usize, o.get(1)?.as_u64()? as usize)),
+        Value::String(t) => texto.find(t.as_str()).map(|b| (b, b + t.len())),
+        _ => None,
+    });
+    // posições do servidor são UTF-16 (ou bytes, na busca por texto): converte para caracteres
+    let ativo = ativo.map(|(a, b)| (col_chars(&texto, a), col_chars(&texto, b)));
+    let doc = match &s["documentation"] {
+        Value::String(t) => t.clone(),
+        Value::Object(o) => o.get("value").and_then(Value::as_str).unwrap_or("").to_string(),
+        _ => String::new(),
+    };
+    Some(Assinatura { texto, ativo, doc: doc.lines().next().unwrap_or("").to_string() })
+}
+
+pub fn locais_de(r: &Value) -> Vec<Local> {
+    locais(r)
+}
+
 #[cfg(test)]
 pub(crate) mod testes {
     use super::*;
@@ -509,16 +761,36 @@ def ler():
 def enviar(o):
     b = json.dumps(o).encode()
     sys.stdout.buffer.write(b'Content-Length: %d\r\n\r\n' % len(b) + b); sys.stdout.buffer.flush()
+ultimo = ''
 while True:
     m = ler()
     if m is None: break
     meth = m.get('method'); i = m.get('id')
+    if meth == 'textDocument/didOpen': ultimo = m['params']['textDocument']['uri']
     if meth == 'initialize': enviar({'jsonrpc':'2.0','id':i,'result':{'capabilities':{}}})
     elif meth == 'textDocument/didOpen' or meth == 'textDocument/didChange':
         td = m['params']['textDocument']
         enviar({'jsonrpc':'2.0','method':'textDocument/publishDiagnostics','params':{'uri':td['uri'],'diagnostics':[{'range':{'start':{'line':0,'character':1},'end':{'line':0,'character':3}},'severity':2,'message':'cuidado aqui'}]}})
     elif meth == 'textDocument/completion': enviar({'jsonrpc':'2.0','id':i,'result':{'isIncomplete':False,'items':[{'label':'println!','kind':3,'detail':'macro','insertText':'println!("$1")$0','insertTextFormat':2},{'label':'print','kind':3,'detail':'fn print()'},{'label':'private','kind':14},{'label':'zeta','kind':6}]}})
     elif meth == 'textDocument/hover': enviar({'jsonrpc':'2.0','id':i,'result':{'contents':{'kind':'markdown','value':'```rust\nfn x()\n```\ndoc da x'}}})
+    elif meth == 'textDocument/rename':
+        u = m['params']['textDocument']['uri']; n = m['params']['newName']
+        enviar({'jsonrpc':'2.0','id':i,'result':{'changes':{u:[{'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':1}},'newText':n}],'file:///tmp/outro%20arq.py':[{'range':{'start':{'line':1,'character':2},'end':{'line':1,'character':3}},'newText':n}]}}})
+    elif meth == 'textDocument/codeAction':
+        u = m['params']['textDocument']['uri']
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'title':'Trocar x por y','kind':'quickfix','edit':{'documentChanges':[{'textDocument':{'uri':u,'version':1},'edits':[{'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':1}},'newText':'y'}]}]}},{'title':'Rodar comando','command':{'title':'x','command':'falso.cmd','arguments':[7]}}]})
+    elif meth == 'workspace/executeCommand':
+        enviar({'jsonrpc':'2.0','id':9001,'method':'workspace/applyEdit','params':{'edit':{'changes':{ultimo:[{'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':1}},'newText':'z'}]}}}})
+        enviar({'jsonrpc':'2.0','id':i,'result':None})
+    elif meth == 'textDocument/formatting' or meth == 'textDocument/rangeFormatting':
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':5}},'newText':'x = 2'}]})
+    elif meth == 'textDocument/signatureHelp':
+        enviar({'jsonrpc':'2.0','id':i,'result':{'signatures':[{'label':'soma(a: int, b: int)','parameters':[{'label':[5,11]},{'label':[13,19]}],'documentation':'soma dois numeros\nsegunda linha'}],'activeSignature':0,'activeParameter':1}})
+    elif meth == 'textDocument/references':
+        u = m['params']['textDocument']['uri']
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'uri':u,'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':1}}},{'uri':'file:///tmp/ref%20dois.py','range':{'start':{'line':2,'character':4},'end':{'line':2,'character':5}}}]})
+    elif meth == 'textDocument/documentSymbol':
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'name':'Foo','kind':5,'range':{'start':{'line':3,'character':0},'end':{'line':9,'character':0}},'selectionRange':{'start':{'line':3,'character':6},'end':{'line':3,'character':9}},'children':[{'name':'bar','kind':6,'detail':'fn','range':{'start':{'line':4,'character':4},'end':{'line':5,'character':0}},'selectionRange':{'start':{'line':4,'character':8},'end':{'line':4,'character':11}}}]}]})
     elif meth == 'textDocument/definition': enviar({'jsonrpc':'2.0','id':i,'result':[{'uri':'file:///tmp/alvo%20x.rs','range':{'start':{'line':4,'character':2},'end':{'line':4,'character':5}}}]})
 "#;
 
@@ -589,6 +861,115 @@ while True:
         c.fechar(&arq);
         assert_eq!(c.versao(&arq), 0);
         c.encerrar();
+    }
+
+    fn cliente_falso() -> (Cliente, PathBuf, PathBuf) {
+        let py = ["python3", "python"].into_iter().find(|p| Command::new(p).arg("--version").output().is_ok()).expect("python");
+        let dir = std::env::temp_dir().join(format!("astrograph-lsp2-{}-{:?}", std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("falso.py");
+        std::fs::write(&script, FALSO).unwrap();
+        let mut c = Cliente::iniciar(py, &[script.to_string_lossy().into_owned()], &dir, Arc::new(|| {})).unwrap();
+        let arq = dir.join("a.py");
+        c.abrir(&arq, "python", "x = 1\n");
+        (c, dir, arq)
+    }
+
+    fn resposta(c: &Cliente, id: i64) -> Value {
+        esperar(|| c.resposta(id)).expect("resposta do servidor")
+    }
+
+    #[test]
+    fn renomear_devolve_edicoes_em_dois_arquivos() {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+            return;
+        }
+        let (mut c, _d, arq) = cliente_falso();
+        let id = c.renomear(&arq, 0, 0, "novo");
+        let ed = edicoes_de(&resposta(&c, id));
+        assert_eq!(ed.len(), 2);
+        let aqui = ed.iter().find(|e| e.arquivo == arq).expect("edição no arquivo aberto");
+        assert_eq!((aqui.ini, aqui.fim, aqui.novo.as_str()), ((0, 0), (0, 1), "novo"));
+        let outro = ed.iter().find(|e| e.arquivo != arq).unwrap();
+        assert_eq!((outro.arquivo.clone(), outro.ini), (PathBuf::from("/tmp/outro arq.py"), (1, 2)));
+        c.encerrar();
+    }
+
+    #[test]
+    fn acoes_de_codigo_edicao_e_comando_com_applyedit_do_servidor() {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+            return;
+        }
+        let (mut c, _d, arq) = cliente_falso();
+        let id = c.acoes(&arq, (0, 0), (0, 1), vec![]);
+        let acoes = acoes_de(&resposta(&c, id));
+        assert_eq!(acoes.len(), 2);
+        assert_eq!((acoes[0].titulo.as_str(), acoes[0].tipo.as_str()), ("Trocar x por y", "quickfix"));
+        let ed = edicoes_de(acoes[0].edicao.as_ref().expect("documentChanges"));
+        assert_eq!((ed.len(), ed[0].novo.as_str(), ed[0].arquivo.clone()), (1, "y", arq.clone()));
+        let (cmd, args) = acoes[1].comando.clone().expect("comando");
+        assert_eq!((cmd.as_str(), args.len()), ("falso.cmd", 1));
+        // executar o comando: o servidor responde com um `workspace/applyEdit` que fica pendente
+        c.executar(&cmd, args);
+        let ext = esperar(|| {
+            let mut e = c.estado.lock().unwrap();
+            (!e.edicoes_externas.is_empty()).then(|| std::mem::take(&mut e.edicoes_externas))
+        })
+        .expect("applyEdit do servidor");
+        let ed = edicoes_de(&ext[0]);
+        assert_eq!((ed[0].novo.as_str(), ed[0].arquivo.clone()), ("z", arq));
+        c.encerrar();
+    }
+
+    #[test]
+    fn formatar_assinatura_referencias_e_simbolos() {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+            return;
+        }
+        let (mut c, _d, arq) = cliente_falso();
+        let id = c.formatar(&arq, 4, true);
+        let ed = edicoes_do_arquivo(&arq, &resposta(&c, id));
+        assert_eq!((ed[0].ini, ed[0].fim, ed[0].novo.as_str()), ((0, 0), (0, 5), "x = 2"));
+        let id = c.formatar_trecho(&arq, (0, 0), (0, 5), 4, true);
+        assert_eq!(edicoes_do_arquivo(&arq, &resposta(&c, id)).len(), 1);
+        // assinatura: o parâmetro ativo é o segundo (`b: int`, caracteres 13..19)
+        let id = c.assinatura(&arq, 0, 5);
+        let a = assinatura_de(&resposta(&c, id)).expect("assinatura");
+        assert_eq!(a.texto, "soma(a: int, b: int)");
+        assert_eq!(a.ativo, Some((13, 19)));
+        assert_eq!(&a.texto[13..19], "b: int");
+        assert_eq!(a.doc, "soma dois numeros", "só a primeira linha da doc");
+        let id = c.referencias(&arq, 0, 0);
+        let refs = locais_de(&resposta(&c, id));
+        assert_eq!(refs.len(), 2);
+        assert_eq!((refs[1].arquivo.clone(), refs[1].row, refs[1].col), (PathBuf::from("/tmp/ref dois.py"), 2, 4));
+        let id = c.simbolos(&arq);
+        let sim = simbolos_de(&resposta(&c, id));
+        assert_eq!(sim.iter().map(|s| (s.nome.as_str(), s.nivel, s.row, s.col)).collect::<Vec<_>>(), vec![("Foo", 0, 3, 6), ("bar", 1, 4, 8)]);
+        c.encerrar();
+    }
+
+    #[test]
+    fn parsers_aceitam_as_variantes_do_protocolo() {
+        // WorkspaceEdit com `changes`
+        let e = edicoes_de(&json!({"changes": {"file:///tmp/a.rs": [{"range": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 5}}, "newText": "xyz"}]}}));
+        assert_eq!(e, vec![Edicao { arquivo: PathBuf::from("/tmp/a.rs"), ini: (1, 2), fim: (1, 5), novo: "xyz".into() }]);
+        // operações de arquivo (criar/renomear) são ignoradas, sem derrubar o resto
+        let e = edicoes_de(&json!({"documentChanges": [{"kind": "create", "uri": "file:///tmp/n.rs"}, {"textDocument": {"uri": "file:///tmp/b.rs"}, "edits": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "newText": "// oi\n"}]}]}));
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].arquivo, PathBuf::from("/tmp/b.rs"));
+        assert!(edicoes_de(&Value::Null).is_empty());
+        // `Command` puro numa lista de ações
+        let a = acoes_de(&json!([{"title": "Organizar", "command": "organizar", "arguments": ["a"]}, {"semtitulo": 1}]));
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].comando, Some(("organizar".to_string(), vec![json!("a")])));
+        // SymbolInformation (plano, com location)
+        let s = simbolos_de(&json!([{"name": "f", "kind": 12, "location": {"uri": "file:///x", "range": {"start": {"line": 7, "character": 3}, "end": {"line": 8, "character": 0}}}}]));
+        assert_eq!((s[0].nome.as_str(), s[0].row, s[0].col), ("f", 7, 3));
+        // assinatura com o parâmetro dado como texto e sem activeSignature
+        let a = assinatura_de(&json!({"signatures": [{"label": "f(x, y)", "parameters": [{"label": "x"}, {"label": "y"}]}], "activeParameter": 1})).unwrap();
+        assert_eq!(a.ativo, Some((5, 6)));
+        assert!(assinatura_de(&json!({"signatures": []})).is_none());
     }
 
     #[test]

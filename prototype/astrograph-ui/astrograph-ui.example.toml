@@ -47,3 +47,7 @@ animation_ms = 80
 # Rolagem suave por pixel: o texto desliza e desacelera, em vez de pular de
 # linha em linha. Duracao em ms (0 desliga).
 animation_ms = 160
+
+[lsp]
+# formata o arquivo com o servidor de linguagem antes de gravar (:w)
+format_on_save = false
