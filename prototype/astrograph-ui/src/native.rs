@@ -1744,6 +1744,7 @@ mod testes {
     #[test]
     fn lsp_mostra_diagnosticos_hover_e_vai_para_a_definicao() {
         let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let _trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto("lsp");
         let script = d.join("falso.py");
         std::fs::write(&script, crate::lsp::testes::FALSO).unwrap();
@@ -1811,6 +1812,7 @@ mod testes {
     #[test]
     fn completar_do_servidor_filtra_navega_e_aceita() {
         let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let _trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto("comp");
         let script = d.join("falso.py");
         std::fs::write(&script, crate::lsp::testes::FALSO).unwrap();

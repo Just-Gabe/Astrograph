@@ -449,6 +449,9 @@ pub(crate) mod testes {
     use super::*;
     use std::time::{Duration, Instant};
 
+    /// Testes que mexem em `ASTROGRAPH_LSP_CMD` (env global do processo) não podem rodar juntos.
+    pub(crate) static TRAVA_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     pub(crate) const FALSO: &str = r#"
 import sys, json
 def ler():
