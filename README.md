@@ -109,7 +109,8 @@ com animações próprias, todas em mola:
 - explorador que desliza da esquerda e empurra o texto;
 - LSP nativo (rust-analyzer, pyright, typescript-language-server, gopls, lua-language-server,
   clangd e bash-language-server, do PATH ou do Mason): diagnósticos com sublinhado ondulado,
-  ponto na margem e mensagem ao fim da linha, `K` (hover) e `gd` (ir para a definição),
+  ponto na margem e mensagem ao fim da linha, `K` (hover), `gd` (ir para a definição) e completar ao digitar (`Tab` aceita, `<C-n>`/`<C-p>`
+  navegam),
   contagem de erros e avisos na pílula (`ASTROGRAPH_LSP=0` desliga);
 - git na margem (linha nova, alterada ou removida, ao vivo enquanto você digita, sem
   salvar) e o branch na pílula;

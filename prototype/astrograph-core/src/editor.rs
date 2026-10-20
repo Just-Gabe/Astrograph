@@ -304,6 +304,34 @@ impl Editor {
         self.curswant = self.want_here();
     }
 
+    /// Completar no modo de inserção: troca o texto de `de` até o cursor por `texto` e deixa o
+    /// cursor no fim. O que foi digitado vira o texto final (para `.` e contagem).
+    pub fn insert_replace(&mut self, de: Pos, texto: &str) {
+        if self.mode != Mode::Insert || de > self.cursor {
+            return;
+        }
+        let fim = self.cursor;
+        let digitado = if de.row == fim.row { fim.col - de.col } else { 0 };
+        self.buf.delete(de, fim);
+        self.buf.insert(de, texto);
+        let n = texto.chars().count();
+        self.cursor = self.buf.pos_of(self.buf.idx(de) + n);
+        self.curswant = self.want_here();
+        for _ in 0..digitado {
+            self.ins.typed.pop();
+            if self.dot_recording && !self.replaying {
+                self.dot.pop();
+            }
+        }
+        for ch in texto.chars() {
+            let k = if ch == '\n' { Key::Enter } else { Key::Char(ch) };
+            self.ins.typed.push(k);
+            if self.dot_recording && !self.replaying {
+                self.dot.push(k);
+            }
+        }
+    }
+
     pub fn register(&self, c: char) -> Option<&Reg> {
         if c == '"' {
             self.unnamed.as_ref()

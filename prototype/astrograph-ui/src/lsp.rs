@@ -29,11 +29,27 @@ pub struct Local {
     pub col: usize,
 }
 
+/// Uma sugestão de completar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub label: String,
+    /// texto usado para filtrar (`filterText` ou o rótulo)
+    pub filtro: String,
+    /// o que entra no buffer (já sem a sintaxe de snippet)
+    pub texto: String,
+    pub detalhe: String,
+    /// 1 texto, 2 método, 3 função, 4 construtor, 5 campo, 6 variável, 7 classe, 8 interface, 9 módulo, 10 propriedade, 14 palavra-chave, 15 snippet, 22 struct...
+    pub tipo: u8,
+    /// `textEdit.range` inicial (linha, coluna UTF-16), se houver
+    pub inicio: Option<(usize, usize)>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tipo {
     Init,
     Hover,
     Definicao,
+    Completar,
 }
 
 /// O que o servidor já contou (lido pela UI).
@@ -42,6 +58,7 @@ pub struct Estado {
     pub diagnosticos: HashMap<String, Vec<Diag>>,
     pub hover: Option<(i64, String)>,
     pub definicao: Option<(i64, Vec<Local>)>,
+    pub completar: Option<(i64, Vec<Item>)>,
     pub pronto: bool,
 }
 
@@ -195,6 +212,10 @@ impl Cliente {
                             estado.lock().unwrap().hover = Some((id, hover_texto(&msg["result"])));
                             notify();
                         }
+                        Some(Tipo::Completar) => {
+                            estado.lock().unwrap().completar = Some((id, itens(&msg["result"])));
+                            notify();
+                        }
                         Some(Tipo::Definicao) => {
                             estado.lock().unwrap().definicao = Some((id, locais(&msg["result"])));
                             notify();
@@ -214,7 +235,8 @@ impl Cliente {
                     "synchronization": {"didSave": true},
                     "publishDiagnostics": {"relatedInformation": false},
                     "hover": {"contentFormat": ["plaintext", "markdown"]},
-                    "definition": {"linkSupport": false}
+                    "definition": {"linkSupport": false},
+                    "completion": {"completionItem": {"snippetSupport": false, "documentationFormat": ["plaintext"]}}
                 },
                 "workspace": {"workspaceFolders": true}
             }
@@ -260,6 +282,11 @@ impl Cliente {
     /// `K`: pede o hover na posição (linha, coluna em unidades UTF-16).
     pub fn hover(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
         self.pedido("textDocument/hover", json!({"textDocument": {"uri": uri(arquivo)}, "position": {"line": row, "character": col16}}), Tipo::Hover)
+    }
+
+    /// Pede sugestões na posição (linha, coluna UTF-16).
+    pub fn completar(&self, arquivo: &Path, row: usize, col16: usize) -> i64 {
+        self.pedido("textDocument/completion", json!({"textDocument": {"uri": uri(arquivo)}, "position": {"line": row, "character": col16}}), Tipo::Completar)
     }
 
     /// `gd`: pede a definição.
@@ -334,6 +361,76 @@ fn hover_texto(r: &Value) -> String {
     t.lines().filter(|l| !l.trim_start().starts_with("```")).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
+/// Tira a sintaxe de snippet (`$1`, `${2:nome}`, `$0`) do texto que entra no buffer.
+pub fn sem_snippet(t: &str) -> String {
+    let c: Vec<char> = t.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '\\' && i + 1 < c.len() {
+            out.push(c[i + 1]);
+            i += 2;
+        } else if c[i] == '$' && i + 1 < c.len() && c[i + 1].is_ascii_digit() {
+            i += 2;
+            while i < c.len() && c[i].is_ascii_digit() {
+                i += 1;
+            }
+        } else if c[i] == '$' && i + 1 < c.len() && c[i + 1] == '{' {
+            // ${1:padrão} -> padrão ; ${1} -> nada
+            let mut j = i + 2;
+            while j < c.len() && c[j].is_ascii_digit() {
+                j += 1;
+            }
+            let mut depth = 1;
+            let ini = if j < c.len() && c[j] == ':' { j + 1 } else { j };
+            let mut k = ini;
+            while k < c.len() && depth > 0 {
+                if c[k] == '{' {
+                    depth += 1;
+                } else if c[k] == '}' {
+                    depth -= 1;
+                }
+                k += 1;
+            }
+            let fim = if depth == 0 { k - 1 } else { k };
+            if j < c.len() && c[j] == ':' {
+                out.push_str(&sem_snippet(&c[ini..fim.max(ini)].iter().collect::<String>()));
+            }
+            i = k;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn itens(r: &Value) -> Vec<Item> {
+    let lista = match r {
+        Value::Array(a) => a.as_slice(),
+        Value::Object(o) => o.get("items").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]),
+        _ => &[],
+    };
+    lista
+        .iter()
+        .filter_map(|v| {
+            let label = v["label"].as_str()?.to_string();
+            let snippet = v["insertTextFormat"].as_u64() == Some(2);
+            let bruto = v["textEdit"]["newText"].as_str().or_else(|| v["insertText"].as_str()).unwrap_or(&label).to_string();
+            let texto = if snippet { sem_snippet(&bruto) } else { bruto };
+            let inicio = v["textEdit"]["range"]["start"].as_object().and_then(|s| Some((s.get("line")?.as_u64()? as usize, s.get("character")?.as_u64()? as usize)));
+            Some(Item {
+                filtro: v["filterText"].as_str().unwrap_or(&label).to_string(),
+                detalhe: v["detail"].as_str().or_else(|| v["labelDetails"]["detail"].as_str()).unwrap_or("").to_string(),
+                tipo: v["kind"].as_u64().unwrap_or(1) as u8,
+                label,
+                texto,
+                inicio,
+            })
+        })
+        .collect()
+}
+
 fn locais(r: &Value) -> Vec<Local> {
     let um = |v: &Value| -> Option<Local> {
         let u = v.get("uri").or_else(|| v.get("targetUri"))?.as_str()?;
@@ -374,6 +471,7 @@ while True:
     elif meth == 'textDocument/didOpen' or meth == 'textDocument/didChange':
         td = m['params']['textDocument']
         enviar({'jsonrpc':'2.0','method':'textDocument/publishDiagnostics','params':{'uri':td['uri'],'diagnostics':[{'range':{'start':{'line':0,'character':1},'end':{'line':0,'character':3}},'severity':2,'message':'cuidado aqui'}]}})
+    elif meth == 'textDocument/completion': enviar({'jsonrpc':'2.0','id':i,'result':{'isIncomplete':False,'items':[{'label':'println!','kind':3,'detail':'macro','insertText':'println!("$1")$0','insertTextFormat':2},{'label':'print','kind':3,'detail':'fn print()'},{'label':'private','kind':14},{'label':'zeta','kind':6}]}})
     elif meth == 'textDocument/hover': enviar({'jsonrpc':'2.0','id':i,'result':{'contents':{'kind':'markdown','value':'```rust\nfn x()\n```\ndoc da x'}}})
     elif meth == 'textDocument/definition': enviar({'jsonrpc':'2.0','id':i,'result':[{'uri':'file:///tmp/alvo%20x.rs','range':{'start':{'line':4,'character':2},'end':{'line':4,'character':5}}}]})
 "#;
@@ -419,6 +517,13 @@ while True:
         let id = c.definicao(&arq, 0, 1);
         let l = esperar(|| c.estado.lock().unwrap().definicao.clone().filter(|(i, _)| *i == id)).expect("definição");
         assert_eq!(l.1, vec![Local { arquivo: PathBuf::from("/tmp/alvo x.rs"), row: 4, col: 2 }]);
+        let id = c.completar(&arq, 0, 1);
+        let it = esperar(|| c.estado.lock().unwrap().completar.clone().filter(|(i, _)| *i == id)).expect("completar");
+        assert_eq!(it.1.len(), 4);
+        assert_eq!((it.1[0].label.as_str(), it.1[0].texto.as_str(), it.1[0].tipo), ("println!", "println!(\"\")", 3), "snippet sem $1/$0");
+        assert_eq!(it.1[1].texto, "print");
+        assert_eq!(sem_snippet("foo(${1:a}, ${2:b})$0"), "foo(a, b)");
+        assert_eq!(sem_snippet("a\\$b"), "a$b");
         // mudar o texto reenvia (o falso sempre devolve o mesmo aviso)
         c.mudou(&arq, "x = 2\n");
         assert_eq!(c.versao, 2);

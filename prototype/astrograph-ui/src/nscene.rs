@@ -802,6 +802,7 @@ impl Scene {
         if veil > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
         }
+        self.paint_completion(c, _vm, lay, (w, h, s));
         self.paint_hover(c, _vm, lay, (w, h, s));
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
@@ -961,6 +962,59 @@ impl Scene {
             }
             let al = if row == vm.cursor.0 { 0.95 } else { 0.55 };
             c.text(&mut self.ui, px, fim, y + lay.line_h / 2.0 + px * 0.34, &texto, cor(m.severity), al * ra);
+        }
+    }
+
+    /// Completar: lista abaixo da palavra, com o trecho digitado em destaque e a seleção que desliza.
+    fn paint_completion(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        let Some(cv) = &vm.completion else { return };
+        let px = self.font_px;
+        let row_h = 27.0 * s;
+        let linha = vm.line(cv.anchor.0);
+        let ax = lay.text_x + (vcol_start(&linha, cv.anchor.1) as f32 - vm.left as f32) * lay.char_w - 38.0 * s;
+        let cur_top = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
+        let maior = cv.items.iter().map(|i| i.label.chars().count() as f32 * lay.char_w + if i.detail.is_empty() { 0.0 } else { self.ui.measure(&i.detail.chars().take(28).collect::<String>(), 11.5 * s) + 28.0 * s }).fold(0.0, f32::max);
+        let cw = (maior + 74.0 * s).clamp(240.0 * s, 560.0 * s);
+        let ch = cv.items.len() as f32 * row_h + 12.0 * s;
+        let x = ax.min(w - cw - 12.0 * s).max(self.side.x + 8.0 * s);
+        let mut y = cur_top + lay.line_h + 4.0 * s;
+        if y + ch > h - d::M.bottom * s {
+            y = (cur_top - ch - 4.0 * s).max(lay.text_y);
+        }
+        c.shadow(x, y, cw, ch, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch, 12.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch, 12.0 * s, 1.0, d::WHITE, 0.10);
+        c.rrect(x + 5.0 * s, y + 6.0 * s + cv.sel as f32 * row_h, cw - 10.0 * s, row_h, 8.0 * s, d::ACCENT, 0.30);
+        for (i, it) in cv.items.iter().enumerate() {
+            let base = y + 6.0 * s + i as f32 * row_h + row_h / 2.0 + px * 0.34;
+            // distintivo do tipo: quadrado colorido com a inicial
+            let (letra, cor) = match it.kind {
+                2 | 3 | 4 => ('ƒ', d::PURPLE),
+                5 | 10 => ('p', d::ORANGE),
+                6 => ('v', d::ACCENT),
+                7 | 8 | 22 => ('T', d::GREEN),
+                9 => ('M', d::DIM),
+                14 => ('k', d::RED),
+                15 => ('s', d::DIM),
+                _ => ('a', d::DIM),
+            };
+            let bx = x + 12.0 * s;
+            c.rrect(bx, base - px * 0.34 - 8.0 * s, 16.0 * s, 16.0 * s, 4.0 * s, cor, 0.22);
+            let lw = self.ui_semi.measure(&letra.to_string(), 10.5 * s);
+            c.text(&mut self.ui_semi, 10.5 * s, bx + (16.0 * s - lw) / 2.0, base - px * 0.34 + 3.5 * s, &letra.to_string(), cor, 1.0);
+            let mut pen = bx + 26.0 * s;
+            for (j, ch) in it.label.chars().enumerate() {
+                let col = if it.hits.contains(&j) { d::ACCENT_SOFT } else if i == cv.sel { d::TEXT_STRONG } else { d::TEXT };
+                c.glyph_at(&mut self.mono, px, pen, base, ch, col, 1.0);
+                pen += lay.char_w;
+            }
+            if !it.detail.is_empty() {
+                let det: String = it.detail.chars().take(28).collect();
+                let dw = self.ui.measure(&det, 11.5 * s);
+                if pen + 16.0 * s < x + cw - dw - 12.0 * s {
+                    c.text(&mut self.ui, 11.5 * s, x + cw - dw - 14.0 * s, base - 1.0 * s, &det, d::DIM, 0.9);
+                }
+            }
         }
     }
 

@@ -74,6 +74,24 @@ pub struct GitView {
     pub signs: std::sync::Arc<Vec<(usize, crate::git::Sign)>>,
 }
 
+/// Uma linha do popup de completar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompItem {
+    pub label: String,
+    pub detail: String,
+    pub kind: u8,
+    /// posições (em caracteres) do rótulo que casaram com o que foi digitado
+    pub hits: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompView {
+    pub items: Vec<CompItem>,
+    pub sel: usize,
+    /// onde a palavra começa (linha, coluna): o popup alinha com ela
+    pub anchor: (usize, usize),
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -114,6 +132,7 @@ pub struct ViewModel {
     pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
+    pub completion: Option<CompView>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -146,6 +165,7 @@ impl ViewModel {
             git: None,
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
+            completion: None,
             flash: None,
         }
     }

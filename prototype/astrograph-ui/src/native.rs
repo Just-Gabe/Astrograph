@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use astrograph_core::motion::{col_for_vcol, vcol_cursor, vcol_start};
+use astrograph_core::buffer::Pos;
 use astrograph_core::{parse_keys, Editor, Key, Mode, VKind};
 use astrograph_syntax::{detect, lang, Document, Lang};
 
@@ -17,7 +18,7 @@ use crate::arvore::Arvore;
 use crate::busca;
 use crate::git;
 use crate::lsp::{self, Cliente};
-use crate::nview::{GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
+use crate::nview::{CompItem, CompView, GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,6 +41,16 @@ struct Picker {
 
 const PICK_LINHAS: usize = 10;
 
+struct Comp {
+    start: Pos,
+    items: Vec<lsp::Item>,
+    /// os itens filtrados: (índice em `items`, posições que casaram)
+    shown: Vec<(usize, Vec<usize>)>,
+    sel: usize,
+}
+
+const COMP_LINHAS: usize = 8;
+
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
@@ -61,6 +72,10 @@ pub struct Session {
     term: Option<Term>,
     term_focus: bool,
     lsp: Option<Cliente>,
+    comp: Option<Comp>,
+    comp_req: Option<(i64, Pos)>,
+    /// versão do texto em que o completar foi aceito/dispensado: não reabre nela
+    comp_block: u64,
     lsp_rev: u64,
     lsp_diags: std::sync::Arc<Vec<lsp::Diag>>,
     hover_wait: Option<i64>,
@@ -114,6 +129,9 @@ impl Session {
             term: None,
             term_focus: false,
             lsp: None,
+            comp: None,
+            comp_req: None,
+            comp_block: u64::MAX,
             lsp_rev: u64::MAX,
             lsp_diags: std::sync::Arc::new(Vec::new()),
             hover_wait: None,
@@ -245,6 +263,9 @@ impl Session {
         let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
         let last = self.ed.buf.line_count() - 1;
         let page = (self.rows - 2.0).max(1.0) as usize;
+        if self.ed.mode() == Mode::Insert && self.comp.as_ref().is_some_and(|c| !c.shown.is_empty()) && matches!(n, Nav::Up | Nav::Down) {
+            return self.comp_move(if n == Nav::Down { 1 } else { -1 });
+        }
         if self.ed.mode() == Mode::Insert {
             let len = self.ed.buf.line_len(row);
             let (r, c) = match n {
@@ -405,10 +426,19 @@ impl Session {
             );
         }
         // hover e definição pedidos
-        let (hover, def) = {
+        let (hover, def, comp) = {
             let st = c.estado.lock().unwrap();
-            (st.hover.clone(), st.definicao.clone())
+            (st.hover.clone(), st.definicao.clone(), st.completar.clone())
         };
+        if let (Some((rid, start)), Some((cid, itens))) = (self.comp_req, comp) {
+            if rid == cid {
+                self.comp_req = None;
+                if self.ed.mode() == Mode::Insert {
+                    self.comp = Some(Comp { start, items: itens, shown: Vec::new(), sel: 0 });
+                    self.comp_filter();
+                }
+            }
+        }
         if let (Some(id), Some((hid, texto))) = (self.hover_wait, hover) {
             if id == hid {
                 self.hover_wait = None;
@@ -440,6 +470,99 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Depois de cada tecla no modo de inserção: abre, filtra ou fecha o completar.
+    fn comp_update(&mut self) {
+        if self.ed.mode() != Mode::Insert || self.lsp.is_none() || self.path.is_none() {
+            self.comp = None;
+            self.comp_req = None;
+            return;
+        }
+        if self.comp_block == self.ed.buf.rev {
+            return;
+        }
+        let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        let linha: Vec<char> = self.ed.buf.line(row).chars().collect();
+        let col = col.min(linha.len());
+        let palavra = |c: char| c.is_alphanumeric() || c == '_';
+        let mut ini = col;
+        while ini > 0 && palavra(linha[ini - 1]) {
+            ini -= 1;
+        }
+        let gatilho = match (col.checked_sub(1).map(|i| linha[i]), col.checked_sub(2).map(|i| linha[i])) {
+            (Some('.'), _) => true,
+            (Some(':'), Some(':')) => true,
+            (Some('>'), Some('-')) => true,
+            _ => false,
+        };
+        if col == ini && !gatilho {
+            self.comp = None;
+            self.comp_req = None;
+            return;
+        }
+        let start = Pos::new(row, ini);
+        let mesmo = self.comp.as_ref().is_some_and(|c| c.start == start) || self.comp_req.is_some_and(|(_, p)| p == start);
+        if mesmo {
+            self.comp_filter();
+        } else if let (Some(c), Some(path)) = (self.lsp.as_ref(), self.path.as_ref()) {
+            let id = c.completar(path, row, lsp::col_utf16(&self.ed.buf.line(row), col));
+            self.comp_req = Some((id, start));
+            self.comp = None;
+        }
+    }
+
+    /// Filtra as sugestões pelo que já foi digitado desde o começo da palavra.
+    fn comp_filter(&mut self) {
+        let Some(c) = self.comp.as_mut() else { return };
+        let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        if row != c.start.row || col < c.start.col {
+            self.comp = None;
+            return;
+        }
+        let prefixo: Vec<char> = self.ed.buf.line(row).chars().skip(c.start.col).take(col - c.start.col).collect();
+        let mut v: Vec<(i32, usize, Vec<usize>)> = c
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| {
+                if prefixo.is_empty() {
+                    return Some((0, i, Vec::new()));
+                }
+                // quem começa com o que foi digitado vem antes do casamento espalhado
+                let pre = it.filtro.to_lowercase().starts_with(&prefixo.iter().collect::<String>().to_lowercase());
+                crate::busca::pontuar(&prefixo, &it.filtro).map(|(n, pos)| (n + if pre { 1000 } else { 0 }, i, pos))
+            })
+            .collect();
+        if !prefixo.is_empty() {
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(c.items[a.1].label.len().cmp(&c.items[b.1].label.len())).then(a.1.cmp(&b.1)));
+        }
+        c.shown = v.into_iter().take(60).map(|(_, i, pos)| (i, pos)).collect();
+        c.sel = c.sel.min(c.shown.len().saturating_sub(1));
+    }
+
+    fn comp_move(&mut self, d: i64) {
+        if let Some(c) = self.comp.as_mut() {
+            let n = c.shown.len() as i64;
+            if n > 0 {
+                c.sel = (c.sel as i64 + d).rem_euclid(n) as usize;
+            }
+        }
+    }
+
+    fn comp_accept(&mut self) {
+        let Some(c) = self.comp.take() else { return };
+        let Some((i, _)) = c.shown.get(c.sel) else { return };
+        let item = &c.items[*i];
+        let mut de = c.start;
+        if let Some((r, c16)) = item.inicio {
+            if r == self.ed.cursor.row {
+                de = Pos::new(r, lsp::col_chars(&self.ed.buf.line(r), c16));
+            }
+        }
+        self.ed.insert_replace(de, &item.texto);
+        self.comp_req = None;
+        self.comp_block = self.ed.buf.rev;
     }
 
     fn lsp_hover(&mut self) {
@@ -757,6 +880,19 @@ impl Session {
     fn key_inner(&mut self, k: Key) {
         // qualquer tecla fecha o hover aberto
         self.hover_text = None;
+        if self.ed.mode() == Mode::Insert && self.comp.as_ref().is_some_and(|c| !c.shown.is_empty()) {
+            match k {
+                Key::Tab | Key::Ctrl('y') => return self.comp_accept(),
+                Key::Ctrl('n') => return self.comp_move(1),
+                Key::Ctrl('p') => return self.comp_move(-1),
+                Key::Esc | Key::Enter => {
+                    self.comp = None;
+                    self.comp_req = None;
+                    self.comp_block = self.ed.buf.rev;
+                }
+                _ => {}
+            }
+        }
         let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
@@ -766,6 +902,7 @@ impl Session {
             return self.lsp_definition();
         }
         self.ed.feed(&[k]);
+        self.comp_update();
         // `:s`, `:d`, `:g`... o núcleo resolve; `:w`, `:q`, `:e`... voltam para cá
         if let Some(linha) = self.ed.take_host_cmd() {
             self.exec_ex(&linha);
@@ -1023,6 +1160,14 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
+            completion: self.comp.as_ref().filter(|c| !c.shown.is_empty()).map(|c| {
+                let first = c.sel.saturating_sub(COMP_LINHAS - 1);
+                CompView {
+                    items: c.shown.iter().skip(first).take(COMP_LINHAS).map(|(i, h)| CompItem { label: c.items[*i].label.clone(), detail: c.items[*i].detalhe.clone(), kind: c.items[*i].tipo, hits: h.clone() }).collect(),
+                    sel: c.sel - first,
+                    anchor: (c.start.row, c.start.col),
+                }
+            }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
             term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus }),
             tree: self.tree.as_ref().map(|t| {
@@ -1385,6 +1530,47 @@ mod testes {
         // desfazer volta tudo de um comando só
         s.feed("u");
         assert_eq!(s.ed.lines(), vec!["X bar", "Qux"]);
+    }
+
+    #[test]
+    fn completar_do_servidor_filtra_navega_e_aceita() {
+        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let d = projeto("comp");
+        let script = d.join("falso.py");
+        std::fs::write(&script, crate::lsp::testes::FALSO).unwrap();
+        std::env::set_var("ASTROGRAPH_LSP_CMD", format!("{py} {}", script.display()));
+        let mut s = Session::open(&d.join("src/alfa.rs"));
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.lsp_attach(None, None);
+        // abre uma linha nova e digita o começo de uma palavra
+        s.feed("Gopri");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let m = loop {
+            let m = modelo(&mut s);
+            if m.completion.is_some() || std::time::Instant::now() > fim {
+                break m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        };
+        let c = m.completion.expect("popup");
+        let rotulos: Vec<&str> = c.items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(rotulos, vec!["print", "private", "println!"], "filtrado por 'pri' e ordenado: {rotulos:?}");
+        assert_eq!(c.sel, 0);
+        // digitar mais afina a lista sem novo pedido; Ctrl-n anda; Tab aceita
+        s.feed("n");
+        let c = modelo(&mut s).completion.unwrap();
+        assert_eq!(c.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), vec!["print", "println!"]);
+        s.feed("<C-n>");
+        assert_eq!(modelo(&mut s).completion.unwrap().sel, 1);
+        s.feed("<Tab>");
+        let m = modelo(&mut s);
+        assert!(m.completion.is_none());
+        let ultimo = m.lines - 1;
+        assert_eq!(m.line(ultimo), "println!(\"\")", "texto do snippet sem os marcadores");
+        // Esc fecha o popup sem sair do que foi digitado
+        s.feed("<Esc>");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
     }
 
     #[test]
