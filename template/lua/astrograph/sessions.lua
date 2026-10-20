@@ -9,11 +9,17 @@
 --   * um índice pequeno (astrograph-sessoes.json, na pasta do avante) guarda pasta
 --     do projeto, título, tag e nº de mensagens, para listar tudo sem abrir os
 --     JSONs, que podem passar de 30 MB (abrir um desses travava o editor);
---   * conversas grandes aparecem com aviso e pedem confirmação antes de abrir.
+--   * conversas grandes aparecem com aviso e pedem confirmação antes de abrir;
+--   * teto: passando de `CAP` mensagens, as mais antigas vão para `history-arquivo/`
+--     (nada é apagado) e a conversa segue só com as recentes; arquivos grandes de
+--     antes do teto são movidos para lá ao carregar o avante.
 
 local M = {}
 
 M.HEAVY = 5 * 1024 * 1024 -- bytes: acima disso o avante trava ao abrir/gravar
+M.CAP = 500 -- mensagens por conversa; acima disso as mais antigas são arquivadas
+M.KEEP = 200 -- quantas ficam na conversa depois de arquivar
+local ARCHIVE = "history-arquivo" -- irmã de history/: o avante e a lista não a leem
 local PEEK = 1024 * 1024 -- conversas sem índice e até este tamanho têm o título lido
 local INDEX = "astrograph-sessoes.json"
 
@@ -133,6 +139,117 @@ function M.current_model()
   return provider, model
 end
 
+---------------------------------------------------------------------------
+-- Teto e arquivamento (o avante lê e regrava a conversa inteira, síncrono)
+---------------------------------------------------------------------------
+
+---Pasta de arquivo do projeto (criada se faltar).
+---@param dirname string nome da pasta do projeto no armazenamento do avante
+---@return string
+local function archive_dir(dirname)
+  local dir = vim.fs.joinpath(M.storage(), "projects", dirname, ARCHIVE)
+  vim.fn.mkdir(dir, "p")
+  return dir
+end
+
+local function role_of(m) return type(m) == "table" and type(m.message) == "table" and m.message.role or nil end
+
+---Passou do teto: grava as mensagens mais antigas em history-arquivo/ e deixa só as
+---recentes na conversa (no próprio objeto que o avante vai gravar). Se o arquivo não
+---puder ser escrito, nada é cortado.
+---@param dirname string
+---@param history table
+---@return integer? archived quantas mensagens foram para o arquivo
+function M.cap(dirname, history)
+  local msgs = history.messages
+  if type(msgs) ~= "table" or #msgs <= M.CAP then return nil end
+  local cut = #msgs - M.KEEP
+  -- começa a parte que fica numa mensagem do usuário, para não separar uma
+  -- chamada de ferramenta da sua resposta (só ajusta se o papel for conhecido)
+  while cut < #msgs and role_of(msgs[cut + 1]) ~= nil and role_of(msgs[cut + 1]) ~= "user" do
+    cut = cut + 1
+  end
+  if cut <= 0 or cut >= #msgs then return nil end
+  local head = {}
+  for i = 1, cut do
+    head[i] = msgs[i]
+  end
+  local name = ("%s.%s.json"):format((history.filename or "conversa"):gsub("%.json$", ""), os.date "%Y%m%d-%H%M%S")
+  local f = io.open(vim.fs.joinpath(archive_dir(dirname), name), "w")
+  if not f then return nil end
+  local ok = f:write(vim.json.encode { title = history.title, astrograph = history.astrograph, messages = head })
+  f:close()
+  if not ok then return nil end
+  local rest = {}
+  for i = cut + 1, #msgs do
+    rest[#rest + 1] = msgs[i]
+  end
+  for i = #msgs, 1, -1 do
+    msgs[i] = nil
+  end
+  for i, m in ipairs(rest) do
+    msgs[i] = m
+  end
+  vim.schedule(function()
+    notify(
+      ("Conversa passou de %d mensagens: %d mais antigas foram para %s (nada foi apagado)."):format(M.CAP, cut, ARCHIVE .. "/" .. name),
+      vim.log.levels.WARN
+    )
+  end)
+  return cut
+end
+
+---Move para history-arquivo/ as conversas do projeto que já passam de HEAVY (o
+---avante travava ao abrir uma delas). Nada é apagado; o avante recomeça sem elas.
+---@param root string pasta do projeto
+---@return string[] moved nomes dos arquivos movidos
+function M.rotate_big(root)
+  local dirname = M.project_dirname(root)
+  local hdir = vim.fs.joinpath(M.storage(), "projects", dirname, "history")
+  local moved = {}
+  for name, kind in vim.fs.dir(hdir) do
+    if kind == "file" and name:match "%.json$" and name ~= "metadata.json" then
+      local path = vim.fs.joinpath(hdir, name)
+      local st = uv.fs_stat(path)
+      if st and st.size > M.HEAVY then
+        local dest = vim.fs.joinpath(archive_dir(dirname), ("%s.%s.json"):format(name:gsub("%.json$", ""), os.date "%Y%m%d-%H%M%S"))
+        if uv.fs_rename(path, dest) then
+          moved[#moved + 1] = name
+          M.index()[dirname .. "/" .. name] = nil
+          removed[dirname .. "/" .. name] = true
+          dirty = true
+        end
+      end
+    end
+  end
+  if #moved > 0 then
+    schedule_flush()
+    vim.schedule(function()
+      notify(
+        ("%d conversa(s) grande(s) do projeto foram para %s (nada foi apagado): %s"):format(#moved, ARCHIVE, table.concat(moved, ", ")),
+        vim.log.levels.WARN
+      )
+    end)
+  end
+  return moved
+end
+
+---O avante trata a pasta aberta como "projeto"; na home isso junta tudo numa
+---conversa só. Avisa uma vez por sessão.
+local home_warned = false
+function M.warn_home()
+  if home_warned then return end
+  local cwd = vim.fs.normalize(uv.cwd() or ""):lower()
+  local home = vim.fs.normalize(vim.fn.expand "~"):lower()
+  if cwd ~= "" and cwd == home then
+    home_warned = true
+    notify(
+      "O Neovim está aberto na home (~): o avante guarda uma conversa única para ela, que cresce sem parar. Abra a pasta do projeto para separar.",
+      vim.log.levels.WARN
+    )
+  end
+end
+
 local function first_line(s, max)
   s = tostring(s or ""):match "^%s*([^\n]*)" or ""
   if #s > max then s = vim.fn.strcharpart(s, 0, max - 1) .. "…" end
@@ -164,6 +281,7 @@ function M.tag(bufnr, history)
   local root = require("avante.utils").root.get { buf = bufnr }
   if not root or root == "" then return end
   local key = M.project_dirname(root) .. "/" .. history.filename
+  M.cap(M.project_dirname(root), history)
   M.index()[key] = {
     key = key,
     root = root,
@@ -190,6 +308,9 @@ function M.setup()
     return
   end
   if Path.history._astrograph_sessions then return end
+  pcall(M.warn_home)
+  local rok, root = pcall(function() return require("avante.utils").root.get { buf = 0 } end)
+  if rok and type(root) == "string" and root ~= "" then pcall(M.rotate_big, root) end
   local save = Path.history.save
   Path.history.save = function(bufnr, history)
     local tok, err = pcall(M.tag, bufnr, history)

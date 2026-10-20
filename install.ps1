@@ -1,4 +1,4 @@
-# Astrograph — instalador para Windows (uma linha)
+# Astrograph - instalador para Windows (uma linha)
 #
 #   irm https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.ps1 | iex
 #
@@ -85,7 +85,7 @@ $fontKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
 New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
 New-Item -Path $fontKey -Force | Out-Null
 
-# Já instalada (para o usuário ou para todos, em qualquer variante: Mono, NL…)?
+# Já instalada (para o usuário ou para todos, em qualquer variante: Mono, NL...)?
 function Has-NerdFont {
   foreach ($dir in @($fontDir, (Join-Path $env:WINDIR 'Fonts'))) {
     if (Get-ChildItem $dir -Filter 'JetBrainsMono*NerdFont*-Regular.ttf' -ErrorAction SilentlyContinue | Select-Object -First 1) {
@@ -143,7 +143,7 @@ if (Test-Path $wtSettings) {
     Warn "Não consegui ajustar o Windows Terminal ($($_.Exception.Message)). Ajuste a fonte manualmente."
   }
 } else {
-  Warn 'Windows Terminal não encontrado — configure a Nerd Font no seu terminal manualmente.'
+  Warn 'Windows Terminal não encontrado - configure a Nerd Font no seu terminal manualmente.'
 }
 
 # --- 4. Clonar/atualizar o Astrograph --------------------------------------
@@ -338,14 +338,14 @@ $agentModels = @('qwen2.5-coder:7b', 'qwen3:8b', 'llama3.1:8b')
 
 function Test-Bin($b) { [bool](Get-Command $b -ErrorAction SilentlyContinue) }
 
-# Checklist TUI: ↑/↓ navega · espaço marca · enter confirma · a=todos · q/esc cancela
+# Checklist TUI: (cima)/(baixo) navega · espaço marca · enter confirma · a=todos · q/esc cancela
 function Read-AgentMenu {
   param([object[]]$Items)
   $n = $Items.Count
   $checked = New-Object 'bool[]' $n
   $cursor = 0
   Write-Host ''
-  Write-Host '  Agentes a instalar  (↑/↓ navega · espaço marca · enter confirma · a=todos)' -ForegroundColor Cyan
+  Write-Host '  Agentes a instalar  ((cima)/(baixo) navega · espaço marca · enter confirma · a=todos)' -ForegroundColor Cyan
   Write-Host ('  ' + ('-' * 60))
   foreach ($it in $Items) { Write-Host '' }
   $top = [Console]::CursorTop - $n
@@ -399,7 +399,7 @@ if ($env:ASTROGRAPH_AGENTS) {
       Warn "Menu indisponível ($($_.Exception.Message)); pulando agentes."
     }
   } else {
-    Info 'Sem terminal interativo — pulando agentes (use ASTROGRAPH_AGENTS para automatizar).'
+    Info 'Sem terminal interativo - pulando agentes (use ASTROGRAPH_AGENTS para automatizar).'
   }
 }
 
