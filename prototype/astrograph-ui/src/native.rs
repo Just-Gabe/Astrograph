@@ -30,6 +30,7 @@ pub struct Session {
     toast: Option<(u64, String, ToastKind)>,
     toast_id: u64,
     seq: u64,
+    dash: bool,
     bump: Option<(u64, f32)>,
     hl_pat: String,
     hl_id: u64,
@@ -58,6 +59,7 @@ impl Session {
             lang,
             doc: None,
             cmdline: None,
+            dash: false,
             bump: None,
             hl_pat: String::new(),
             hl_id: 0,
@@ -67,6 +69,13 @@ impl Session {
             seq: 0,
             quit: false,
         }
+    }
+
+    /// Sem arquivo: abre na tela inicial (some ao editar, ao `n` ou ao abrir um arquivo).
+    pub fn welcome() -> Self {
+        let mut s = Session::new("", None);
+        s.dash = true;
+        s
     }
 
     pub fn open(path: &Path) -> Self {
@@ -104,6 +113,27 @@ impl Session {
     }
 
     fn key(&mut self, k: Key) {
+        if self.dash && self.cmdline.is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal {
+            match k {
+                Key::Char('n') => {
+                    self.dash = false;
+                    self.ed.feed(&[Key::Char('i')]);
+                    return;
+                }
+                Key::Char('f' | 'o' | 'w' | 'a' | 's') => {
+                    self.say("Ainda não disponível no motor nativo. Use :e arquivo.".into(), ToastKind::Info);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.key_inner(k);
+        if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
+            self.dash = false;
+        }
+    }
+
+    fn key_inner(&mut self, k: Key) {
         if let Some(cmd) = self.cmdline.as_mut() {
             match k {
                 Key::Esc | Key::Ctrl('c') => self.cmdline = None,
@@ -137,6 +167,9 @@ impl Session {
 
     /// Clique: `row` é a linha do buffer e `vcol` a coluna visual (a cena já fez a conta).
     pub fn click(&mut self, row: usize, vcol: usize) {
+        if self.dash {
+            return;
+        }
         let r = row.min(self.ed.buf.line_count() - 1);
         let line = self.ed.buf.line(r);
         let len = line.chars().count();
@@ -362,6 +395,7 @@ impl Session {
             toast: self.toast.clone(),
             showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
             bump: self.bump,
+            dash: self.dash,
             hits,
             hits_id,
             flash: (self.ed.last_yank.0 > 0).then(|| {
@@ -382,7 +416,7 @@ pub async fn native_task(
     use crate::UiCommand;
     let mut s = match &file {
         Some(p) => Session::open(p),
-        None => Session::new("", None),
+        None => Session::welcome(),
     };
     while let Some(cmd) = rx.recv().await {
         match cmd {

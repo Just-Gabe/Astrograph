@@ -1292,6 +1292,7 @@ fn make_icon() -> Icon {
 }
 
 fn main() {
+    nview::T0.get_or_init(Instant::now);
     let cfg = {
         let (cfg, path) = Config::load();
         match &path {

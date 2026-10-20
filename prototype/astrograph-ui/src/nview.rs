@@ -53,6 +53,8 @@ pub struct ViewModel {
     pub hits: Vec<(usize, usize, usize)>,
     /// muda quando o padrão muda (0 = sem realce); a cena reinicia o fade
     pub hits_id: u64,
+    /// tela inicial (nenhum arquivo, buffer vazio) em vez do texto
+    pub dash: bool,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -78,6 +80,7 @@ impl ViewModel {
             bump: None,
             hits: Vec::new(),
             hits_id: 0,
+            dash: false,
             flash: None,
         }
     }
@@ -97,6 +100,9 @@ impl ViewModel {
 }
 
 /// Ponte entre a thread da sessão e a da UI.
+/// Instante em que o processo começou (para o "pronto em N ms" da tela inicial)
+pub static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 pub type Shared = Arc<Mutex<Arc<ViewModel>>>;
 
 pub fn shared() -> Shared {

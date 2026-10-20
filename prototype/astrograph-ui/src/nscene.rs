@@ -84,6 +84,8 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    dash_at: Option<Instant>,
+    ready_ms: u32,
     hit_id: u64,
     hit_fade: Chase,
     flash_id: u64,
@@ -145,6 +147,8 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            dash_at: None,
+            ready_ms: 0,
             hit_id: 0,
             hit_fade: Chase::new(0.0, 14.0),
             flash_id: 0,
@@ -238,7 +242,16 @@ impl Scene {
         self.last_top = self.top.x;
 
         c.clear(d::BG);
-        self.paint_content(c, vm, &lay, now);
+        if vm.dash {
+            if self.dash_at.is_none() {
+                self.dash_at = Some(now);
+                self.ready_ms = crate::nview::T0.get().map_or(0, |t| t.elapsed().as_millis() as u32);
+            }
+            self.paint_dash(c, now, (w, h, s));
+        } else {
+            self.dash_at = None;
+            self.paint_content(c, vm, &lay, now);
+        }
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -423,7 +436,8 @@ impl Scene {
             wake = Some(wake.map_or(d, |w| w.min(d)));
         }
         let flash = self.flash_at.is_some();
-        Frame { animating: springs || chases || mode_anim || flash, wake }
+        let intro = vm.dash && self.dash_at.is_some_and(|t| now.saturating_duration_since(t).as_millis() < 700);
+        Frame { animating: springs || chases || mode_anim || flash || intro, wake }
     }
 
     // ------------------------------------------------------------------
@@ -555,21 +569,6 @@ impl Scene {
             }
         }
 
-        // arquivo vazio e sem nome: tela de boas-vindas
-        if vm.name == "Sem nome" && vm.lines == 1 && vm.line(0).is_empty() && vm.cmd.is_none() {
-            let cx = w / 2.0;
-            let cy = h * 0.40;
-            let tpx = 38.0 * s;
-            let tw = self.ui_semi.measure("Astrograph", tpx);
-            c.text(&mut self.ui_semi, tpx, cx - tw / 2.0, cy, "Astrograph", d::TEXT_STRONG, 0.92);
-            let lines = ["i  começar a escrever", ":e arquivo  abrir um arquivo", ":q  sair"];
-            for (n, l) in lines.iter().enumerate() {
-                let px = 14.0 * s;
-                let lw = self.ui.measure(l, px);
-                c.text(&mut self.ui, px, cx - lw / 2.0, cy + 40.0 * s + n as f32 * 26.0 * s, l, d::DIM, 0.9);
-            }
-        }
-
         // cursor: de volta à área do editor
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
         self.paint_cursor(c, vm, lay, top_px, now);
@@ -673,6 +672,10 @@ impl Scene {
 
     fn paint_chrome(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, now: Instant, (w, h, s): (f32, f32, f32)) {
         // título: o texto rola por baixo de um véu que se dissolve
+        if vm.dash {
+            self.paint_overlays(c, vm, lay, (w, h, s));
+            return;
+        }
         c.vgrad(0, 0, w as i32, (lay.text_y + 14.0 * s) as i32, d::BG, 1.0, 0.0);
         c.rect(0, 0, w as i32, (lay.text_y * 0.62) as i32, d::BG, 0.9);
         let tpx = 13.0 * s;
@@ -685,13 +688,117 @@ impl Scene {
             c.rrect(tx + tw + 8.0 * s, tb - 6.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
         }
 
+        self.paint_overlays(c, vm, lay, (w, h, s));
+        self.paint_pill(c, vm, now, (w, h, s));
+    }
+
+    fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
         // escurece o fundo atrás da paleta
         if self.cmd.v > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * self.cmd.v);
         }
-        self.paint_pill(c, vm, now, (w, h, s));
         self.paint_palette(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
+    }
+
+    /// Tela inicial: estrela, nome em traço fino, linha discreta, menu e rodapé.
+    /// Mesma composição do dashboard do Neovim; entra com fade escalonado (~0,6 s).
+    fn paint_dash(&mut self, c: &mut Canvas, now: Instant, (w, h, s): (f32, f32, f32)) {
+        let p = self.dash_at.map_or(1.0, |t| (now.saturating_duration_since(t).as_secs_f32() / 0.6).min(1.0));
+        let at = |start: f32, len: f32| ease_out_cubic(((p - start) / len).clamp(0.0, 1.0));
+        let fg = d::TEXT;
+        let secondary = mix_color(fg, d::BG, 0.45);
+        let tertiary = mix_color(fg, d::BG, 0.62);
+        let strong = mix_color(fg, d::WHITE, 0.5);
+        let px = self.font_px;
+        let (asc, desc) = self.mono.metrics(px);
+        let pitch = (asc + desc).round();
+        let cw = self.char_w;
+        let cx = (w / 2.0).round();
+        let mut y = (h * 0.13).round();
+
+        // estrela
+        let star = "✦";
+        let sw = self.mono.measure(star, px);
+        y += pitch;
+        let star_col = mix_color(d::BG, d::ACCENT, at(0.0, 0.45));
+        if self.mono.has('✦') {
+            c.text(&mut self.mono, px, cx - sw / 2.0, y, star, star_col, 1.0);
+        } else if self.ui.has('✦') {
+            let w2 = self.ui.measure(star, px);
+            c.text(&mut self.ui, px, cx - w2 / 2.0, y, star, star_col, 1.0);
+        } else {
+            // sem o glifo na fonte: estrela de quatro pontas desenhada
+            let r = px * 0.5;
+            let my = y - px * 0.35;
+            c.rrect(cx - r, my - 0.9 * s, 2.0 * r, 1.8 * s, 0.9 * s, d::ACCENT, 0.9);
+            c.rrect(cx - 0.9 * s, my - r, 1.8 * s, 2.0 * r, 0.9 * s, d::ACCENT, 0.9);
+            c.rrect(cx - r * 0.4, my - r * 0.4, r * 0.8, r * 0.8, r * 0.4, d::ACCENT, 0.9);
+        }
+        y += pitch * 1.4;
+
+        // nome em traço fino, com leve degradê vertical
+        const BANNER: [&str; 3] = [
+            "┏━┓┏━┓╺┳╸┏━┓┏━┓┏━╸┏━┓┏━┓┏━┓╻ ╻",
+            "┣━┫┗━┓ ┃ ┣┳┛┃ ┃┃╺┓┣┳┛┣━┫┣━┛┣━┫",
+            "╹ ╹┗━┛ ╹ ╹┗╸┗━┛┗━┛╹┗╸╹ ╹╹  ╹ ╹",
+        ];
+        for (i, line) in BANNER.iter().enumerate() {
+            let col = mix_color(strong, secondary, 0.18 * i as f32);
+            let lw = line.chars().count() as f32 * cw;
+            let a = at(0.15 + i as f32 * 0.08, 0.5);
+            let mut x = cx - lw / 2.0;
+            for ch in line.chars() {
+                if ch != ' ' {
+                    c.glyph_at(&mut self.mono, px, x.round(), y, ch, mix_color(d::BG, col, a), 1.0);
+                }
+                x += cw;
+            }
+            y += pitch;
+        }
+        y += pitch * 1.4;
+
+        // linha discreta
+        let tag = "Editor com agentes de IA";
+        let tw = self.mono.measure(tag, px);
+        c.text(&mut self.mono, px, cx - tw / 2.0, y, tag, mix_color(d::BG, secondary, at(0.4, 0.45)), 1.0);
+        y += pitch * 3.0;
+
+        // menu: ícone, descrição e atalho à direita (coluna de 50 células)
+        let menu: [(&str, &str, &str); 6] = [
+            ("\u{f0415}", "Novo arquivo", "n"),
+            ("\u{f002}", "Buscar arquivo", "f"),
+            ("\u{f0214}", "Recentes", "o"),
+            ("\u{f0b9a}", "Buscar palavra", "w"),
+            ("\u{f06a9}", "Agentes de IA", "a"),
+            ("\u{f01b2}", "Última sessão", "s"),
+        ];
+        let left = cx - 25.0 * cw;
+        let right = cx + 25.0 * cw;
+        // em janelas baixas o menu se aperta para não encostar no rodapé
+        let step = (px * 3.2).min((h * 0.88 - pitch * 2.0 - y) / 5.0).round().max(pitch);
+        let m = at(0.45, 0.55);
+        for (i, (icon, desc, key)) in menu.iter().enumerate() {
+            let base = y + i as f32 * step;
+            if i == 0 {
+                // cursor sobre a primeira ação, como no dashboard
+                c.rrect(left + 3.0 * cw, base - asc, cw, asc + desc_h(&self.mono, px), 2.0 * s, mix_color(d::BG, d::TEXT, m), 0.85);
+            }
+            let ic = icon.chars().next().unwrap_or(' ');
+            if self.mono.has(ic) {
+                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::BG, secondary, m), 1.0);
+            }
+            for (j, ch) in desc.chars().enumerate() {
+                let col = if i == 0 && j == 0 { d::BG } else { mix_color(d::BG, fg, m) };
+                c.glyph_at(&mut self.mono, px, left + (3.0 + j as f32) * cw, base, ch, col, 1.0);
+            }
+            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::BG, tertiary, m), 1.0);
+        }
+
+        // rodapé
+        let foot = format!("pronto em {} ms", self.ready_ms);
+        let fw = self.mono.measure(&foot, px);
+        c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
     }
 
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
@@ -860,6 +967,10 @@ fn match_bracket(vm: &ViewModel) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+fn desc_h(font: &Font, px: f32) -> f32 {
+    font.metrics(px).1
 }
 
 #[cfg(test)]
@@ -1109,6 +1220,29 @@ mod testes {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tela_inicial_aparece_some_ao_editar_e_avisa_o_que_falta() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::welcome();
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        assert!(vm.dash);
+        let a = quadro(&mut sc, &vm, 800, 600, t0);
+        let mut b = a.clone();
+        for i in 1..60 {
+            b = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
+        s.feed("f");
+        let vm = s.view_model();
+        assert!(vm.dash && vm.toast.is_some(), "f ainda não existe: avisa e segue na tela inicial");
+        s.feed("n");
+        let vm = s.view_model();
+        assert!(!vm.dash && vm.mode == ModeKind::Insert, "n começa a escrever");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`
