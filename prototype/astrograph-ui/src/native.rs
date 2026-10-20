@@ -13,8 +13,9 @@ use astrograph_core::{parse_keys, Editor, Key, Mode, VKind};
 use astrograph_syntax::{detect, lang, Document, Lang};
 
 use crate::design::{classify, ModeKind};
+use crate::arvore::Arvore;
 use crate::busca;
-use crate::nview::{PickItem, PickerView, Shared, Span, ToastKind, ViewModel};
+use crate::nview::{PickItem, PickerView, Shared, Span, ToastKind, TreeItem, TreeView, ViewModel};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickKind {
@@ -53,6 +54,8 @@ pub struct Session {
     seq: u64,
     dash: bool,
     picker: Option<Picker>,
+    tree: Option<Arvore>,
+    tree_focus: bool,
     leader: Vec<Key>,
     root: PathBuf,
     bump: Option<(u64, f32)>,
@@ -85,6 +88,8 @@ impl Session {
             cmdline: None,
             dash: false,
             picker: None,
+            tree: None,
+            tree_focus: false,
             leader: Vec::new(),
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             bump: None,
@@ -175,6 +180,16 @@ impl Session {
             }
             return;
         }
+        if self.tree_focus && self.tree.is_some() {
+            match n {
+                Nav::Up => self.tree_key(Key::Char('k')),
+                Nav::Down => self.tree_key(Key::Char('j')),
+                Nav::Left => self.tree_key(Key::Char('h')),
+                Nav::Right => self.tree_key(Key::Char('l')),
+                _ => {}
+            }
+            return;
+        }
         if self.cmdline.is_some() || self.ed.has_pending() {
             return;
         }
@@ -229,6 +244,7 @@ impl Session {
             let seq: Vec<Key> = self.leader[1..].to_vec();
             match seq.as_slice() {
                 [Key::Char('f')] => return,
+                [Key::Char('e')] => self.toggle_tree(),
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
@@ -236,7 +252,7 @@ impl Session {
                     // não é atalho: devolve as teclas ao editor
                     let all = std::mem::take(&mut self.leader);
                     for k in all {
-                        self.key_inner(k);
+                        self.dispatch(k);
                     }
                     return;
                 }
@@ -244,6 +260,16 @@ impl Session {
             self.leader.clear();
             return;
         }
+        self.dispatch(k);
+    }
+
+    /// Tecla já sem líder: vai para o explorador (se ele tem o foco), a tela inicial ou o editor.
+    fn dispatch(&mut self, k: Key) {
+        if self.tree_focus && self.tree.is_some() {
+            self.tree_key(k);
+            return;
+        }
+        let livre = self.cmdline.is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
         if self.dash && livre {
             match k {
                 Key::Char('n') => {
@@ -264,6 +290,54 @@ impl Session {
         self.key_inner(k);
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // explorador de arquivos
+    // ------------------------------------------------------------------
+
+    fn toggle_tree(&mut self) {
+        match (&self.tree, self.tree_focus) {
+            (None, _) => {
+                let mut t = Arvore::nova(&self.root);
+                if let Some(p) = &self.path {
+                    let abs = if p.is_absolute() { p.clone() } else { self.root.join(p) };
+                    t.revelar(&abs);
+                }
+                self.tree = Some(t);
+                self.tree_focus = true;
+            }
+            (Some(_), true) => {
+                self.tree = None;
+                self.tree_focus = false;
+            }
+            (Some(_), false) => self.tree_focus = true,
+        }
+    }
+
+    fn tree_key(&mut self, k: Key) {
+        let Some(t) = self.tree.as_mut() else { return };
+        match k {
+            Key::Char('j') | Key::Ctrl('n') => t.mover(1),
+            Key::Char('k') | Key::Ctrl('p') => t.mover(-1),
+            Key::Char('G') => t.mover(i64::MAX / 2),
+            Key::Char('g') => t.mover(i64::MIN / 2),
+            Key::Char('l') => t.avancar(),
+            Key::Char('h') => t.recuar(),
+            Key::Char('R') => t.recarregar(),
+            Key::Esc | Key::Char('q') | Key::Tab => self.tree_focus = false,
+            Key::Enter | Key::Char('o') => {
+                let Some(n) = t.atual().cloned() else { return };
+                if n.pasta {
+                    t.alternar();
+                } else {
+                    self.open_file(&n.caminho, None);
+                    // abrir um arquivo devolve o foco ao texto
+                    self.tree_focus = false;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -366,10 +440,17 @@ impl Session {
             return;
         }
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
+        let (tree, foco) = (self.tree.take(), self.tree_focus);
         *self = Session::open(path);
         self.root = root;
+        self.tree = tree;
+        self.tree_focus = foco;
         self.resize(cols, rows);
         busca::lembrar(path);
+        if let Some(t) = self.tree.as_mut() {
+            let abs = if path.is_absolute() { path.to_path_buf() } else { self.root.join(path) };
+            t.revelar(&abs);
+        }
         if let Some((r, c)) = goto {
             self.ed.set_cursor(r, c);
         }
@@ -483,9 +564,8 @@ impl Session {
                 if self.modified() && !bang {
                     self.say("Alterações não salvas. Use :e! para descartar.".into(), ToastKind::Error);
                 } else {
-                    let (cols, rows) = (self.cols, self.rows);
-                    *self = Session::open(Path::new(arg));
-                    self.resize(cols, rows);
+                    self.saved_rev = self.ed.buf.rev;
+                    self.open_file(Path::new(arg), None);
                 }
             }
             "noh" | "nohlsearch" | "set" | "syntax" | "filetype" => {}
@@ -638,6 +718,17 @@ impl Session {
             showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
             bump: self.bump,
             dash: self.dash,
+            tree: self.tree.as_ref().map(|t| {
+                let first = t.sel.saturating_sub(100);
+                TreeView {
+                    root: t.raiz.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t.raiz.display().to_string()),
+                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta }).collect(),
+                    first,
+                    sel: t.sel,
+                    total: t.nos.len(),
+                    focus: self.tree_focus,
+                }
+            }),
             picker: self.picker.as_ref().map(|p| PickerView {
                 title: match p.kind {
                     PickKind::Arquivos => "Buscar arquivo",
@@ -785,6 +876,33 @@ mod testes {
         let m = modelo(&mut s);
         assert_eq!(m.name, "alfa.rs");
         assert_eq!(m.cursor, (1, 3));
+    }
+
+    #[test]
+    fn espaco_e_abre_o_explorador_navega_e_abre_arquivo() {
+        let d = projeto("tree");
+        let mut s = Session::new("x\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        s.feed(" e");
+        let t = modelo(&mut s).tree.expect("explorador aberto");
+        assert_eq!(t.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), vec!["src", "LEIA.md"]);
+        assert!(t.focus);
+        // l abre a pasta, j desce até beta.rs
+        s.feed("ljj");
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items[t.sel].name, "beta.rs");
+        s.feed("<CR>");
+        let m = modelo(&mut s);
+        assert_eq!(m.name, "beta.rs");
+        let t = m.tree.expect("o explorador continua aberto");
+        assert!(!t.focus, "o foco volta ao texto");
+        assert_eq!(t.items[t.sel].name, "beta.rs", "e acompanha o arquivo aberto");
+        // com o foco no texto, j é movimento do editor; <Espaço>e devolve o foco, de novo fecha
+        s.feed(" e");
+        assert!(modelo(&mut s).tree.unwrap().focus);
+        s.feed(" e");
+        assert!(modelo(&mut s).tree.is_none());
     }
 
     #[test]

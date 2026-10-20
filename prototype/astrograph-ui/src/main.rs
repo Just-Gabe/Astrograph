@@ -13,6 +13,7 @@ mod grid;
 mod realce;
 mod render;
 mod anim;
+mod arvore;
 mod busca;
 mod design;
 mod native;
@@ -1076,6 +1077,10 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {
+                    // clique no explorador: ainda sem ação (o teclado navega)
+                    return;
+                }
                 let pressed = state == ElementState::Pressed;
                 if button == MouseButton::Left {
                     self.left_down = pressed;

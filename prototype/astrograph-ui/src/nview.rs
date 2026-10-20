@@ -41,6 +41,25 @@ pub struct PickerView {
     pub total: usize,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeItem {
+    pub name: String,
+    pub level: usize,
+    pub dir: bool,
+    pub open: bool,
+}
+
+/// Explorador: janela de itens (`first` é o índice absoluto do primeiro) e seleção absoluta.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeView {
+    pub root: String,
+    pub items: Vec<TreeItem>,
+    pub first: usize,
+    pub sel: usize,
+    pub total: usize,
+    pub focus: bool,
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -74,6 +93,7 @@ pub struct ViewModel {
     /// tela inicial (nenhum arquivo, buffer vazio) em vez do texto
     pub dash: bool,
     pub picker: Option<PickerView>,
+    pub tree: Option<TreeView>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -101,6 +121,7 @@ impl ViewModel {
             hits_id: 0,
             dash: false,
             picker: None,
+            tree: None,
             flash: None,
         }
     }

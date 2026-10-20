@@ -39,7 +39,8 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
-| Janelas/abas, explorador, git, LSP, completar, agentes | roadmap (S3, S4...) |
+| Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
+| Janelas/abas, git, LSP, completar, agentes | roadmap (S3, S4...) |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
 
 ## Experimentar

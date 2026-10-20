@@ -12,7 +12,7 @@ use astrograph_core::VKind;
 
 use crate::anim::{ease_out_cubic, ease_out_expo, lerp, mix_color, Chase, Spring};
 use crate::design::{self as d, Cls, ModeKind};
-use crate::nview::{PickerView, ToastKind, ViewModel};
+use crate::nview::{PickerView, ToastKind, TreeView, ViewModel};
 use crate::paint::{Canvas, Font, INTER_REGULAR, INTER_SEMIBOLD};
 
 const MONO_NAMES: &[&str] = &[
@@ -84,6 +84,10 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    side: Spring,
+    tree_cache: Option<TreeView>,
+    tree_top: Spring,
+    tree_sel: Spring,
     pick: Chase,
     pick_sel: Spring,
     pick_cache: Option<PickerView>,
@@ -150,6 +154,10 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            side: Spring::new(0.0, 24.0, 1.0),
+            tree_cache: None,
+            tree_top: Spring::new(0.0, 26.0, 1.0),
+            tree_sel: Spring::new(0.0, 34.0, 1.0),
             pick: Chase::new(0.0, 18.0),
             pick_sel: Spring::new(0.0, 36.0, 1.0),
             pick_cache: None,
@@ -197,13 +205,21 @@ impl Scene {
         let s = self.scale;
         let digits = lines.max(100).to_string().len().max(3) as f32;
         let gch = self.char_w * 0.84;
-        let gutter_x = d::M.pad_x * s;
+        // a posição acompanha a largura que desliza; o número de colunas já conta a final
+        let (sx, sx_final) = (self.side.x.max(0.0), self.side.target.max(0.0));
+        let gutter_x = d::M.pad_x * s + sx;
         let gutter_w = digits * gch;
         let text_x = (gutter_x + gutter_w + 18.0 * s).round();
+        let text_x_final = (d::M.pad_x * s + sx_final + gutter_w + 18.0 * s).round();
         let text_y = (d::M.title_h * s).round();
         let area_h = h as f32 - text_y - d::M.bottom * s;
-        let cols = (((w as f32 - text_x - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
+        let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
+    }
+
+    /// O ponto (em pixels) está sobre o explorador?
+    pub fn in_side(&self, x: f32) -> bool {
+        self.side.x > 1.0 && x < self.side.x
     }
 
     /// Posição do clique no texto: (linha do buffer, coluna visual).
@@ -228,7 +244,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -258,6 +274,7 @@ impl Scene {
             self.dash_at = None;
             self.paint_content(c, vm, &lay, now);
         }
+        self.paint_side(c, (w, h, s));
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -337,6 +354,19 @@ impl Scene {
             self.mode = vm.mode;
             self.mode_label = vm.mode.label().to_string();
         }
+        // explorador: a largura desliza; a janela de itens alimenta a seleção
+        match &vm.tree {
+            Some(tv) => {
+                if self.tree_cache.is_none() {
+                    self.tree_sel.snap(tv.sel as f32);
+                    self.tree_top.snap(0.0);
+                }
+                self.side.target = 264.0 * s;
+                self.tree_sel.target = tv.sel as f32;
+                self.tree_cache = Some(tv.clone());
+            }
+            None => self.side.target = 0.0,
+        }
         // buscador
         match &vm.picker {
             Some(pv) => {
@@ -393,6 +423,7 @@ impl Scene {
 
     fn snap_all(&mut self, vm: &ViewModel, lay: &Layout) {
         let _ = (vm, lay);
+        self.side.snap(self.side.target);
         self.top.snap(self.top.target);
         self.cur_x.snap(self.cur_x.target);
         self.cur_y.snap(self.cur_y.target);
@@ -437,7 +468,7 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = [&self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -469,7 +500,7 @@ impl Scene {
         let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
         // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
         // sem invadir o título nem a base, mesmo quando a mola passa do alvo
-        let edit = (0, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
@@ -517,7 +548,7 @@ impl Scene {
         }
 
         // o texto rola por baixo do véu do título
-        c.set_clip(0, 0, c.w, clip_bottom);
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, clip_bottom);
         // linhas visíveis
         let pad = (self.shift.x.abs() / lay.line_h).ceil() as i64;
         let first = ((top_px / lay.line_h).floor() as i64 - 1 - pad).max(0) as usize;
@@ -590,7 +621,7 @@ impl Scene {
         // cursor: de volta à área do editor
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
         self.paint_cursor(c, vm, lay, top_px, now);
-        c.set_clip(0, 0, c.w, clip_bottom);
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, clip_bottom);
 
         // barra de rolagem
         if self.bar.v > 0.01 && vm.lines as f32 * lay.line_h > h {
@@ -678,7 +709,7 @@ impl Scene {
                     c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::BG, alpha);
                     c.reset_clip();
                     // continua valendo o corte do editor
-                    c.set_clip(0, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
+                    c.set_clip(self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
                 }
             }
         }
@@ -689,8 +720,11 @@ impl Scene {
     // ------------------------------------------------------------------
 
     fn paint_chrome(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, now: Instant, (w, h, s): (f32, f32, f32)) {
-        // título: o texto rola por baixo de um véu que se dissolve
+        // título: o texto rola por baixo de um véu que se dissolve (à direita do explorador)
+        let prev_clip = c.clip;
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, c.h);
         if vm.dash {
+            c.clip = prev_clip;
             self.paint_overlays(c, vm, lay, (w, h, s));
             return;
         }
@@ -699,13 +733,14 @@ impl Scene {
         let tpx = 13.0 * s;
         let tw = self.ui_semi.measure(&vm.name, tpx);
         let dot = if vm.modified { 12.0 * s } else { 0.0 };
-        let tx = (w - tw - dot) / 2.0;
+        let tx = (w + self.side.x.max(0.0) - tw - dot) / 2.0;
         let tb = lay.text_y * 0.5 + tpx * 0.36;
         c.text(&mut self.ui_semi, tpx, tx, tb, &vm.name, d::TEXT, 0.92);
         if vm.modified {
             c.rrect(tx + tw + 8.0 * s, tb - 6.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
         }
 
+        c.clip = prev_clip;
         self.paint_overlays(c, vm, lay, (w, h, s));
         self.paint_pill(c, vm, now, (w, h, s));
     }
@@ -888,6 +923,79 @@ impl Scene {
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+    }
+
+    /// Explorador: painel que desliza da esquerda, itens com recuo, seleção que desliza.
+    fn paint_side(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let sw = self.side.x;
+        if sw < 2.0 {
+            if self.side.target < 1.0 {
+                self.tree_cache = None;
+            }
+            return;
+        }
+        let Some(tv) = self.tree_cache.clone() else { return };
+        let _ = w;
+        let top = (d::M.title_h * s).round();
+        let row_h = 27.0 * s;
+        let area = h - top - d::M.bottom * s;
+        let vis = (area / row_h).floor().max(1.0);
+        // mantém a seleção dentro da janela visível
+        let want = if (tv.sel as f32) < self.tree_top.target {
+            tv.sel as f32
+        } else if tv.sel as f32 > self.tree_top.target + vis - 1.0 {
+            tv.sel as f32 - vis + 1.0
+        } else {
+            self.tree_top.target
+        };
+        self.tree_top.target = want.max(0.0);
+        let prev_clip = c.clip;
+        c.set_clip(0, 0, sw as i32, c.h);
+        // fundo e borda
+        c.rect(0, 0, sw as i32, c.h, d::SURFACE, 0.55);
+        c.rect((sw - 1.0) as i32, 0, 1.max(s as i32), c.h, d::WHITE, 0.07);
+        // título
+        let hpx = 12.0 * s;
+        c.text(&mut self.ui_semi, hpx, 20.0 * s, top * 0.5 + hpx * 0.36, &tv.root.to_uppercase(), d::DIM, 0.95);
+        c.set_clip(0, top as i32, sw as i32, (c.h as f32 - d::M.bottom * s) as i32);
+        let t0 = self.tree_top.x;
+        // seleção
+        let sy = top + (self.tree_sel.x - t0) * row_h;
+        let (col, al) = if tv.focus { (d::ACCENT, 0.24) } else { (d::WHITE, 0.07) };
+        c.rrect(8.0 * s, sy + 1.0, sw - 16.0 * s - 1.0, row_h - 2.0, 8.0 * s, col, al);
+        let npx = 13.0 * s;
+        for (i, it) in tv.items.iter().enumerate() {
+            let abs = tv.first + i;
+            let y = top + (abs as f32 - t0) * row_h;
+            if y + row_h < top || y > top + area {
+                continue;
+            }
+            let base = y + row_h / 2.0 + npx * 0.36;
+            let x = 18.0 * s + it.level as f32 * 14.0 * s;
+            if it.dir {
+                // seta: aponta à direita (fechada) ou para baixo (aberta)
+                let g = if it.open { "⌄" } else { "›" };
+                if self.ui.has(it.open.then_some('⌄').unwrap_or('›')) {
+                    c.text(&mut self.ui_semi, npx, x, base - if it.open { 3.0 * s } else { 0.0 }, g, d::DIM, 1.0);
+                }
+            }
+            let nx = x + 15.0 * s;
+            let (font_semi, color) = if it.dir { (true, d::TEXT_STRONG) } else { (false, if abs == tv.sel { d::TEXT_STRONG } else { d::TEXT }) };
+            let maxw = sw - nx - 12.0 * s;
+            let mut name = it.name.clone();
+            while self.ui.measure(&name, npx) > maxw && name.chars().count() > 3 {
+                name.pop();
+            }
+            if name != it.name {
+                name.push('…');
+            }
+            if font_semi {
+                c.text(&mut self.ui_semi, npx, nx, base, &name, color, 1.0);
+            } else {
+                c.text(&mut self.ui, npx, nx, base, &name, color, 0.92);
+            }
+        }
+        c.clip = prev_clip;
     }
 
     /// Buscador: campo de texto, lista com o trecho que casou em destaque e seleção que desliza.
@@ -1373,6 +1481,35 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!(sc.pick.v < 0.01, "fecha com fade");
+    }
+
+    #[test]
+    fn explorador_desliza_e_empurra_o_texto() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("fn main() {}\n", None);
+        let lay0 = sc.layout(800, 600, 1);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 800, 600, t0);
+        let x0 = sc.layout(800, 600, 1).text_x;
+        s.feed(" e");
+        let vm = s.view_model();
+        assert!(vm.tree.is_some());
+        quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16));
+        let meio = sc.layout(800, 600, 1).text_x;
+        for i in 2..80 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        let fim = sc.layout(800, 600, 1).text_x;
+        assert!(x0 < meio && meio < fim, "o texto é empurrado aos poucos: {x0} {meio} {fim}");
+        assert!(sc.in_side(10.0) && !sc.in_side(fim));
+        s.feed(" e");
+        let vm = s.view_model();
+        for i in 80..160 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!((sc.layout(800, 600, 1).text_x - x0).abs() < 1.0, "e volta ao fechar");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`
