@@ -2087,6 +2087,41 @@ impl Editor {
         (p, q)
     }
 
+    /// Aplica edições de texto (`(início, fim, novo)`, posições do texto atual) num só passo de
+    /// desfazer: renomear, formatar, ações de código. As posições valem para o texto de antes;
+    /// as edições são aplicadas de trás para frente, então não se atrapalham.
+    pub fn aplicar_edicoes(&mut self, edicoes: &[(Pos, Pos, String)]) {
+        if edicoes.is_empty() {
+            return;
+        }
+        let mut ord: Vec<&(Pos, Pos, String)> = edicoes.iter().collect();
+        ord.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        let antes = self.buf.rope.clone();
+        let (cursor_antes, rev_antes) = (self.cursor, self.buf.rev);
+        self.checkpoint();
+        for (a, b, novo) in ord {
+            let ultima = self.buf.line_count() - 1;
+            let fix = |p: Pos, buf: &Buffer| Pos::new(p.row.min(ultima), p.col.min(buf.line_len(p.row.min(ultima))));
+            let (a, b) = (fix(*a, &self.buf), fix(*b, &self.buf));
+            if a < b {
+                self.buf.delete(a, b);
+            }
+            if !novo.is_empty() {
+                self.buf.insert(a, novo);
+            }
+        }
+        if self.buf.rope == antes {
+            // nada mudou de fato: tira o passo de desfazer que acabou de entrar
+            self.undo.pop();
+            self.buf.rev = rev_antes;
+            return;
+        }
+        self.cursor = cursor_antes;
+        self.cursor.row = self.cursor.row.min(self.last_row());
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
     /// Adota o texto de outro painel do mesmo arquivo (janelas divididas). Entra no desfazer como
     /// uma alteração qualquer, e o cursor acompanha: linhas inseridas/removidas acima dele o
     /// empurram, uma alteração por cima dele só o mantém dentro do texto.
@@ -2288,6 +2323,27 @@ fn parse_motion(keys: &[Key]) -> MParse {
 #[cfg(test)]
 mod testes_sincronizar {
     use super::*;
+
+    #[test]
+    fn edicoes_do_servidor_entram_num_passo_so_e_ignoram_ordem() {
+        let mut b = Editor::new(&["let foo = foo + 1;", "foo()"]);
+        // renomear foo -> bar nas três ocorrências (fora de ordem, uma por linha 2)
+        b.aplicar_edicoes(&[
+            (Pos::new(1, 0), Pos::new(1, 3), "barato".into()),
+            (Pos::new(0, 4), Pos::new(0, 7), "barato".into()),
+            (Pos::new(0, 10), Pos::new(0, 13), "barato".into()),
+        ]);
+        assert_eq!(b.lines(), vec!["let barato = barato + 1;", "barato()"]);
+        b.feed_str("u");
+        assert_eq!(b.lines(), vec!["let foo = foo + 1;", "foo()"], "um desfazer volta tudo");
+        // inserção pura e fim da linha além do tamanho
+        b.aplicar_edicoes(&[(Pos::new(1, 99), Pos::new(1, 99), ";".into())]);
+        assert_eq!(b.lines()[1], "foo();");
+        // sem mudança: não entra no desfazer
+        let r = b.buf.rev;
+        b.aplicar_edicoes(&[(Pos::new(0, 0), Pos::new(0, 3), "let".into())]);
+        assert_eq!(b.buf.rev, r);
+    }
 
     fn ed(t: &str) -> Editor {
         Editor::new(&t.split('\n').collect::<Vec<_>>())
