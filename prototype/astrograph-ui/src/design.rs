@@ -88,6 +88,7 @@ pub enum ModeKind {
     VisualLine,
     Command,
     Search,
+    Terminal,
 }
 
 impl ModeKind {
@@ -99,6 +100,7 @@ impl ModeKind {
             ModeKind::VisualLine => "Linhas",
             ModeKind::Command => "Comando",
             ModeKind::Search => "Buscar",
+            ModeKind::Terminal => "Terminal",
         }
     }
 
@@ -108,6 +110,7 @@ impl ModeKind {
             ModeKind::Insert => GREEN,
             ModeKind::Visual | ModeKind::VisualLine => PURPLE,
             ModeKind::Command | ModeKind::Search => ORANGE,
+            ModeKind::Terminal => GREEN,
         }
     }
 }

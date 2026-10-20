@@ -107,6 +107,9 @@ com animações próprias, todas em mola:
 - guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
 - buscador com fade, trecho que casou em destaque e seleção que desliza;
 - explorador que desliza da esquerda e empurra o texto;
+- terminal nativo (`<Espaço>t`) que sobe da base, com cores e cursor, onde o agente de IA
+  instalado (claude, opencode, codex ou gemini) roda via `<Espaço>Al`; `<C-\><C-n>` devolve o
+  teclado ao texto e `<Espaço>T` fecha;
 - relógio pequeno no canto inferior direito (também no app com Neovim), útil em tela
   cheia; `[clock] enabled = false` desliga e `hour12 = true` mostra `3:07 PM`.
 

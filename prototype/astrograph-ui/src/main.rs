@@ -22,6 +22,7 @@ mod nscene;
 mod nview;
 mod paint;
 mod servicos;
+mod term;
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -67,6 +68,10 @@ enum UiCommand {
     Resize(i64, i64),
     /// rolagem do editor nativo, em linhas (> 0 desce)
     Scroll(f64),
+    /// o terminal nativo tem saída nova (ou terminou)
+    TermOut,
+    /// linhas e colunas do painel do terminal
+    TermSize(i64, i64),
     Focus(bool),
     Mouse {
         button: &'static str,
@@ -352,7 +357,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -513,6 +518,7 @@ struct App {
     last_vm: Arc<nview::ViewModel>,
     /// quando o relógio precisa ser redesenhado (virada do minuto)
     clock_next: Instant,
+    last_term: (usize, usize),
 }
 
 impl App {
@@ -563,6 +569,7 @@ impl App {
             scene: None,
             last_vm: Arc::new(nview::ViewModel::empty()),
             clock_next: now,
+            last_term: (0, 0),
         }
     }
 
@@ -695,6 +702,11 @@ impl App {
         self.frames += 1;
         self.last_vm = vm.clone();
         let lay = scene.layout(w, h, vm.lines);
+        let (tr, tc) = scene.term_dims(w, h);
+        if (tr, tc) != self.last_term {
+            self.last_term = (tr, tc);
+            let _ = self.tx.send(UiCommand::TermSize(tr as i64, tc as i64));
+        }
         let dims = (lay.cols, lay.rows.floor() as usize);
         if dims != self.last_grid {
             self.last_grid = dims;
@@ -1341,6 +1353,7 @@ fn main() {
     let native_shared = nview::shared();
     let app_native = native_on.then(|| native_shared.clone());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<UiCommand>();
+    let tx_native = tx.clone();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -1363,7 +1376,7 @@ fn main() {
         // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
         if native_on {
             let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
-            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key));
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, tx_native));
         } else {
             runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
         }

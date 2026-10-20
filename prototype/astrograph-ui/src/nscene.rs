@@ -12,7 +12,7 @@ use astrograph_core::VKind;
 
 use crate::anim::{ease_out_cubic, ease_out_expo, lerp, mix_color, Chase, Spring};
 use crate::design::{self as d, Cls, ModeKind};
-use crate::nview::{PickerView, ToastKind, TreeView, ViewModel};
+use crate::nview::{PickerView, TermView, ToastKind, TreeView, ViewModel};
 use crate::paint::{Canvas, Font, INTER_REGULAR, INTER_SEMIBOLD};
 
 const MONO_NAMES: &[&str] = &[
@@ -85,6 +85,8 @@ pub struct Scene {
     shift_row: usize,
     last_lines: usize,
     side: Spring,
+    term: Spring,
+    term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
     tree_top: Spring,
     tree_sel: Spring,
@@ -156,6 +158,8 @@ impl Scene {
             shift_row: usize::MAX,
             last_lines: 0,
             side: Spring::new(0.0, 24.0, 1.0),
+            term: Spring::new(0.0, 22.0, 1.0),
+            term_cache: None,
             tree_cache: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
             tree_sel: Spring::new(0.0, 34.0, 1.0),
@@ -214,7 +218,7 @@ impl Scene {
         let text_x = (gutter_x + gutter_w + 18.0 * s).round();
         let text_x_final = (d::M.pad_x * s + sx_final + gutter_w + 18.0 * s).round();
         let text_y = (d::M.title_h * s).round();
-        let area_h = h as f32 - text_y - d::M.bottom * s;
+        let area_h = h as f32 - text_y - d::M.bottom * s - self.term.target.max(0.0);
         let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
     }
@@ -222,6 +226,14 @@ impl Scene {
     /// Hora para o canto inferior direito (`None` desliga o relógio).
     pub fn set_clock(&mut self, text: Option<String>) {
         self.clock = text;
+    }
+
+    /// Linhas e colunas do painel do terminal para uma janela `w`×`h` (pixels).
+    pub fn term_dims(&self, w: u32, h: u32) -> (usize, usize) {
+        let s = self.scale;
+        let rows = (((h as f32 * 0.36) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
+        let cols = (((w as f32 - self.side.target.max(0.0)) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
+        (rows, cols)
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -242,6 +254,7 @@ impl Scene {
         let t0 = Instant::now();
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
+        self.term.target = if vm.term.is_some() { (h * 0.36).round() } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
         self.last_paint = Some(now);
@@ -251,7 +264,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.term, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -282,6 +295,7 @@ impl Scene {
             self.paint_content(c, vm, &lay, now);
         }
         self.paint_side(c, (w, h, s));
+        self.paint_term(c, (w, h, s), now);
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -360,6 +374,9 @@ impl Scene {
             self.label_at = now;
             self.mode = vm.mode;
             self.mode_label = vm.mode.label().to_string();
+        }
+        if let Some(tv) = &vm.term {
+            self.term_cache = Some(tv.clone());
         }
         // explorador: a largura desliza; a janela de itens alimenta a seleção
         match &vm.tree {
@@ -475,7 +492,7 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = [&self.term, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -508,10 +525,11 @@ impl Scene {
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
         let top_px = self.top.x - self.over.x;
-        let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
+        // o painel do terminal (quando sobe) é o novo fundo da área do texto
+        let clip_bottom = (h - d::M.bottom * s * 0.55 - self.term.x.max(0.0)) as i32;
         // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
         // sem invadir o título nem a base, mesmo quando a mola passa do alvo
-        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s - self.term.x.max(0.0)) as i32);
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
@@ -698,7 +716,8 @@ impl Scene {
     fn paint_cursor(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, top_px: f32, now: Instant) {
         let s = self.scale;
         let (alpha, _) = self.blink(now);
-        if vm.cmd.is_some() {
+        // o cursor do texto some enquanto o teclado está no terminal
+        if vm.cmd.is_some() || vm.term.as_ref().is_some_and(|t| t.focus) {
             return;
         }
         let x = self.cur_x.x;
@@ -946,6 +965,76 @@ impl Scene {
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+    }
+
+    /// Terminal: painel que sobe da base, com a tela do pty em células da fonte do código.
+    fn paint_term(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32), now: Instant) {
+        let ph = self.term.x;
+        if ph < 2.0 {
+            if self.term.target < 1.0 {
+                self.term_cache = None;
+            }
+            return;
+        }
+        let Some(tv) = self.term_cache.clone() else { return };
+        let x0 = self.side.x.max(0.0);
+        let y1 = h - d::M.bottom * s;
+        let y0 = (y1 - ph).round();
+        let prev = c.clip;
+        c.set_clip(x0 as i32, y0 as i32, w as i32, y1 as i32);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::BG, 1.0);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::SURFACE, 0.9);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::WHITE, if tv.focus { 0.16 } else { 0.08 });
+        let (px, lh, cw) = (self.font_px, self.line_h, self.char_w);
+        let left = x0 + 14.0 * s;
+        let top = y0 + 12.0 * s;
+        for (r, row) in tv.screen.rows.iter().enumerate() {
+            let y = top + r as f32 * lh;
+            if y + lh > y1 {
+                break;
+            }
+            for (cidx, cell) in row.iter().enumerate() {
+                let x = left + cidx as f32 * cw;
+                if x + cw > w {
+                    break;
+                }
+                if let Some(bg) = cell.bg {
+                    c.rect(x as i32, y as i32, cw.ceil() as i32 + 1, lh as i32, bg, 1.0);
+                }
+                if cell.cont || cell.ch == ' ' {
+                    continue;
+                }
+                let color = cell.fg.unwrap_or(d::TEXT);
+                let font = if cell.italic && self.mono_italic.is_some() {
+                    self.mono_italic.as_mut().unwrap()
+                } else if cell.bold && self.mono_bold.is_some() {
+                    self.mono_bold.as_mut().unwrap()
+                } else {
+                    &mut self.mono
+                };
+                c.glyph_at(font, px, x, y + self.ascent, cell.ch, color, 1.0);
+                if cell.underline {
+                    c.rect(x as i32, (y + lh - 3.0 * s) as i32, cw as i32, 1.max(s as i32), color, 0.9);
+                }
+            }
+        }
+        // cursor: bloco cheio com o foco, contorno sem ele
+        if tv.screen.cursor_visible {
+            let (cr, cc) = tv.screen.cursor;
+            let (x, y) = (left + cc as f32 * cw, top + cr as f32 * lh);
+            let (blink, _) = self.blink(now);
+            if tv.focus {
+                c.rrect(x, y + 1.0, cw, lh - 2.0, 2.0 * s, d::GREEN, 0.9 * blink.max(0.35));
+                if let Some(cell) = tv.screen.rows.get(cr).and_then(|r| r.get(cc)) {
+                    if cell.ch != ' ' && !cell.cont {
+                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::BG, blink.max(0.35));
+                    }
+                }
+            } else {
+                c.rrect_border(x, y + 1.0, cw, lh - 2.0, 2.0 * s, 1.0, d::GREEN, 0.7);
+            }
+        }
+        c.clip = prev;
     }
 
     /// Explorador: painel que desliza da esquerda, itens com recuo, seleção que desliza.
@@ -1463,9 +1552,9 @@ mod testes {
             b = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
-        s.feed("a");
+        s.feed("s");
         let vm = s.view_model();
-        assert!(vm.dash && vm.toast.is_some(), "a ainda não existe: avisa e segue na tela inicial");
+        assert!(vm.dash && vm.toast.is_some(), "s ainda não existe: avisa e segue na tela inicial");
         s.feed("f");
         assert!(s.view_model().picker.is_some(), "f abre o buscador de arquivos");
         s.feed("<Esc>");
@@ -1563,6 +1652,39 @@ mod testes {
         }
         assert!(dentro > 40, "o relógio foi desenhado no canto: {dentro}");
         assert_eq!(fora, 0, "e só ali");
+    }
+
+    #[test]
+    fn terminal_sobe_da_base_e_encolhe_o_editor() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let rows0 = lay0.rows;
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: true,
+            exited: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, rows0.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        let sem = quadro(&mut sc, &vm, w, h, t0);
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true });
+        let mut com = sem.clone();
+        for i in 1..60 {
+            com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sem.iter().zip(&com).filter(|(a, b)| a != b).count() > 20_000, "o painel apareceu");
+        assert!(sc.layout(w, h, 1).rows < rows0 - 3.0, "o editor ficou mais baixo");
+        let (tr, tc) = sc.term_dims(w, h);
+        assert!(tr >= 5 && tc > 60, "{tr}x{tc}");
+        vm.term = None;
+        for i in 60..140 {
+            quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!((sc.layout(w, h, 1).rows - rows0).abs() < 0.01, "e volta ao fechar");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

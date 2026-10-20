@@ -15,7 +15,8 @@ use astrograph_syntax::{detect, lang, Document, Lang};
 use crate::design::{classify, ModeKind};
 use crate::arvore::Arvore;
 use crate::busca;
-use crate::nview::{PickItem, PickerView, Shared, Span, ToastKind, TreeItem, TreeView, ViewModel};
+use crate::nview::{PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
+use crate::term::{self, Term, TermScreen};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickKind {
@@ -56,6 +57,13 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    term: Option<Term>,
+    term_focus: bool,
+    /// apertou <C-\\>: o próximo <C-n> devolve o teclado ao editor
+    term_esc: bool,
+    term_dims: (u16, u16),
+    term_screen: Option<std::sync::Arc<TermScreen>>,
+    notify: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     leader: Vec<Key>,
     /// tecla líder (padrão Espaço)
     leader_key: char,
@@ -92,6 +100,12 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            term: None,
+            term_focus: false,
+            term_esc: false,
+            term_dims: (12, 100),
+            term_screen: None,
+            notify: None,
             leader: Vec::new(),
             leader_key: ' ',
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -149,6 +163,10 @@ impl Session {
     /// Teclas em notação `dw<Esc>`. Setas, Home/End e PageUp/PageDown viram navegação
     /// (nunca texto); teclas sem função (F1, Insert...) são ignoradas.
     pub fn feed(&mut self, keys: &str) {
+        if self.term_focus && self.term.is_some() {
+            self.term_feed(keys);
+            return;
+        }
         let chars: Vec<char> = keys.chars().collect();
         let mut buf = String::new();
         let mut i = 0;
@@ -253,6 +271,10 @@ impl Session {
             match seq.as_slice() {
                 [Key::Char('f')] => return,
                 [Key::Char('e')] => self.toggle_tree(),
+                [Key::Char('t')] => self.toggle_term(),
+                [Key::Char('T')] => self.term_close(),
+                [Key::Char('A')] => return,
+                [Key::Char('A'), Key::Char('l')] => self.open_agent(),
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
@@ -288,7 +310,8 @@ impl Session {
                 Key::Char('f') => return self.pick_open(PickKind::Arquivos),
                 Key::Char('o') => return self.pick_open(PickKind::Recentes),
                 Key::Char('w') => return self.pick_open(PickKind::Texto),
-                Key::Char('a' | 's') => {
+                Key::Char('a') => return self.open_agent(),
+                Key::Char('s') => {
                     self.say("Ainda não disponível no motor nativo.".into(), ToastKind::Info);
                     return;
                 }
@@ -298,6 +321,99 @@ impl Session {
         self.key_inner(k);
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // terminal
+    // ------------------------------------------------------------------
+
+    /// Quem acorda a UI quando o terminal tem saída nova.
+    pub fn set_notify(&mut self, f: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.notify = Some(f);
+    }
+
+    fn term_spawn(&mut self, cmd: portable_pty::CommandBuilder) {
+        let (rows, cols) = self.term_dims;
+        let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
+        match Term::spawn(cmd, rows, cols, Some(&self.root), notify) {
+            Ok(t) => {
+                self.term = Some(t);
+                self.term_focus = true;
+                self.term_screen = None;
+            }
+            Err(e) => self.say(format!("Não consegui abrir o terminal: {e}"), ToastKind::Error),
+        }
+    }
+
+    /// `<Líder>t`: abre o terminal (shell) com o teclado nele; sem o foco, devolve o foco. `<Líder>T` fecha.
+    fn toggle_term(&mut self) {
+        match (&self.term, self.term_focus) {
+            (None, _) => self.term_spawn(term::shell_padrao()),
+            (Some(_), _) => self.term_focus = true,
+        }
+    }
+
+    /// `<Líder>Al` / `a` na tela inicial: roda o primeiro agente instalado no terminal.
+    fn open_agent(&mut self) {
+        let Some(nome) = term::agente_instalado() else {
+            self.say("Nenhum agente instalado (claude, opencode, codex ou gemini). Use <Líder>t para o terminal.".into(), ToastKind::Info);
+            return;
+        };
+        self.term_close();
+        self.term_spawn(portable_pty::CommandBuilder::new(nome));
+    }
+
+    fn term_close(&mut self) {
+        if let Some(mut t) = self.term.take() {
+            t.matar();
+        }
+        self.term_focus = false;
+        self.term_esc = false;
+        self.term_screen = None;
+    }
+
+    /// Tamanho do painel (a cena calcula a partir da janela).
+    pub fn term_resize(&mut self, rows: u16, cols: u16) {
+        self.term_dims = (rows, cols);
+        if let Some(t) = self.term.as_mut() {
+            t.resize(rows, cols);
+        }
+    }
+
+    /// Teclas com o terminal em foco: vão para o pty; `<C-\><C-n>` devolve o teclado ao editor.
+    fn term_feed(&mut self, keys: &str) {
+        let esc = |k: &str| matches!(k.to_lowercase().as_str(), "<c-bslash>" | "<c-\\>");
+        if self.term_esc {
+            self.term_esc = false;
+            if keys.eq_ignore_ascii_case("<C-n>") {
+                self.term_focus = false;
+                return;
+            }
+            if let Some(t) = self.term.as_mut() {
+                t.write(&[0x1c]);
+            }
+        } else if esc(keys) {
+            self.term_esc = true;
+            return;
+        }
+        if let Some(t) = self.term.as_mut() {
+            t.write(&term::teclas_para_bytes(keys));
+        }
+    }
+
+    /// Pega o instantâneo novo, se houver; um processo que terminou fecha o painel.
+    fn term_refresh(&mut self) {
+        let Some(t) = self.term.as_ref() else { return };
+        if self.term_screen.is_some() && !t.pending.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let sc = t.snapshot();
+        if sc.exited {
+            self.term_close();
+            self.say("Terminal encerrado.".into(), ToastKind::Info);
+        } else {
+            self.term_screen = Some(std::sync::Arc::new(sc));
         }
     }
 
@@ -449,9 +565,15 @@ impl Session {
         }
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
+        let (term, term_focus, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_dims, self.term_screen.take(), self.notify.take());
         *self = Session::open(path);
         self.root = root;
         self.leader_key = lider;
+        self.term = term;
+        self.term_focus = term_focus;
+        self.term_dims = term_dims;
+        self.term_screen = term_screen;
+        self.notify = notify;
         self.tree = tree;
         self.tree_focus = foco;
         self.resize(cols, rows);
@@ -641,6 +763,7 @@ impl Session {
     }
 
     pub fn view_model(&mut self) -> ViewModel {
+        self.term_refresh();
         self.follow_cursor();
         self.refresh_syntax();
         self.seq += 1;
@@ -689,7 +812,9 @@ impl Session {
             }
         }
         let hits_id = if pat.is_some() && !self.hl_off { self.hl_id } else { 0 };
-        let mode = if self.cmdline.is_some() {
+        let mode = if self.term_focus && self.term.is_some() {
+            ModeKind::Terminal
+        } else if self.cmdline.is_some() {
             ModeKind::Command
         } else if search.is_some() {
             ModeKind::Search
@@ -734,6 +859,7 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
+            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus }),
             tree: self.tree.as_ref().map(|t| {
                 let first = t.sel.saturating_sub(100);
                 TreeView {
@@ -774,6 +900,7 @@ pub async fn native_task(
     proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
     file: Option<PathBuf>,
     leader: char,
+    tx: tokio::sync::mpsc::UnboundedSender<crate::UiCommand>,
 ) {
     use crate::UiCommand;
     let mut s = match &file {
@@ -781,12 +908,17 @@ pub async fn native_task(
         None => Session::welcome(),
     };
     s.set_leader(leader);
+    s.set_notify(std::sync::Arc::new(move || {
+        let _ = tx.send(crate::UiCommand::TermOut);
+    }));
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => s.feed(&k),
             UiCommand::Resize(c, r) => s.resize(c.max(1) as usize, r.max(1) as f32),
             UiCommand::Focus(_) => continue,
             UiCommand::Scroll(lines) => s.scroll(lines as f32),
+            UiCommand::TermOut => {}
+            UiCommand::TermSize(r, c) => s.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Mouse { button, action, row, col, .. } => match (button, action) {
                 ("left", "press") => s.click(row.max(0) as usize, col.max(0) as usize),
                 _ => continue,
@@ -954,6 +1086,45 @@ mod testes {
         assert!(modelo(&mut s).picker.is_none());
         assert_eq!(modelo(&mut s).cursor, (0, 1), "Espaço anda como `l`");
         assert_eq!(tecla_nome('\t'), "<Tab>");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn espaco_t_abre_o_terminal_recebe_teclas_e_devolve_o_foco() {
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.feed(" t");
+        let m = modelo(&mut s);
+        assert!(m.term.as_ref().is_some_and(|t| t.focus), "terminal aberto e com o teclado");
+        assert_eq!(m.mode, ModeKind::Terminal);
+        // o shell recebe as teclas (e o editor não)
+        s.feed("echo $((6*7))<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let achou = loop {
+            let m = modelo(&mut s);
+            let texto: String = m.term.as_ref().map(|t| t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>() + "\n").collect()).unwrap_or_default();
+            if texto.lines().any(|l| l.trim().ends_with("42") && !l.contains("echo")) || std::time::Instant::now() > fim {
+                break texto.lines().any(|l| l.trim().ends_with("42") && !l.contains("echo"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        };
+        let dump: String = modelo(&mut s).term.as_ref().map(|t| t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>().trim_end().to_string() + "|\n").collect()).unwrap_or_default();
+        assert!(achou, "a saída do shell chegou ao instantâneo: {dump}");
+        assert_eq!(modelo(&mut s).line(0), "x", "o texto do editor não mudou");
+        // <C-\\><C-n> devolve o teclado; <Líder>t volta; de novo fecha
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        let m = modelo(&mut s);
+        assert!(m.term.is_some() && m.mode != ModeKind::Terminal);
+        s.feed(" t");
+        assert!(modelo(&mut s).mode == ModeKind::Terminal);
+        // com o teclado no terminal, o líder vai para o shell; <C-\\><C-n> e <Líder>T fecham
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed(" T");
+        assert!(modelo(&mut s).term.is_none());
     }
 
     #[test]

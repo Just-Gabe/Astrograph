@@ -60,6 +60,13 @@ pub struct TreeView {
     pub focus: bool,
 }
 
+/// Terminal nativo: o instantâneo da tela e se ele tem o foco do teclado.
+#[derive(Clone)]
+pub struct TermView {
+    pub screen: std::sync::Arc<crate::term::TermScreen>,
+    pub focus: bool,
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -94,6 +101,7 @@ pub struct ViewModel {
     pub dash: bool,
     pub picker: Option<PickerView>,
     pub tree: Option<TreeView>,
+    pub term: Option<TermView>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -122,6 +130,7 @@ impl ViewModel {
             dash: false,
             picker: None,
             tree: None,
+            term: None,
             flash: None,
         }
     }
