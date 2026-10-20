@@ -65,6 +65,14 @@ pub fn vim_to_regex(pat: &str) -> (String, bool) {
     (out, ignore_case)
 }
 
+/// `compile` com as opções `ignorecase` e `smartcase` (maiúscula na busca liga a diferença de caixa).
+pub fn compile_opts(pat: &str, ignorecase: bool, smartcase: bool) -> Option<Regex> {
+    let (p, ic) = vim_to_regex(pat);
+    let ic = ic || (ignorecase && !(smartcase && pat.chars().any(char::is_uppercase)));
+    let p = if ic { format!("(?i){p}") } else { p };
+    Regex::new(&p).ok()
+}
+
 pub fn compile(pat: &str) -> Option<Regex> {
     let (p, ic) = vim_to_regex(pat);
     let p = if ic { format!("(?i){p}") } else { p };

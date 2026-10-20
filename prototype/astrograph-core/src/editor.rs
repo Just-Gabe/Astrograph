@@ -13,6 +13,7 @@ use crate::textobj;
 
 mod bloco;
 mod ex;
+pub mod mapas;
 mod numero;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +162,19 @@ pub struct Editor {
     dot: Vec<Key>,
     dot_count: Option<usize>,
     dot_recording: bool,
+    /// texto do clipboard do sistema (registradores `+` e `*`) e se mudou desde que o app o levou
+    clip_sistema: Option<String>,
+    clip_alterado: bool,
+    /// `clipboard=unnamedplus`: copiar e colar sem registrador usa o clipboard do sistema
+    pub clipboard_unnamedplus: bool,
+    /// mapeamentos do usuário, tecla líder e o que já foi digitado de um mapeamento maior
+    mapas: Vec<mapas::Mapa>,
+    mapas_versao: u64,
+    leader: char,
+    map_pend: Vec<Key>,
+    map_prof: usize,
+    /// a tecla vem de dentro de um mapeamento sem remapeamento (`noremap`)
+    map_cru: bool,
     /// registrador do último comando repetível (`"Bdw` e depois `.`; `"1p` sobe para `"2p`...)
     dot_reg: Option<char>,
     /// último texto digitado na inserção (registrador `.`)
@@ -177,6 +191,10 @@ pub struct Editor {
     ins: Insert,
     /// colunas de `shiftwidth`
     pub shiftwidth: usize,
+    /// `:set ignorecase smartcase expandtab`
+    pub ignorecase: bool,
+    pub smartcase: bool,
+    pub expandtab: bool,
     /// operador em curso é `c` (para `cw` agir como `ce`)
     ops_change: bool,
     /// o último comando falhou: o Vim descarta o resto das teclas já digitadas
@@ -242,6 +260,15 @@ impl Editor {
             dot: Vec::new(),
             dot_count: None,
             dot_recording: false,
+            clip_sistema: None,
+            clip_alterado: false,
+            clipboard_unnamedplus: false,
+            mapas: Vec::new(),
+            mapas_versao: 0,
+            leader: ' ',
+            map_pend: Vec::new(),
+            map_prof: 0,
+            map_cru: false,
             dot_reg: None,
             last_insert: String::new(),
             ins_reg_wait: false,
@@ -251,6 +278,9 @@ impl Editor {
             replaying: false,
             ins: Insert::default(),
             shiftwidth: 8,
+            ignorecase: false,
+            smartcase: false,
+            expandtab: false,
             ops_change: false,
             failed: false,
             emptied: false,
@@ -312,7 +342,8 @@ impl Editor {
 
     /// Teclas pendentes para mostrar (`2d`, `"a`...), como o `showcmd` do Vim.
     pub fn showcmd(&self) -> String {
-        self.pending
+        let pendentes: String = self
+            .pending
             .iter()
             .map(|k| match k {
                 Key::Char(c) => c.to_string(),
@@ -321,7 +352,8 @@ impl Editor {
                 Key::Ctrl(c) => format!("^{}", c.to_ascii_uppercase()),
                 _ => String::new(),
             })
-            .collect()
+            .collect();
+        self.mapa_pendente() + &pendentes
     }
 
     /// Há teclas de um comando ainda incompleto (`d`, `2`, `"`...).
@@ -394,11 +426,33 @@ impl Editor {
         let simples = |t: String| Reg { text: t, linewise: false, block: false, bwidth: 0 };
         match c {
             '_' => None,
+            '+' | '*' => self.clip_sistema.as_ref().filter(|t| !t.is_empty()).map(|t| {
+                // texto que termina em quebra de linha vira registro por linhas, como o Vim faz com o clipboard
+                match t.strip_suffix('\n') {
+                    Some(sem) => Reg { text: sem.trim_end_matches('\r').to_string(), linewise: true, block: false, bwidth: 0 },
+                    None => simples(t.clone()),
+                }
+            }),
             '.' => (!self.last_insert.is_empty()).then(|| simples(self.last_insert.clone())),
             '/' => self.last_search.as_ref().map(|(p, _)| simples(p.clone())),
             '"' => self.unnamed.clone(),
             c => self.regs.get(&c.to_ascii_lowercase()).cloned(),
         }
+    }
+
+    /// O app informa o que está no clipboard do sistema (`"+p` e `clipboard=unnamedplus` leem daqui).
+    pub fn definir_clipboard(&mut self, texto: Option<String>) {
+        self.clip_sistema = texto;
+        self.clip_alterado = false;
+    }
+
+    /// Texto que o editor copiou para o clipboard (`"+y`, ou qualquer cópia com `unnamedplus`) desde a
+    /// última chamada: o app põe no clipboard do sistema.
+    pub fn clipboard_alterado(&mut self) -> Option<String> {
+        if std::mem::take(&mut self.clip_alterado) {
+            return self.clip_sistema.clone();
+        }
+        None
     }
 
     /// Processa as teclas. Um comando que falha (movimento impossível, tecla
@@ -410,8 +464,22 @@ impl Editor {
         }
     }
 
-    /// Entrada digitada: aqui o `q` liga/desliga a gravação e as teclas são gravadas.
+    /// Tecla digitada: passa pelos mapeamentos antes de virar comando.
     fn feed_one(&mut self, k: Key) {
+        if self.map_cru || !self.tentar_mapa(k) {
+            self.feed_one_cru(k);
+        }
+    }
+
+    /// A tecla sem mapeamento (a de dentro de um `noremap`, ou a que não casou).
+    fn feed_one_cru(&mut self, k: Key) {
+        let antes = std::mem::replace(&mut self.map_cru, true);
+        self.feed_one_real(k);
+        self.map_cru = antes;
+    }
+
+    /// Entrada digitada: aqui o `q` liga/desliga a gravação e as teclas são gravadas.
+    fn feed_one_real(&mut self, k: Key) {
         if self.mode == Mode::Normal && self.pending.is_empty() && self.cmdline.is_none() {
             if self.q_wait {
                 self.q_wait = false;
@@ -942,7 +1010,7 @@ impl Editor {
                 }
                 '*' | '#' => {
                     let (pat, fwd) = self.search_target(m)?;
-                    let re = search::compile(&pat)?;
+                    let re = search::compile_opts(&pat, self.ignorecase, self.smartcase)?;
                     let mut pos = self.word_start();
                     for _ in 0..c1 {
                         pos = search::find(b, &re, pos, fwd)?.0;
@@ -1098,7 +1166,7 @@ impl Editor {
             }
             '/' | '?' | 'n' | 'N' | '*' | '#' => {
                 let (pat, fwd) = self.search_target(m)?;
-                let re = search::compile(&pat)?;
+                let re = search::compile_opts(&pat, self.ignorecase, self.smartcase)?;
                 let mut pos = if matches!(m.c, '*' | '#') { self.word_start() } else { cur };
                 for _ in 0..c1 {
                     let (p, _wrapped) = search::find(b, &re, pos, fwd)?;
@@ -1428,6 +1496,13 @@ impl Editor {
         match reg {
             // buraco negro: não guarda nada nem mexe no registrador sem nome
             Some('_') => return,
+            // clipboard do sistema: o app leva o texto para lá
+            Some(c @ ('+' | '*')) => {
+                let t = if r.linewise { format!("{}\n", r.text) } else { r.text.clone() };
+                self.clip_sistema = Some(t);
+                self.clip_alterado = true;
+                self.regs.insert(c, r.clone());
+            }
             Some(c) if c != '"' => {
                 let nome = c.to_ascii_lowercase();
                 // maiúscula anexa ao que já existe (sem nome definido, é um registrador novo)
@@ -1455,6 +1530,12 @@ impl Editor {
                 }
             }
         }
+        // `clipboard=unnamedplus`: tudo o que vai ao registrador sem nome também vai ao clipboard
+        if self.clipboard_unnamedplus && matches!(reg, None | Some('"')) {
+            let t = if r.linewise { format!("{}\n", r.text) } else { r.text.clone() };
+            self.clip_sistema = Some(t);
+            self.clip_alterado = true;
+        }
         self.unnamed = Some(r);
     }
 
@@ -1463,11 +1544,12 @@ impl Editor {
         if line.is_empty() && right {
             return;
         }
-        let ts = 8;
+        let ts = motion::tabstop();
         let indent_chars: usize = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
         let width: usize = line.chars().take(indent_chars).fold(0, |w, c| if c == '\t' { (w / ts + 1) * ts } else { w + 1 });
         let new_w = if right { width + self.shiftwidth } else { width.saturating_sub(self.shiftwidth) };
-        let new_indent = format!("{}{}", "\t".repeat(new_w / ts), " ".repeat(new_w % ts));
+        // com `expandtab` o recuo é só de espaços
+        let new_indent = if self.expandtab { " ".repeat(new_w) } else { format!("{}{}", "\t".repeat(new_w / ts), " ".repeat(new_w % ts)) };
         let rest: String = line.chars().skip(indent_chars).collect();
         let len = self.buf.line_len(row);
         self.buf.delete(Pos::new(row, 0), Pos::new(row, len));
@@ -1481,6 +1563,7 @@ impl Editor {
     fn put(&mut self, after: bool, count: usize, reg: Option<char>) {
         let r = match reg {
             Some(c) => self.reg_valor(c),
+            None if self.clipboard_unnamedplus => self.reg_valor('+').or_else(|| self.unnamed.clone()),
             None => self.unnamed.clone(),
         };
         let Some(r) = r else {
@@ -2185,6 +2268,14 @@ impl Editor {
 
     fn insert_raw(&mut self, k: Key) {
         match k {
+            Key::Tab if self.expandtab => {
+                // `expandtab`: o tab vira espaços até o próximo múltiplo de `tabstop`
+                let linha = self.buf.line(self.cursor.row);
+                let ts = motion::tabstop();
+                let n = ts - motion::vcol_start(&linha, self.cursor.col) % ts;
+                self.buf.insert(self.cursor, &" ".repeat(n));
+                self.cursor.col += n;
+            }
             Key::Char(_) | Key::Tab => {
                 let ch = k.as_char().unwrap();
                 self.buf.insert(self.cursor, &ch.to_string());

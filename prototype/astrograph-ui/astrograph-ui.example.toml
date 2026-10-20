@@ -51,3 +51,22 @@ animation_ms = 160
 [lsp]
 # formata o arquivo com o servidor de linguagem antes de gravar (:w)
 format_on_save = false
+
+[keys]
+# tecla líder (<Leader>): "space" (padrão), ",", "\\"...
+leader = "space"
+
+# mapeamentos permanentes (sem remapeamento), por modo; <Leader>, <CR>, <Esc>, <Space>, <C-x> valem
+[keys.normal]
+# "<Leader>w" = ":w<CR>"
+# "<Leader>q" = ":q<CR>"
+
+[keys.insert]
+# "jk" = "<Esc>"
+
+[keys.visual]
+# "<Leader>y" = "\"+y"
+
+[editor]
+# "unnamedplus": copiar e colar sem registrador usa o clipboard do sistema
+clipboard = ""

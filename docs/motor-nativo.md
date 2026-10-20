@@ -41,6 +41,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Comandos `:` do núcleo: faixas (`%`, `1,3`, `'<,'>`, `.+1`, `'a`), `:s` (grupos, `&`, `\\u \\U`, flags `g i I e`), `:d`, `:y`, `:j`, `:>` `:<`, `:g`/`:v`, `:normal` e `:N` | **98%** (196/200) |
 | Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **97%** (sobram `A`/`I` em bloco que corta caractere largo e `y` com a ponta num tab) |
 | `<C-a>`/`<C-x>` (decimal, `0x`, `0b`, negativos, zeros à esquerda; visual e `g<C-a>`), operadores de caixa `gu gU g~ g?` (`guu`, `gUgU`, objetos, `.`), `.` depois de operador visual (mesmo tamanho a partir do cursor), registradores (`"A` anexa, `"_` buraco negro, `".`, `"/`, `"0`-`"9`, `"x` no visual, `.` com `"1p`→`"2p`), `<C-r>{reg}` na inserção, bloco que corta tab ou caractere largo (a metade vira espaço) | **99%** em `num`, `caso`, `reg`; 98% em `ponto` e `blk` (contra o nvim 0.11) |
+| **Mapeamentos** `:map :nmap :imap :vmap :noremap :nnoremap :inoremap :vnoremap :unmap :mapclear` (recursivos ou não, prefixo pendente na tela, `<Leader>`, valem em todas as abas e painéis) e `[keys.normal]`/`[keys.insert]`/`[keys.visual]` no `config.toml`; **`:set`** (`ignorecase smartcase expandtab shiftwidth tabstop number relativenumber scrolloff clipboard`); **clipboard do sistema** (`"+`/`"*`, `clipboard=unnamedplus`, `[editor] clipboard`); **mouse** no editor (arrastar seleciona, duplo clique palavra, triplo linha, `Shift+clique` estende); **zoom** `Ctrl +/-/0` | **funcionando** (mapeamentos e `:set` conferidos contra o nvim: 30 casos) |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo em **segundo plano** (listar e buscar texto em threads com cancelamento e resultados parciais, 'buscando…' no cabeçalho; lista de arquivos em cache por raiz; letra a mais só procura entre os que já casaram; Enter antes da lista chegar espera e abre) (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
@@ -66,6 +67,10 @@ objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`
 motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 
 ## Divergências conhecidas
+
+- Mapeamentos: sem `timeoutlen` (um prefixo pendente espera a próxima tecla; `<Esc>` solta), sem `omap`/`cmap`/`<expr>`,
+  e os feitos com `:map` valem só até fechar o app (os permanentes vão em `[keys.normal]` etc.). Tema claro, `wrap`,
+  persistência de sessão e IME ainda não existem.
 
 - Git: o branch e o `HEAD` são lidos em thread; arquivos com mais de 5000 linhas têm os sinais da margem
   calculados em segundo plano (os sinais antigos ficam até o cálculo terminar).

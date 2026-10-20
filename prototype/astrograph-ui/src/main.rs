@@ -92,6 +92,8 @@ enum UiCommand {
     /// arrasta um divisor: índice, área (x, y, w, h), espaço entre painéis, posição em pixels
     Divisor { idx: usize, area: (f32, f32, f32, f32), gap: f32, pos: f32 },
     Focus(bool),
+    /// o texto que está no clipboard do sistema (para `"+p` e `clipboard=unnamedplus`)
+    ClipSync(String),
     Mouse {
         button: &'static str,
         action: &'static str,
@@ -453,7 +455,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -623,6 +625,8 @@ struct App {
     pane_sizes: Vec<(u32, i64, i64)>,
     /// divisor sendo arrastado (índice em `Layout::divisores`)
     drag_div: Option<usize>,
+    /// tamanho da fonte (pixels) depois de `Ctrl +/-/0`; `None`: o da configuração
+    zoom_px: Option<f32>,
     /// botão apertado sobre o terminal (a seleção continua mesmo se o ponteiro sair dele)
     term_down: Option<u8>,
     /// último id de cópia já enviado ao clipboard do sistema, e o clipboard (mantido vivo)
@@ -686,6 +690,7 @@ impl App {
             pane_sizes: Vec::new(),
             drag_div: None,
             term_down: None,
+            zoom_px: None,
             clip_visto: 0,
             clipboard: None,
         }
@@ -756,6 +761,16 @@ impl App {
         })
     }
 
+    /// Manda ao editor nativo o texto do clipboard do sistema.
+    fn enviar_clipboard(&mut self) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(t) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) {
+            let _ = self.tx.send(UiCommand::ClipSync(t));
+        }
+    }
+
     fn scale_factor(&self) -> f32 {
         self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32)
     }
@@ -822,7 +837,7 @@ impl App {
         let vm = shared.lock().unwrap().clone();
         let clock = self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12));
         let scale = window.scale_factor() as f32;
-        let font_px = self.base_font * scale;
+        let font_px = self.zoom_px.unwrap_or(self.base_font * scale);
         let Some(scene) = self.scene.as_mut() else { return };
         scene.set_clock(clock);
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
@@ -1052,6 +1067,13 @@ impl App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_size(size);
         }
+        // editor nativo: a cena usa o mesmo tamanho (e as dos painéis são refeitas com ele)
+        let escala = self.scale_factor();
+        if let Some(scene) = self.scene.as_mut() {
+            scene.set_metrics(size, escala);
+            self.zoom_px = Some(size);
+            self.pane_scenes.clear();
+        }
         self.request_redraw();
     }
 
@@ -1158,6 +1180,9 @@ impl ApplicationHandler<UserEvent> for App {
         self.window = Some(window);
         self.context = Some(context);
         self.surface = Some(surface);
+        if self.native.is_some() {
+            self.enviar_clipboard();
+        }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -1241,12 +1266,17 @@ impl ApplicationHandler<UserEvent> for App {
                     scene.set_metrics(self.base_font * scale, scale);
                 }
                 self.pane_scenes.clear();
+                self.zoom_px = None;
                 self.request_redraw();
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
                 self.wake_cursor();
                 let _ = self.tx.send(UiCommand::Focus(focused));
+                // ao voltar para a janela o clipboard pode ter mudado fora: o editor nativo o relê
+                if focused && self.native.is_some() {
+                    self.enviar_clipboard();
+                }
                 self.request_redraw();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -1657,6 +1687,8 @@ fn main() {
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     let leader_key = cfg.keys.leader_char();
     let format_on_save = cfg.lsp.format_on_save;
+    let mapeamentos = cfg.keys.mapeamentos();
+    let clipboard_mais = cfg.editor.clipboard.contains("unnamedplus");
     // motor: ASTROGRAPH_ENGINE=native|nvim manda; sem ela vale `[engine] native` do config.toml
     let native_on = match std::env::var("ASTROGRAPH_ENGINE").as_deref() {
         Ok("native") => true,
@@ -1689,7 +1721,7 @@ fn main() {
         // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
         if native_on {
             let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
-            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, format_on_save, tx_native));
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, format_on_save, mapeamentos, clipboard_mais, tx_native));
         } else {
             runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
         }

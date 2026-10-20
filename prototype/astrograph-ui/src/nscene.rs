@@ -750,10 +750,20 @@ impl Scene {
             }
             let ra = if row >= self.fade_rows.0 && row < self.fade_rows.1 { self.fade.v.clamp(0.0, 1.0) } else { 1.0 };
             // número da linha
-            let num = (row + 1).to_string();
-            let nw = self.mono.measure(&num, gpx);
+            // `number` mostra o número da linha; `relativenumber` a distância até a linha do cursor (a do cursor
+            // mostra o número se `number` está ligado, senão 0)
+            let num = match (vm.numero, vm.relativo) {
+                (false, false) => String::new(),
+                (_, false) => (row + 1).to_string(),
+                (true, true) if row == cur_row => (row + 1).to_string(),
+                (false, true) if row == cur_row => "0".to_string(),
+                (_, true) => row.abs_diff(cur_row).to_string(),
+            };
             let ncol = if row == cur_row { d::DIM } else { d::FAINT };
-            c.text(&mut self.mono, gpx, lay.gutter_x + lay.gutter_w - nw, base, &num, ncol, ra);
+            if !num.is_empty() {
+                let nw = self.mono.measure(&num, gpx);
+                c.text(&mut self.mono, gpx, lay.gutter_x + lay.gutter_w - nw, base, &num, ncol, ra);
+            }
             // texto
             let line = vm.line(row);
             let n = line.chars().count();
