@@ -423,6 +423,39 @@ impl Editor {
 
     /// Completar no modo de inserção: troca o texto de `de` até o cursor por `texto` e deixa o
     /// cursor no fim. O que foi digitado vira o texto final (para `.` e contagem).
+    /// Edições de fora do cursor feitas durante a inserção (imports automáticos do completar):
+    /// `(início, fim, texto)` no texto de agora. O cursor acompanha as linhas que entraram acima dele.
+    /// Devolve quantas linhas o texto ganhou (negativo: perdeu) acima do cursor.
+    pub fn editar_na_insercao(&mut self, edicoes: &[(Pos, Pos, String)]) -> i64 {
+        let mut ord: Vec<&(Pos, Pos, String)> = edicoes.iter().collect();
+        ord.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        let mut linhas = 0i64;
+        for (a, b, novo) in ord {
+            let ultima = self.buf.line_count() - 1;
+            let fix = |p: Pos, buf: &Buffer| Pos::new(p.row.min(ultima), p.col.min(buf.line_len(p.row.min(ultima))));
+            let (a, b) = (fix(*a, &self.buf), fix(*b, &self.buf));
+            let acima = b.row < self.cursor.row || (b.row == self.cursor.row && b.col <= self.cursor.col);
+            if a < b {
+                self.buf.delete(a, b);
+            }
+            if !novo.is_empty() {
+                self.buf.insert(a, novo);
+            }
+            if acima {
+                let d = novo.matches('\n').count() as i64 - (b.row - a.row) as i64;
+                linhas += d;
+                if b.row == self.cursor.row && a.row == b.row && !novo.contains('\n') {
+                    let nova = self.cursor.col as i64 + novo.chars().count() as i64 - (b.col - a.col) as i64;
+                    self.cursor.col = nova.max(0) as usize;
+                }
+            }
+        }
+        self.cursor.row = (self.cursor.row as i64 + linhas).max(0) as usize;
+        self.cursor.row = self.cursor.row.min(self.last_row());
+        self.curswant = self.want_here();
+        linhas
+    }
+
     pub fn insert_replace(&mut self, de: Pos, texto: &str) {
         if self.mode != Mode::Insert || de > self.cursor {
             return;

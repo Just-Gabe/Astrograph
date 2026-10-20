@@ -118,6 +118,14 @@ struct Comp {
 
 const COMP_LINHAS: usize = 8;
 
+/// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
+/// ainda está selecionado.
+struct Snip {
+    stops: Vec<(Pos, Pos)>,
+    idx: usize,
+    sel: bool,
+}
+
 /// Um servidor de linguagem compartilhado por todas as abas.
 pub type LspRef = std::sync::Arc<std::sync::Mutex<Cliente>>;
 pub type LspPool = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, LspRef>>>;
@@ -194,6 +202,8 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// snippet em andamento (Tab pula de parada em parada)
+    snip: Option<Snip>,
     /// `.editorconfig`: limpar o espaço do fim das linhas e o que fazer com a última quebra ao gravar
     ec_trim: bool,
     ec_final_nl: Option<bool>,
@@ -323,6 +333,7 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            snip: None,
             ec_trim: false,
             ec_final_nl: None,
             tree_prompt: None,
@@ -713,17 +724,19 @@ impl Session {
         let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
             return;
         };
+        let raiz = lsp::raiz_do_projeto(&path, &self.root);
+        // um servidor por programa e por projeto: arquivos de repositórios diferentes não se misturam
+        let chave = format!("{prog}\0{}", raiz.display());
         let cli = {
             let mut pool = self.lsp_pool.lock().unwrap();
-            match pool.get(&prog) {
+            match pool.get(&chave) {
                 Some(c) => Some(c.clone()),
                 None => {
-                    let raiz = git::raiz(path.parent().unwrap_or(&self.root)).unwrap_or_else(|| self.root.clone());
                     let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
                     match Cliente::iniciar(&prog, &args, &raiz, notify) {
                         Ok(c) => {
                             let r: LspRef = std::sync::Arc::new(std::sync::Mutex::new(c));
-                            pool.insert(prog.clone(), r.clone());
+                            pool.insert(chave.clone(), r.clone());
                             Some(r)
                         }
                         Err(_) => None,
@@ -934,9 +947,122 @@ impl Session {
                 de = Pos::new(r, lsp::col_chars(&self.ed.buf.line(r), c16));
             }
         }
-        self.ed.insert_replace(de, &item.texto);
+        let (texto, paradas, extras) = (item.texto.clone(), item.paradas.clone(), item.extras.clone());
+        self.ed.insert_replace(de, &texto);
         self.comp_req = None;
+        // posição de cada parada do snippet, a partir do começo do texto inserido
+        let pos_de = |off: usize| -> Pos {
+            let antes: Vec<char> = texto.chars().take(off).collect();
+            match antes.iter().rposition(|&c| c == '\n') {
+                None => Pos::new(de.row, de.col + off),
+                Some(i) => Pos::new(de.row + antes.iter().filter(|&&c| c == '\n').count(), off - i - 1),
+            }
+        };
+        let mut stops: Vec<(Pos, Pos)> = paradas.iter().map(|&(a, b)| (pos_de(a), pos_de(b))).collect();
+        // imports automáticos: entram acima e empurram o que vem depois
+        if !extras.is_empty() {
+            let n = self.ed.buf.line_count();
+            let v: Vec<(Pos, Pos, String)> = extras
+                .iter()
+                .map(|((l0, c0), (l1, c1), t)| {
+                    let (l0, l1) = ((*l0).min(n - 1), (*l1).min(n - 1));
+                    (Pos::new(l0, lsp::col_chars(&self.ed.buf.line(l0), *c0)), Pos::new(l1, lsp::col_chars(&self.ed.buf.line(l1), *c1)), t.clone())
+                })
+                .collect();
+            let d = self.ed.editar_na_insercao(&v);
+            for (a, b) in stops.iter_mut() {
+                a.row = (a.row as i64 + d).max(0) as usize;
+                b.row = (b.row as i64 + d).max(0) as usize;
+            }
+        }
         self.comp_block = self.ed.buf.rev;
+        if !stops.is_empty() && stops.iter().any(|(a, b)| a != b || *a != self.ed.cursor) {
+            self.snip = Some(Snip { stops, idx: 0, sel: false });
+            self.snip_ir(0);
+        } else {
+            self.snip = None;
+        }
+    }
+
+    /// Vai para a parada `idx` do snippet (o valor padrão fica selecionado: a primeira letra o troca).
+    fn snip_ir(&mut self, idx: usize) {
+        let Some(sn) = self.snip.as_mut() else { return };
+        let Some(&(a, b)) = sn.stops.get(idx) else {
+            self.snip = None;
+            return;
+        };
+        sn.idx = idx;
+        sn.sel = a != b && a.row == b.row;
+        let n = self.ed.buf.line_count();
+        if a.row >= n {
+            self.snip = None;
+            return;
+        }
+        self.ed.cursor = Pos::new(a.row, a.col.min(self.ed.buf.line_len(a.row)));
+        // a última parada (`$0`) encerra o modo
+        if idx + 1 == sn.stops.len() && !sn.sel {
+            self.snip = None;
+        }
+    }
+
+    /// Teclas no modo snippet (inserção com paradas). `true` se a tecla foi consumida.
+    fn snip_tecla(&mut self, k: Key) -> bool {
+        let Some(sn) = self.snip.as_ref() else { return false };
+        let (idx, sel) = (sn.idx, sn.sel);
+        match k {
+            Key::Tab => {
+                self.snip_ir(idx + 1);
+                return true;
+            }
+            Key::Esc | Key::Enter | Key::Ctrl('c') => {
+                self.snip = None;
+                return false;
+            }
+            Key::Char(_) | Key::Backspace | Key::Delete if sel => {
+                // o valor padrão é trocado pelo que vier
+                let (a, b) = sn.stops[idx];
+                self.ed.buf.delete(a, b);
+                self.ed.cursor = a;
+                let d = b.col as i64 - a.col as i64;
+                let sn = self.snip.as_mut().unwrap();
+                sn.sel = false;
+                for (i, (x, y)) in sn.stops.iter_mut().enumerate() {
+                    if i == idx {
+                        y.col = a.col;
+                    } else if x.row == a.row && x.col >= b.col {
+                        x.col -= d as usize;
+                        if y.row == a.row {
+                            y.col -= d as usize;
+                        }
+                    }
+                }
+                return matches!(k, Key::Backspace | Key::Delete);
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Depois de uma tecla de texto no modo snippet: as paradas da mesma linha andam junto.
+    fn snip_ajustar(&mut self, antes: (usize, usize, usize)) {
+        let Some(sn) = self.snip.as_mut() else { return };
+        let (row, col, len) = antes;
+        if self.ed.cursor.row != row || self.ed.buf.line_count() == 0 {
+            self.snip = None;
+            return;
+        }
+        let d = self.ed.buf.line_len(row) as i64 - len as i64;
+        if d == 0 {
+            return;
+        }
+        for (x, y) in sn.stops.iter_mut() {
+            if x.row == row && x.col > col {
+                x.col = (x.col as i64 + d).max(0) as usize;
+            }
+            if y.row == row && y.col >= col {
+                y.col = (y.col as i64 + d).max(0) as usize;
+            }
+        }
     }
 
     /// Servidor, arquivo e posição do cursor (coluna UTF-16); avisa quando não há servidor.
@@ -2202,6 +2328,14 @@ impl Session {
                 _ => {}
             }
         }
+        if self.ed.mode() != Mode::Insert {
+            self.snip = None;
+        }
+        if self.snip.is_some() && self.snip_tecla(k) {
+            return;
+        }
+        let antes_snip = (self.ed.cursor.row, self.ed.cursor.col, self.ed.buf.line_len(self.ed.cursor.row));
+        let tinha_snip = self.snip.is_some();
         let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
@@ -2220,6 +2354,9 @@ impl Session {
             return self.lsp_consulta(if k == Key::Char('r') { PedidoLsp::Referencias } else { PedidoLsp::TipoDaDefinicao });
         }
         self.ed.feed(&[k]);
+        if tinha_snip {
+            self.snip_ajustar(antes_snip);
+        }
         self.comp_update();
         self.sig_update(k);
         // `:s`, `:d`, `:g`... o núcleo resolve; `:w`, `:q`, `:e`... voltam para cá
@@ -2594,6 +2731,12 @@ impl Session {
             // em bloco os dois cantos ficam como estão (o retângulo vem das colunas visuais de cada um)
             let (lo, hi) = if a <= c || k == VKind::Block { (a, c) } else { (c, a) };
             (k, (lo.row, lo.col), (hi.row, hi.col))
+        });
+        // valor padrão do snippet: aparece selecionado até a primeira tecla
+        let sel = sel.or_else(|| {
+            let sn = self.snip.as_ref().filter(|s| s.sel)?;
+            let (a, b) = sn.stops[sn.idx];
+            Some((VKind::Char, (a.row, a.col), (b.row, b.col.saturating_sub(1))))
         });
         let search = self.ed.search_line();
         // realce da busca: ao digitar já mostra as ocorrências; `:noh` apaga até mudar o padrão
@@ -3596,6 +3739,45 @@ mod testes {
         assert!(s.quit);
         let s2 = Session::open(&arq);
         assert_eq!((s2.ed.cursor.row, s2.ed.cursor.col), (2, 1));
+    }
+
+    #[test]
+    fn snippet_pula_entre_paradas_com_tab_e_troca_o_valor_padrao() {
+        use crate::lsp::Item;
+        let mut s = Session::new("fn x() {\n    ma\n}\n", None);
+        s.resize(80, 20.0);
+        s.ed.set_cursor(1, 5);
+        s.feed("A");
+        assert_eq!(s.ed.cursor.col, 6);
+        let item = Item {
+            label: "main".into(),
+            filtro: "main".into(),
+            texto: "main(a, b)".into(),
+            detalhe: String::new(),
+            tipo: 3,
+            inicio: None,
+            paradas: vec![(5, 6), (8, 9), (10, 10)],
+            extras: vec![((0, 0), (0, 0), "use std::io;\n".into())],
+        };
+        s.comp = Some(Comp { start: Pos::new(1, 4), items: vec![item], shown: vec![(0, vec![])], sel: 0 });
+        s.comp_accept();
+        // o import entrou acima (as paradas e o cursor desceram uma linha) e `a` está selecionado
+        assert_eq!(s.ed.buf.line(0), "use std::io;");
+        assert_eq!(s.ed.buf.line(2), "    main(a, b)");
+        let m = modelo(&mut s);
+        assert_eq!(m.selection, Some((VKind::Char, (2, 9), (2, 9))));
+        // digitar troca o valor padrão; Tab vai para `b`, que vem deslocado
+        s.feed("foo<Tab>");
+        assert_eq!(s.ed.buf.line(2), "    main(foo, b)");
+        let m = modelo(&mut s);
+        assert_eq!(m.selection, Some((VKind::Char, (2, 14), (2, 14))));
+        s.feed("barra<Tab>");
+        assert_eq!(s.ed.buf.line(2), "    main(foo, barra)");
+        // última parada (`$0`, o fim do texto inserido): encerra o modo
+        assert!(s.snip.is_none());
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (2, 20));
+        s.feed("<Esc>");
+        assert_eq!(s.ed.mode(), Mode::Normal);
     }
 
     #[test]
