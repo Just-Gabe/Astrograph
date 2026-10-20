@@ -20,17 +20,30 @@ pub(super) struct BlocoIns {
     pub esquerda: usize,
 }
 
-struct Bloco {
-    r0: usize,
-    r1: usize,
+/// O que um bloco pega de uma linha, com as metades cortadas de tab/caractere largo.
+struct Fatia {
+    c0: usize,
+    c1: usize,
+    /// espaços que sobram à esquerda / à direita no lugar do caractere cortado
+    antes: usize,
+    depois: usize,
+    /// colunas visuais do bloco que a linha cobre
+    dentro: usize,
+    /// texto para o registro (a metade cortada vira espaços)
+    copia: String,
+}
+
+pub(super) struct Bloco {
+    pub(super) r0: usize,
+    pub(super) r1: usize,
     /// primeira e última coluna visual (inclusive)
-    l: usize,
-    r: usize,
-    ate_o_fim: bool,
+    pub(super) l: usize,
+    pub(super) r: usize,
+    pub(super) ate_o_fim: bool,
 }
 
 impl Editor {
-    fn bloco(&self) -> Option<Bloco> {
+    pub(super) fn bloco(&self) -> Option<Bloco> {
         let vs = self.vis?;
         let (a, c) = (vs.anchor, self.cursor);
         let (la, lc) = (self.buf.line(a.row), self.buf.line(c.row));
@@ -40,7 +53,7 @@ impl Editor {
     }
 
     /// Caracteres da linha `row` que o bloco cobre: `[c0, c1)`.
-    fn bloco_trecho(&self, row: usize, b: &Bloco) -> (usize, usize) {
+    pub(super) fn bloco_trecho(&self, row: usize, b: &Bloco) -> (usize, usize) {
         let linha = self.buf.line(row);
         let mut v = 0;
         let (mut c0, mut c1) = (None, 0);
@@ -65,6 +78,40 @@ impl Editor {
         }
     }
 
+    /// Como `bloco_trecho`, mas contando os caracteres que o bloco corta pela metade (tab, caractere
+    /// largo): a metade de fora fica como espaços e a de dentro vai para o registro como espaços.
+    fn bloco_fatia(&self, row: usize, b: &Bloco) -> Fatia {
+        let (c0, c1) = self.bloco_trecho(row, b);
+        let linha = self.buf.line(row);
+        let (mut v, mut antes, mut depois, mut dentro) = (0usize, 0usize, 0usize, 0usize);
+        let mut copia = String::new();
+        let r = if b.ate_o_fim { usize::MAX / 2 } else { b.r };
+        for (i, ch) in linha.chars().enumerate() {
+            let w = motion::char_width(ch, v);
+            let (vs, ve) = (v, v + w - 1);
+            v += w;
+            if i < c0 || i >= c1 || !(vs <= r && ve >= b.l) {
+                continue;
+            }
+            let (ini, fim) = (vs.max(b.l), ve.min(r));
+            dentro += fim - ini + 1;
+            let esq = vs < b.l;
+            let dir = ve > r;
+            if esq {
+                antes = b.l - vs;
+            }
+            if dir {
+                depois = ve - r;
+            }
+            if esq || dir {
+                copia.push_str(&" ".repeat(fim - ini + 1));
+            } else {
+                copia.push(ch);
+            }
+        }
+        Fatia { c0, c1, antes, depois, dentro, copia }
+    }
+
     /// Coluna (em caracteres) onde cai a coluna visual `vcol`; `None` se a linha é mais curta.
     fn col_na_vcol(&self, row: usize, vcol: usize) -> Option<usize> {
         let linha = self.buf.line(row);
@@ -87,8 +134,9 @@ impl Editor {
         let Some(b) = self.bloco() else { return };
         let _ = count;
         // `$` no bloco: os trechos vão até o fim de cada linha
-        let trechos: Vec<(usize, usize)> = (b.r0..=b.r1).map(|r| self.bloco_trecho(r, &b)).collect();
-        let texto: Vec<String> = (b.r0..=b.r1).zip(&trechos).map(|(r, &(c0, c1))| self.buf.line(r).chars().skip(c0).take(c1 - c0).collect()).collect();
+        let fatias: Vec<Fatia> = (b.r0..=b.r1).map(|r| self.bloco_fatia(r, &b)).collect();
+        let trechos: Vec<(usize, usize)> = fatias.iter().map(|f| (f.c0, f.c1)).collect();
+        let texto: Vec<String> = fatias.iter().map(|f| f.copia.clone()).collect();
         let topo = Pos::new(b.r0, trechos[0].0);
         // largura do registro: o retângulo todo, ou (com `$`) a linha mais comprida do trecho
         let larg = if b.ate_o_fim { texto.iter().map(|t| motion::vcol_start(t, t.chars().count())).max().unwrap_or(0).max(1) } else { b.r - b.l + 1 };
@@ -98,7 +146,7 @@ impl Editor {
             'y' => {
                 self.bloco_sair();
                 self.store_bwidth = larg;
-                self.store(None, texto.join("\n"), false, false);
+                self.store(self.vreg, texto.join("\n"), false, false);
                 self.cursor = Pos::new(b.r0, trechos[0].0.min(topo_col(self)));
                 self.fix_cursor();
                 self.curswant = self.want_here();
@@ -113,14 +161,18 @@ impl Editor {
                 self.bloco_sair();
                 self.checkpoint();
                 self.store_bwidth = larg;
-                self.store(None, texto.join("\n"), false, true);
+                self.store(self.vreg, texto.join("\n"), false, true);
                 for (k, r) in (b.r0..=b.r1).enumerate() {
-                    let (c0, c1) = trechos[k];
-                    if c1 > c0 {
-                        self.buf.delete(Pos::new(r, c0), Pos::new(r, c1));
+                    let f = &fatias[k];
+                    if f.c1 > f.c0 {
+                        self.buf.delete(Pos::new(r, f.c0), Pos::new(r, f.c1));
+                        // o caractere cortado deixa espaços no lugar da metade que ficou de fora
+                        if f.antes + f.depois > 0 {
+                            self.buf.insert(Pos::new(r, f.c0), &" ".repeat(f.antes + f.depois));
+                        }
                     }
                 }
-                self.cursor = Pos::new(b.r0, trechos[0].0.min(self.buf.line_len(b.r0)));
+                self.cursor = Pos::new(b.r0, (trechos[0].0 + fatias[0].antes).min(self.buf.line_len(b.r0)));
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }
@@ -128,14 +180,18 @@ impl Editor {
                 self.bloco_sair();
                 self.checkpoint();
                 self.store_bwidth = larg;
-                self.store(None, texto.join("\n"), false, true);
+                self.store(self.vreg, texto.join("\n"), false, true);
                 for (k, r) in (b.r0..=b.r1).enumerate() {
-                    let (c0, c1) = trechos[k];
-                    if c1 > c0 {
-                        self.buf.delete(Pos::new(r, c0), Pos::new(r, c1));
+                    let f = &fatias[k];
+                    if f.c1 > f.c0 {
+                        self.buf.delete(Pos::new(r, f.c0), Pos::new(r, f.c1));
+                        if f.antes + f.depois > 0 {
+                            self.buf.insert(Pos::new(r, f.c0), &" ".repeat(f.antes + f.depois));
+                        }
                     }
                 }
-                self.cursor = Pos::new(b.r0, trechos[0].0.min(self.buf.line_len(b.r0)));
+                // o texto entra depois dos espaços da metade que ficou à esquerda
+                self.cursor = Pos::new(b.r0, (trechos[0].0 + fatias[0].antes).min(self.buf.line_len(b.r0)));
                 self.begin_insert_state('c', 1, None);
                 if b.r1 > b.r0 {
                     self.block_ins = Some(BlocoIns { linhas: b.r0 + 1..=b.r1, vcol: b.l, preencher: false, fim_da_linha: false, inicio: self.cursor, esquerda: b.l });
@@ -198,12 +254,13 @@ impl Editor {
         self.checkpoint();
         let mut primeiro = None;
         for r in b.r0..=b.r1 {
-            let (c0, c1) = self.bloco_trecho(r, &b);
-            if c1 > c0 {
-                let novo: String = std::iter::repeat(ch).take(c1 - c0).collect();
-                self.buf.delete(Pos::new(r, c0), Pos::new(r, c1));
-                self.buf.insert(Pos::new(r, c0), &novo);
-                primeiro.get_or_insert(c0);
+            let f = self.bloco_fatia(r, &b);
+            if f.c1 > f.c0 {
+                // cada coluna do bloco vira `ch`; o que sobra de um caractere cortado vira espaço
+                let novo = format!("{}{}{}", " ".repeat(f.antes), ch.to_string().repeat(f.dentro), " ".repeat(f.depois));
+                self.buf.delete(Pos::new(r, f.c0), Pos::new(r, f.c1));
+                self.buf.insert(Pos::new(r, f.c0), &novo);
+                primeiro.get_or_insert(f.c0);
             }
         }
         let c = primeiro.unwrap_or(0);

@@ -39,7 +39,8 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
 | `p`/`P`/`gp`/`gP` no visual (substitui a seleção; linha x caractere, registrador, um passo de desfazer) | **97%** (145/150) |
 | Comandos `:` do núcleo: faixas (`%`, `1,3`, `'<,'>`, `.+1`, `'a`), `:s` (grupos, `&`, `\\u \\U`, flags `g i I e`), `:d`, `:y`, `:j`, `:>` `:<`, `:g`/`:v`, `:normal` e `:N` | **98%** (196/200) |
-| Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **96%** (138/150; sobram blocos que cortam tab ou caractere largo) |
+| Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **97%** (sobram `A`/`I` em bloco que corta caractere largo e `y` com a ponta num tab) |
+| `<C-a>`/`<C-x>` (decimal, `0x`, `0b`, negativos, zeros à esquerda; visual e `g<C-a>`), operadores de caixa `gu gU g~ g?` (`guu`, `gUgU`, objetos, `.`), `.` depois de operador visual (mesmo tamanho a partir do cursor), registradores (`"A` anexa, `"_` buraco negro, `".`, `"/`, `"0`-`"9`, `"x` no visual, `.` com `"1p`→`"2p`), `<C-r>{reg}` na inserção, bloco que corta tab ou caractere largo (a metade vira espaço) | **99%** em `num`, `caso`, `reg`; 98% em `ponto` e `blk` (contra o nvim 0.11) |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo em **segundo plano** (listar e buscar texto em threads com cancelamento e resultados parciais, 'buscando…' no cabeçalho; lista de arquivos em cache por raiz; letra a mais só procura entre os que já casaram; Enter antes da lista chegar espera e abre) (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
@@ -82,7 +83,8 @@ motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 - Cursor depois de `u` quando o Vim guarda várias entradas de undo para um comando
   (`cj` + texto, por exemplo): o texto fica certo, a coluna/linha do cursor às vezes
   difere.
-- `d%`/`y%` em linha sem colchete (o Vim inclui a quebra de linha).
+- `d%`/`y%` em linha sem colchete (o Vim inclui a quebra de linha) e `v$d` seguido de `.`.
+- Marcas `'[`, `']`, `'.`, `'^`, jumplist (`<C-o>`/`<C-i>`) e changelist (`g;`/`g,`), folds, `:registers`, `":`/`"%`: ainda não.
 - Comandos que o Vim executa como bloco de undo único junto de outro (`>>dGu`).
 
 ## Ordem do trabalho
