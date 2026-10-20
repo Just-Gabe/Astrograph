@@ -12,7 +12,7 @@ use astrograph_core::VKind;
 
 use crate::anim::{ease_out_cubic, ease_out_expo, lerp, mix_color, Chase, Spring};
 use crate::design::{self as d, Cls, ModeKind};
-use crate::nview::{ToastKind, ViewModel};
+use crate::nview::{PickerView, ToastKind, ViewModel};
 use crate::paint::{Canvas, Font, INTER_REGULAR, INTER_SEMIBOLD};
 
 const MONO_NAMES: &[&str] = &[
@@ -84,6 +84,9 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    pick: Chase,
+    pick_sel: Spring,
+    pick_cache: Option<PickerView>,
     dash_at: Option<Instant>,
     ready_ms: u32,
     hit_id: u64,
@@ -147,6 +150,9 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            pick: Chase::new(0.0, 18.0),
+            pick_sel: Spring::new(0.0, 36.0, 1.0),
+            pick_cache: None,
             dash_at: None,
             ready_ms: 0,
             hit_id: 0,
@@ -222,10 +228,10 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
-        for ch in [&mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
+        for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
             ch.step(dt);
         }
         // avisos: somem sozinhos
@@ -331,6 +337,18 @@ impl Scene {
             self.mode = vm.mode;
             self.mode_label = vm.mode.label().to_string();
         }
+        // buscador
+        match &vm.picker {
+            Some(pv) => {
+                if self.pick_cache.is_none() || self.pick.target < 0.5 {
+                    self.pick_sel.snap(pv.sel as f32);
+                }
+                self.pick_sel.target = pv.sel as f32;
+                self.pick_cache = Some(pv.clone());
+                self.pick.target = 1.0;
+            }
+            None => self.pick.target = 0.0,
+        }
         // paleta de comandos
         if let Some((k, t)) = &vm.cmd {
             self.cmd_cache = (*k, t.clone());
@@ -419,8 +437,8 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
-        let chases = [&self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
+        let springs = [&self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
         let (_, blink_wake) = self.blink(now);
@@ -694,10 +712,12 @@ impl Scene {
 
     fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
         // escurece o fundo atrás da paleta
-        if self.cmd.v > 0.01 {
-            c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * self.cmd.v);
+        let veil = self.cmd.v.max(self.pick.v);
+        if veil > 0.01 {
+            c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
         }
         self.paint_palette(c, (w, h, s));
+        self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
     }
 
@@ -868,6 +888,81 @@ impl Scene {
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+    }
+
+    /// Buscador: campo de texto, lista com o trecho que casou em destaque e seleção que desliza.
+    fn paint_picker(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let p = self.pick.v;
+        if p < 0.01 {
+            return;
+        }
+        let Some(pv) = self.pick_cache.clone() else { return };
+        let e = ease_out_expo(p);
+        let rows = pv.items.len().max(1) as f32;
+        let (pw0, row_h, head) = ((680.0 * s).min(w - 48.0 * s), 34.0 * s, 56.0 * s);
+        let ph0 = head + rows * row_h + 18.0 * s;
+        let k = lerp(0.965, 1.0, e);
+        let (pw, ph) = (pw0 * k, ph0 * k);
+        let x = ((w - pw) / 2.0).round();
+        let y = (h * 0.14 + (1.0 - e) * -8.0 * s).round();
+        c.shadow(x, y, pw, ph, 16.0 * s, 34.0 * s, 14.0 * s, d::BLACK, 0.6 * p);
+        c.rrect(x, y, pw, ph, 16.0 * s, d::SURFACE_HI, 0.985 * p);
+        c.rrect_border(x, y, pw, ph, 16.0 * s, 1.0, d::WHITE, 0.11 * p);
+        // campo
+        let mid = y + head / 2.0 * k;
+        let ipx = 13.0 * s;
+        c.text(&mut self.ui_semi, ipx, x + 22.0 * s, mid + ipx * 0.36, &pv.title, d::DIM, p);
+        let tw0 = self.ui_semi.measure(&pv.title, ipx);
+        let px = self.font_px * 1.05;
+        let tx = x + 22.0 * s + tw0 + 16.0 * s;
+        let mut pen = tx;
+        for ch in pv.query.chars() {
+            let cw = self.mono.advance(ch, px);
+            c.glyph_at(&mut self.mono, px, pen, mid + px * 0.34, ch, d::TEXT_STRONG, p);
+            pen += cw;
+        }
+        c.rrect(pen + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+        let cnt = format!("{}", pv.total);
+        let cw = self.ui.measure(&cnt, 12.0 * s);
+        c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw, mid + 12.0 * s * 0.36, &cnt, d::FAINT, p);
+        c.rect((x + 14.0 * s) as i32, (y + head - 2.0 * s) as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::WHITE, 0.07 * p);
+        // lista
+        let top = y + head + 6.0 * s;
+        if pv.items.is_empty() {
+            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::DIM, p);
+            return;
+        }
+        // seleção desliza entre as linhas
+        let sy = top + self.pick_sel.x * row_h * k;
+        c.rrect(x + 8.0 * s, sy, pw - 16.0 * s, row_h * k, 9.0 * s, d::ACCENT, 0.22 * p);
+        let fpx = self.font_px;
+        for (i, it) in pv.items.iter().enumerate() {
+            let base = top + i as f32 * row_h * k + row_h * k * 0.5 + fpx * 0.34;
+            let a = p * if i == pv.sel { 1.0 } else { 0.86 };
+            let mut pen = x + 22.0 * s;
+            let maxx = x + pw - 22.0 * s;
+            for (j, ch) in it.text.chars().enumerate() {
+                let cw = self.mono.advance(ch, fpx);
+                if pen + cw > maxx {
+                    break;
+                }
+                let hit = it.hits.contains(&j);
+                let col = if hit { d::ACCENT_SOFT } else if i == pv.sel { d::TEXT_STRONG } else { d::TEXT };
+                c.glyph_at(&mut self.mono, fpx, pen, base, ch, col, a);
+                pen += cw;
+            }
+            if !it.detail.is_empty() {
+                pen += 18.0 * s;
+                for ch in it.detail.chars() {
+                    let cw = self.mono.advance(ch, fpx * 0.92);
+                    if pen + cw > maxx {
+                        break;
+                    }
+                    c.glyph_at(&mut self.mono, fpx * 0.92, pen, base, ch, d::DIM, a);
+                    pen += cw;
+                }
+            }
+        }
     }
 
     fn paint_toast(&mut self, c: &mut Canvas, lay: &Layout, (w, _h, s): (f32, f32, f32)) {
@@ -1237,12 +1332,47 @@ mod testes {
             b = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
-        s.feed("f");
+        s.feed("a");
         let vm = s.view_model();
-        assert!(vm.dash && vm.toast.is_some(), "f ainda não existe: avisa e segue na tela inicial");
+        assert!(vm.dash && vm.toast.is_some(), "a ainda não existe: avisa e segue na tela inicial");
+        s.feed("f");
+        assert!(s.view_model().picker.is_some(), "f abre o buscador de arquivos");
+        s.feed("<Esc>");
         s.feed("n");
         let vm = s.view_model();
         assert!(!vm.dash && vm.mode == ModeKind::Insert, "n começa a escrever");
+    }
+
+    #[test]
+    fn buscador_entra_com_fade_e_mostra_resultados() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("x\n", None);
+        let d = std::env::temp_dir().join(format!("astrograph-cena-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        std::fs::write(d.join("um.txt"), "1").unwrap();
+        std::fs::write(d.join("dois.txt"), "2").unwrap();
+        s.feed(" ff");
+        let _ = &d;
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        let antes = quadro(&mut sc, &vm, 800, 600, t0);
+        s.feed("ff");
+        let vm = s.view_model();
+        assert!(vm.picker.is_some());
+        let mut depois = antes.clone();
+        for i in 1..40 {
+            depois = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(antes.iter().zip(&depois).filter(|(a, b)| a != b).count() > 2000);
+        s.feed("<Esc>");
+        let vm = s.view_model();
+        for i in 40..100 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.pick.v < 0.01, "fecha com fade");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

@@ -13,6 +13,7 @@ mod grid;
 mod realce;
 mod render;
 mod anim;
+mod busca;
 mod design;
 mod native;
 mod nscene;

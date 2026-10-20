@@ -23,6 +23,24 @@ pub enum ToastKind {
     Done,
 }
 
+/// Uma linha do buscador: texto, posições destacadas (em caracteres) e detalhe à direita.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PickItem {
+    pub text: String,
+    pub hits: Vec<usize>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PickerView {
+    pub title: String,
+    pub query: String,
+    pub items: Vec<PickItem>,
+    pub sel: usize,
+    /// quantos itens existem no total (os mostrados são os melhores)
+    pub total: usize,
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -55,6 +73,7 @@ pub struct ViewModel {
     pub hits_id: u64,
     /// tela inicial (nenhum arquivo, buffer vazio) em vez do texto
     pub dash: bool,
+    pub picker: Option<PickerView>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -81,6 +100,7 @@ impl ViewModel {
             hits: Vec::new(),
             hits_id: 0,
             dash: false,
+            picker: None,
             flash: None,
         }
     }
