@@ -435,7 +435,10 @@ impl Scene {
         let (w, h) = (c.w as f32, c.h as f32);
         let top_px = self.top.x - self.over.x;
         let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
-        c.set_clip(0, 0, c.w, clip_bottom);
+        // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
+        // sem invadir o título nem a base, mesmo quando a mola passa do alvo
+        let edit = (0, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
         let hl_y = lay.text_y + self.hl_y.x - top_px;
@@ -481,6 +484,8 @@ impl Scene {
             }
         }
 
+        // o texto rola por baixo do véu do título
+        c.set_clip(0, 0, c.w, clip_bottom);
         // linhas visíveis
         let pad = (self.shift.x.abs() / lay.line_h).ceil() as i64;
         let first = ((top_px / lay.line_h).floor() as i64 - 1 - pad).max(0) as usize;
@@ -488,6 +493,8 @@ impl Scene {
         let gpx = self.font_px * 0.84;
         let cur_row = vm.cursor.0;
         let mut classes: Vec<Option<Cls>> = Vec::new();
+        // par de colchetes sob o cursor
+        let pair: Vec<(usize, usize)> = match_bracket(vm).map(|m| vec![m, vm.cursor]).unwrap_or_default();
         for row in first..last {
             let slide = if row >= self.shift_row { self.shift.x } else { 0.0 };
             let y = lay.text_y + row as f32 * lay.line_h - top_px + slide;
@@ -495,6 +502,21 @@ impl Scene {
                 continue;
             }
             let base = y + self.ascent;
+            // guias de recuo: linhas finas a cada 4 colunas dentro do recuo
+            let ind = indent_cols(vm, row);
+            let mut g = 0;
+            while g < ind {
+                let gx = lay.text_x + (g as f32 - vm.left as f32) * lay.char_w;
+                if gx >= lay.text_x - 1.0 {
+                    c.rect(gx.round() as i32, y as i32, 1.max(s as i32), lay.line_h as i32, d::WHITE, 0.07);
+                }
+                g += 4;
+            }
+            for &(mr, mc) in pair.iter().filter(|b| b.0 == row) {
+                let l = vm.line(mr);
+                let vx = lay.text_x + (vcol_start(&l, mc) as f32 - vm.left as f32) * lay.char_w;
+                c.rrect(vx - 1.0 * s, y + 2.0, lay.char_w + 2.0 * s, lay.line_h - 4.0, 4.0 * s, d::ACCENT, 0.30);
+            }
             let ra = if row >= self.fade_rows.0 && row < self.fade_rows.1 { self.fade.v.clamp(0.0, 1.0) } else { 1.0 };
             // número da linha
             let num = (row + 1).to_string();
@@ -533,8 +555,25 @@ impl Scene {
             }
         }
 
-        // cursor
+        // arquivo vazio e sem nome: tela de boas-vindas
+        if vm.name == "Sem nome" && vm.lines == 1 && vm.line(0).is_empty() && vm.cmd.is_none() {
+            let cx = w / 2.0;
+            let cy = h * 0.40;
+            let tpx = 38.0 * s;
+            let tw = self.ui_semi.measure("Astrograph", tpx);
+            c.text(&mut self.ui_semi, tpx, cx - tw / 2.0, cy, "Astrograph", d::TEXT_STRONG, 0.92);
+            let lines = ["i  começar a escrever", ":e arquivo  abrir um arquivo", ":q  sair"];
+            for (n, l) in lines.iter().enumerate() {
+                let px = 14.0 * s;
+                let lw = self.ui.measure(l, px);
+                c.text(&mut self.ui, px, cx - lw / 2.0, cy + 40.0 * s + n as f32 * 26.0 * s, l, d::DIM, 0.9);
+            }
+        }
+
+        // cursor: de volta à área do editor
+        c.set_clip(edit.0, edit.1, edit.2, edit.3);
         self.paint_cursor(c, vm, lay, top_px, now);
+        c.set_clip(0, 0, c.w, clip_bottom);
 
         // barra de rolagem
         if self.bar.v > 0.01 && vm.lines as f32 * lay.line_h > h {
@@ -621,8 +660,8 @@ impl Scene {
                     c.set_clip(x as i32, (y + 1.0) as i32, (x + wpx) as i32 + 1, (y + lay.line_h) as i32);
                     c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::BG, alpha);
                     c.reset_clip();
-                    // continua valendo o corte do conteúdo
-                    c.set_clip(0, 0, c.w, (c.h as f32 - d::M.bottom * s * 0.55) as i32);
+                    // continua valendo o corte do editor
+                    c.set_clip(0, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
                 }
             }
         }
@@ -747,6 +786,80 @@ impl Scene {
         c.rrect(x + 18.0 * s, y + bh / 2.0 - 4.0 * s, 8.0 * s, 8.0 * s, 4.0 * s, col, p);
         c.text(&mut self.ui, tpx, x + 36.0 * s, y + bh / 2.0 + tpx * 0.36, &text, d::TEXT_STRONG, p);
     }
+}
+
+/// Colunas de recuo da linha (tab = 4); linha vazia herda a da próxima com texto.
+fn indent_cols(vm: &ViewModel, row: usize) -> usize {
+    for r in row..(row + 20).min(vm.lines) {
+        let l = vm.line(r);
+        if l.trim().is_empty() {
+            continue;
+        }
+        let mut n = 0;
+        for ch in l.chars() {
+            match ch {
+                ' ' => n += 1,
+                '\t' => n += 4 - n % 4,
+                _ => break,
+            }
+        }
+        return n;
+    }
+    0
+}
+
+/// Colchete que casa com o que está sob o cursor (busca limitada a 600 linhas).
+fn match_bracket(vm: &ViewModel) -> Option<(usize, usize)> {
+    let (row, col) = vm.cursor;
+    let line = vm.line(row);
+    let ch = line.chars().nth(col)?;
+    let (open, close, fwd) = match ch {
+        '(' => ('(', ')', true),
+        '[' => ('[', ']', true),
+        '{' => ('{', '}', true),
+        ')' => ('(', ')', false),
+        ']' => ('[', ']', false),
+        '}' => ('{', '}', false),
+        _ => return None,
+    };
+    let mut depth = 0i32;
+    if fwd {
+        for r in row..(row + 600).min(vm.lines) {
+            let l = vm.line(r);
+            for (i, c) in l.chars().enumerate() {
+                if r == row && i < col {
+                    continue;
+                }
+                if c == open {
+                    depth += 1;
+                } else if c == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((r, i));
+                    }
+                }
+            }
+        }
+    } else {
+        for r in (row.saturating_sub(600)..=row).rev() {
+            let l = vm.line(r);
+            let chars: Vec<char> = l.chars().collect();
+            for i in (0..chars.len()).rev() {
+                if r == row && i > col {
+                    continue;
+                }
+                if chars[i] == close {
+                    depth += 1;
+                } else if chars[i] == open {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((r, i));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -950,6 +1063,52 @@ mod testes {
             quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
         }
         assert!(sc.fade.v > 0.98);
+    }
+
+    #[test]
+    fn colchetes_casam_e_recuo_conta_tabs() {
+        let mut s = Session::new("fn a() {\n\tif (x) {\n\n\t\tb\n\t}\n}\n", None);
+        s.resize(80, 20.0);
+        let vm = s.view_model();
+        assert_eq!(match_bracket(&vm), None);
+        s.feed("$");
+        let vm = s.view_model();
+        assert_eq!(match_bracket(&vm), Some((5, 0)));
+        assert_eq!(indent_cols(&vm, 3), 8, "linha vazia herda a da próxima");
+        assert_eq!(indent_cols(&vm, 1), 4);
+    }
+
+    #[test]
+    fn cursor_e_destaque_ficam_presos_a_area_do_texto() {
+        let Some(mut sc) = cena() else { return };
+        let texto: String = (0..300).map(|i| format!("linha numero {i}\n")).collect();
+        let mut s = Session::new(&texto, None);
+        let (w, h) = (640u32, 400u32);
+        let lay = sc.layout(w, h, 300);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, w, h, t0);
+        let mut n = 0u64;
+        for passo in ["G", "50k", "100k", "300j", "gg", "G"] {
+            s.feed(passo);
+            let vm = s.view_model();
+            for _ in 0..30 {
+                n += 1;
+                let buf = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(8 * n));
+                // faixa do título e faixa entre o texto e a pílula: sem a cor do cursor
+                let faixas = [(0u32, (lay.text_y as u32).saturating_sub(2)), ((h as f32 - d::M.bottom) as u32 + 1, h - 56)];
+                for (y0, y1) in faixas {
+                    for y in y0..y1 {
+                        for x in 0..w {
+                            let px = buf[(y * w + x) as usize];
+                            let azul = (px & 0xff) > 0xc0 && ((px >> 8) & 0xff) > 0x60 && ((px >> 16) & 0xff) < 0x40;
+                            assert!(!azul, "cursor invadiu a faixa y={y} no passo {passo}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

@@ -1,7 +1,9 @@
 # Astrograph
 
-**Um Neovim pronto para usar**, baseado no [AstroNvim](https://github.com/AstroNvim/AstroNvim),
+**Um editor pronto para usar**, baseado no [AstroNvim](https://github.com/AstroNvim/AstroNvim),
 com **agentes de IA dentro do editor**, abertura mais rápida e tudo em **português**.
+O app em Rust é o principal; o Neovim com a config do Astrograph segue como espelho
+para quem prefere o terminal.
 
 📖 **Documentação:** <https://just-gabe.github.io/Astrograph/>
 
@@ -65,6 +67,10 @@ rodar `nvim`.
 - **Plugins só desta máquina**: specs do lazy em
   `%LOCALAPPDATA%\astrograph-local\specs` (ou `$ASTROGRAPH_LOCAL`), fora do git.
   São código Lua executado na abertura do editor: ponha ali só o que é seu.
+- **Gerenciador de arquivos TUI**: com yazi, lf, nnn, ranger ou vifm instalado,
+  `<Leader>fm` (arquivo atual), `<Leader>fM` (raiz do projeto) e `<Leader>fv`
+  (divisão vertical) abrem o gerenciador; na árvore, `T` abre a pasta sob o cursor
+  (via [tfm.nvim](https://github.com/Rolv-Apneseth/tfm.nvim)).
 - **`:Astrograph`**: `atualizar`, `saude`, `agentes`, `configurar`, `login`, `sessoes`, `atalhos`, `docs`.
 
 | Editor | Menu de atalhos (`Espaço`) |
@@ -79,16 +85,43 @@ rodar `nvim`.
 
 ### UI nativa (em desenvolvimento)
 
-Uma janela própria em Rust, com o Neovim como motor
-([`prototype/astrograph-ui`](prototype/astrograph-ui)). Fora do terminal, o
-texto desliza por pixel ao rolar, o cursor desliza e pisca com fade, e as
-janelas flutuantes ganham sombra.
+Uma janela própria em Rust ([`prototype/astrograph-ui`](prototype/astrograph-ui)),
+com dois motores: o Neovim (padrão) e o **motor nativo em Rust, sem Neovim**
+(`ASTROGRAPH_ENGINE=native astrograph-ui [arquivo]`), que reproduz os atalhos do
+Vim e é testado contra o Neovim de verdade (mais de 1000 sequências de teclas).
+Cobre movimentos, operadores, objetos de texto, modo visual, busca, registradores,
+desfazer/refazer e comandos `:w :q :wq :e`; o restante (visual em bloco, marcas,
+macros, `:s`) ainda é do Neovim.
+
+No motor nativo o visual deixa de ser uma grade de terminal e vira uma cena de
+pixels no estilo Apple (fonte Inter na interface, cantos arredondados, sombras)
+com animações próprias, todas em mola:
+
+- rolagem suave com overscroll elástico; cursor que desliza e pisca com fade;
+- clarão ao copiar, realce da busca com fade, linhas apagadas/coladas que deslizam;
+- paleta de comandos com fade, avisos que deslizam, pílula de modo na base;
+- guias de recuo, destaque do par de colchetes e tela de boas-vindas.
+
+Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.
+
+| Editor | Busca |
+| --- | --- |
+| ![Editor nativo](docs/img/ui/nativo-editor.png) | ![Busca nativa](docs/img/ui/nativo-busca.png) |
+| **Paleta de comandos** | |
+| ![Paleta nativa](docs/img/ui/nativo-paleta.png) | |
+
+No app com Neovim, o texto desliza por pixel ao rolar, o cursor desliza e pisca com
+fade, e as janelas flutuantes ganham sombra:
 
 | Abertura | Rolagem por pixel |
 | --- | --- |
 | ![Abertura na UI nativa](docs/img/ui/abertura.gif) | ![Rolagem suave](docs/img/ui/rolagem.gif) |
 | **Cursor: desliza, muda de forma e pisca com fade** | **Busca com sombra** |
 | ![Cursor](docs/img/ui/cursor.gif) | ![Painel com sombra](docs/img/ui/painel.gif) |
+
+Em segundo plano o app prepara o projeto (git, parsers, ferramentas) com um
+indicador discreto no canto; `:Astrograph atualizar` é transacional, com backup e
+rollback automático. Detalhes em [`docs/motor-nativo.md`](docs/motor-nativo.md).
 
 ## Primeiros passos
 
@@ -115,7 +148,9 @@ core/       fork do core do AstroNvim (v6.1.0) com as otimizações
 template/   a config que o Neovim abre
 theme/      colorschemes astrograph e astrograph-light
 tools/      geradores da arte da tela inicial e dos prints
-prototype/  a UI nativa em Rust (astrograph-ui)
+prototype/  o app em Rust: astrograph-ui (janela), astrograph-core (motor modal),
+            astrograph-syntax (tree-sitter), astrograph-servicos (preparo e
+            atualização), astrograph-agent
 docs/       documentação (GitHub Pages) e prints
 ```
 
