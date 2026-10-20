@@ -29,6 +29,8 @@ const MONO_BOLD: &[&str] = &["JetBrainsMonoNerdFontMono-Bold.ttf", "JetBrainsMon
 
 /// Quanto tempo o aviso fica na tela.
 const TOAST_MS: u128 = 3200;
+/// Altura da barra de abas (px lógicos).
+const TAB_H: f32 = 32.0;
 
 pub struct Frame {
     /// ainda há animação em curso: peça outro quadro logo
@@ -84,6 +86,9 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    tabs_n: usize,
+    doc_seen: u64,
+    tab_rects: Vec<(f32, f32)>,
     side: Spring,
     term: Spring,
     term_cache: Option<TermView>,
@@ -157,6 +162,9 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            tabs_n: 0,
+            doc_seen: 0,
+            tab_rects: Vec::new(),
             side: Spring::new(0.0, 24.0, 1.0),
             term: Spring::new(0.0, 22.0, 1.0),
             term_cache: None,
@@ -217,7 +225,8 @@ impl Scene {
         let gutter_w = digits * gch;
         let text_x = (gutter_x + gutter_w + 18.0 * s).round();
         let text_x_final = (d::M.pad_x * s + sx_final + gutter_w + 18.0 * s).round();
-        let text_y = (d::M.title_h * s).round();
+        // com duas ou mais abas, a barra de abas fica entre o título e o texto
+        let text_y = (d::M.title_h * s + if self.tabs_n >= 2 { TAB_H * s } else { 0.0 }).round();
         let area_h = h as f32 - text_y - d::M.bottom * s - self.term.target.max(0.0);
         let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
@@ -234,6 +243,27 @@ impl Scene {
         let rows = (((h as f32 * 0.36) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
         let cols = (((w as f32 - self.side.target.max(0.0)) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
         (rows, cols)
+    }
+
+    fn comp_reset(&mut self) {
+        self.flash_at = None;
+        self.shift.snap(0.0);
+        self.over.snap(0.0);
+        self.fade.v = 1.0;
+        self.hit_fade.v = 0.0;
+    }
+
+    /// Clique na barra de abas: qual aba (se houver).
+    pub fn tab_hit(&self, x: f32, y: f32) -> Option<usize> {
+        if self.tabs_n < 2 {
+            return None;
+        }
+        let s = self.scale;
+        let (y0, y1) = (d::M.title_h * s - 4.0 * s, d::M.title_h * s + TAB_H * s);
+        if y < y0 || y > y1 {
+            return None;
+        }
+        self.tab_rects.iter().position(|&(a, b)| x >= a && x <= b)
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -254,6 +284,13 @@ impl Scene {
         let t0 = Instant::now();
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
+        self.tabs_n = vm.tabs.len();
+        // outro documento (aba nova, arquivo trocado): recomeça sem animar a viagem do cursor
+        if vm.doc_id != self.doc_seen {
+            self.doc_seen = vm.doc_id;
+            self.first = true;
+            self.comp_reset();
+        }
         self.term.target = if vm.term.is_some() { (h * 0.36).round() } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
@@ -803,8 +840,44 @@ impl Scene {
         }
 
         c.clip = prev_clip;
+        self.paint_tabs(c, vm, (w, h, s));
         self.paint_overlays(c, vm, lay, (w, h, s));
         self.paint_pill(c, vm, now, (w, h, s));
+    }
+
+    /// Barra de abas: cada aba é uma pílula; a ativa fica em destaque e as modificadas têm um ponto.
+    fn paint_tabs(&mut self, c: &mut Canvas, vm: &ViewModel, (w, _h, s): (f32, f32, f32)) {
+        self.tab_rects.clear();
+        if vm.tabs.len() < 2 {
+            return;
+        }
+        let y0 = d::M.title_h * s - 4.0 * s;
+        let hh = TAB_H * s - 4.0 * s;
+        let px = 12.5 * s;
+        let x_ini = self.side.x.max(0.0) + 14.0 * s;
+        c.rect(x_ini as i32 - 14 * s as i32, (y0 + hh + 2.0 * s) as i32, (w - x_ini) as i32 + 14, 1.max(s as i32), d::WHITE, 0.06);
+        let mut x = x_ini;
+        for (i, t) in vm.tabs.iter().enumerate() {
+            let nome: String = t.name.chars().take(26).collect();
+            let tw = self.ui_semi.measure(&nome, px);
+            let pw = tw + 36.0 * s + if t.modified { 12.0 * s } else { 0.0 };
+            if x + pw > w - 12.0 * s {
+                break;
+            }
+            let ativa = i == vm.tab_active;
+            if ativa {
+                c.rrect(x, y0, pw, hh, 9.0 * s, d::SURFACE_HI, 0.95);
+                c.rrect_border(x, y0, pw, hh, 9.0 * s, 1.0, d::WHITE, 0.09);
+            }
+            let base = y0 + hh / 2.0 + px * 0.36;
+            let cor = if ativa { d::TEXT_STRONG } else { d::DIM };
+            c.text(&mut self.ui_semi, px, x + 18.0 * s, base, &nome, cor, 1.0);
+            if t.modified {
+                c.rrect(x + 18.0 * s + tw + 6.0 * s, base - 8.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
+            }
+            self.tab_rects.push((x, x + pw));
+            x += pw + 6.0 * s;
+        }
     }
 
     fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
@@ -1881,6 +1954,30 @@ mod testes {
             quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
         }
         assert!((sc.layout(w, h, 1).rows - rows0).abs() < 0.01, "e volta ao fechar");
+    }
+
+    #[test]
+    fn barra_de_abas_aparece_com_duas_e_o_clique_acerta_a_aba() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 600u32);
+        let mut s = Session::new("abc\n", None);
+        let lay0 = sc.layout(w, h, 1);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        quadro(&mut sc, &vm, w, h, t0);
+        let y_sem = sc.layout(w, h, 1).text_y;
+        assert!(sc.tab_hit(100.0, 50.0).is_none(), "com uma aba só, sem barra");
+        vm.tabs = vec![crate::nview::TabInfo { name: "um.rs".into(), modified: false }, crate::nview::TabInfo { name: "dois.rs".into(), modified: true }];
+        vm.tab_active = 1;
+        quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16));
+        assert!(sc.layout(w, h, 1).text_y > y_sem + 20.0, "o texto desceu para dar lugar à barra");
+        let (a0, a1) = sc.tab_rects[0];
+        let (b0, b1) = sc.tab_rects[1];
+        let y = d::M.title_h + 8.0;
+        assert_eq!(sc.tab_hit((a0 + a1) / 2.0, y), Some(0));
+        assert_eq!(sc.tab_hit((b0 + b1) / 2.0, y), Some(1));
+        assert_eq!(sc.tab_hit(b1 + 200.0, y), None);
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

@@ -51,6 +51,22 @@ struct Comp {
 
 const COMP_LINHAS: usize = 8;
 
+/// Um servidor de linguagem compartilhado por todas as abas.
+pub type LspRef = std::sync::Arc<std::sync::Mutex<Cliente>>;
+pub type LspPool = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, LspRef>>>;
+
+/// Pedidos que a sessão faz ao espaço de trabalho (abas).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PedidoAba {
+    Nova(Option<PathBuf>),
+    Fechar { forcar: bool },
+    Proxima,
+    Anterior,
+    So,
+}
+
+static PROXIMO_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
@@ -71,7 +87,8 @@ pub struct Session {
     tree_focus: bool,
     term: Option<Term>,
     term_focus: bool,
-    lsp: Option<Cliente>,
+    lsp: Option<LspRef>,
+    lsp_pool: LspPool,
     comp: Option<Comp>,
     comp_req: Option<(i64, Pos)>,
     /// versão do texto em que o completar foi aceito/dispensado: não reabre nela
@@ -100,11 +117,28 @@ pub struct Session {
     hl_id: u64,
     hl_off: bool,
     pub quit: bool,
+    /// identifica o documento (muda a cada sessão nova)
+    pub doc_id: u64,
+    /// dentro do espaço de trabalho: abrir arquivo vira aba nova
+    pub modo_abas: bool,
+    pub abrir_pedido: Option<(PathBuf, Option<(usize, usize)>)>,
+    pub aba_pedido: Option<PedidoAba>,
 }
 
 const SCROLLOFF: f32 = 3.0;
 /// linhas de realce calculadas além da tela, para a rolagem suave não ficar sem cor
 const SPAN_MARGIN: usize = 80;
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // o arquivo fecha no servidor (que segue vivo para as outras abas)
+        if let (Some(c), Some(p)) = (&self.lsp, &self.path) {
+            if let Ok(mut c) = c.lock() {
+                c.fechar(p);
+            }
+        }
+    }
+}
 
 impl Session {
     pub fn new(text: &str, path: Option<PathBuf>) -> Self {
@@ -129,6 +163,7 @@ impl Session {
             term: None,
             term_focus: false,
             lsp: None,
+            lsp_pool: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             comp: None,
             comp_req: None,
             comp_block: u64::MAX,
@@ -156,6 +191,10 @@ impl Session {
             toast_id: 0,
             seq: 0,
             quit: false,
+            doc_id: PROXIMO_DOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            modo_abas: false,
+            abrir_pedido: None,
+            aba_pedido: None,
         }
     }
 
@@ -372,50 +411,56 @@ impl Session {
     // LSP
     // ------------------------------------------------------------------
 
-    /// Liga o servidor de linguagem do arquivo (reaproveita o anterior se for o mesmo programa).
-    pub fn lsp_attach(&mut self, reuse: Option<Cliente>, old_path: Option<PathBuf>) {
+    /// Liga o servidor de linguagem do arquivo (um por programa, compartilhado entre as abas).
+    pub fn lsp_attach(&mut self) {
         let off = std::env::var("ASTROGRAPH_LSP").is_ok_and(|v| v == "0");
         let Some(path) = self.path.clone() else {
             return;
         };
-        let alvo = if off { None } else { lsp::servidor_para(&path) };
-        let (reuse_ok, mut velho) = match (reuse, &alvo) {
-            (Some(c), Some((prog, _, _))) if prog.ends_with(&c.nome) || c.nome == prog.rsplit(['/', '\\']).next().unwrap_or("") => (true, Some(c)),
-            (other, _) => (false, other),
-        };
-        if reuse_ok {
-            let mut c = velho.take().unwrap();
-            if let Some(op) = &old_path {
-                c.fechar(op);
-            }
-            let (_, _, lang) = alvo.clone().unwrap();
-            c.abrir(&path, lang, &self.ed.buf.rope.to_string());
-            self.lsp = Some(c);
-        } else if let Some((prog, args, lang)) = alvo {
-            drop(velho.take());
-            let raiz = git::raiz(path.parent().unwrap_or(&self.root)).unwrap_or_else(|| self.root.clone());
-            let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
-            match Cliente::iniciar(&prog, &args, &raiz, notify) {
-                Ok(mut c) => {
-                    c.abrir(&path, lang, &self.ed.buf.rope.to_string());
-                    self.lsp = Some(c);
-                }
-                Err(_) => self.lsp = None,
-            }
-        }
+        self.lsp = None;
         self.lsp_rev = self.ed.buf.rev;
         self.lsp_diags = std::sync::Arc::new(Vec::new());
+        let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
+            return;
+        };
+        let cli = {
+            let mut pool = self.lsp_pool.lock().unwrap();
+            match pool.get(&prog) {
+                Some(c) => Some(c.clone()),
+                None => {
+                    let raiz = git::raiz(path.parent().unwrap_or(&self.root)).unwrap_or_else(|| self.root.clone());
+                    let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
+                    match Cliente::iniciar(&prog, &args, &raiz, notify) {
+                        Ok(c) => {
+                            let r: LspRef = std::sync::Arc::new(std::sync::Mutex::new(c));
+                            pool.insert(prog.clone(), r.clone());
+                            Some(r)
+                        }
+                        Err(_) => None,
+                    }
+                }
+            }
+        };
+        if let Some(c) = &cli {
+            c.lock().unwrap().abrir(&path, lang, &self.ed.buf.rope.to_string());
+        }
+        self.lsp = cli;
     }
 
     /// Manda o texto novo ao servidor e pega o que ele já respondeu.
     fn lsp_sync(&mut self) {
-        let (Some(c), Some(path)) = (self.lsp.as_mut(), self.path.clone()) else { return };
-        if self.lsp_rev != self.ed.buf.rev {
-            self.lsp_rev = self.ed.buf.rev;
-            c.mudou(&path, &self.ed.buf.rope.to_string());
-        }
+        let (Some(cl), Some(path)) = (self.lsp.clone(), self.path.clone()) else { return };
+        let (diags, hover, def, comp) = {
+            let mut c = cl.lock().unwrap();
+            if self.lsp_rev != self.ed.buf.rev {
+                self.lsp_rev = self.ed.buf.rev;
+                c.mudou(&path, &self.ed.buf.rope.to_string());
+            }
+            let st = c.estado.lock().unwrap();
+            let diags = st.diagnosticos.get(&lsp::uri(&path)).cloned().unwrap_or_default();
+            (diags, st.hover.clone(), st.definicao.clone(), st.completar.clone())
+        };
         // diagnósticos: colunas UTF-16 -> caracteres
-        let diags = c.diagnosticos(&path);
         if diags.as_slice() != self.lsp_diags.as_slice() || self.lsp_diags.is_empty() != diags.is_empty() {
             let n = self.ed.buf.line_count();
             let conv = |row: usize, col: usize| -> usize {
@@ -425,11 +470,7 @@ impl Session {
                 diags.into_iter().map(|d| lsp::Diag { col: conv(d.row, d.col), end_col: conv(d.end_row, d.end_col), ..d }).collect(),
             );
         }
-        // hover e definição pedidos
-        let (hover, def, comp) = {
-            let st = c.estado.lock().unwrap();
-            (st.hover.clone(), st.definicao.clone(), st.completar.clone())
-        };
+        // hover, definição e completar pedidos
         if let (Some((rid, start)), Some((cid, itens))) = (self.comp_req, comp) {
             if rid == cid {
                 self.comp_req = None;
@@ -506,7 +547,7 @@ impl Session {
         if mesmo {
             self.comp_filter();
         } else if let (Some(c), Some(path)) = (self.lsp.as_ref(), self.path.as_ref()) {
-            let id = c.completar(path, row, lsp::col_utf16(&self.ed.buf.line(row), col));
+            let id = c.lock().unwrap().completar(path, row, lsp::col_utf16(&self.ed.buf.line(row), col));
             self.comp_req = Some((id, start));
             self.comp = None;
         }
@@ -571,7 +612,7 @@ impl Session {
             return;
         };
         let (r, col) = (self.ed.cursor.row, self.ed.cursor.col);
-        self.hover_wait = Some(c.hover(path, r, lsp::col_utf16(&self.ed.buf.line(r), col) as usize));
+        self.hover_wait = Some(c.lock().unwrap().hover(path, r, lsp::col_utf16(&self.ed.buf.line(r), col) as usize));
     }
 
     fn lsp_definition(&mut self) {
@@ -580,7 +621,7 @@ impl Session {
             return;
         };
         let (r, col) = (self.ed.cursor.row, self.ed.cursor.col);
-        self.def_wait = Some(c.definicao(path, r, lsp::col_utf16(&self.ed.buf.line(r), col)));
+        self.def_wait = Some(c.lock().unwrap().definicao(path, r, lsp::col_utf16(&self.ed.buf.line(r), col)));
     }
 
     // ------------------------------------------------------------------
@@ -845,15 +886,31 @@ impl Session {
         self.open_file(&path, goto);
     }
 
-    /// Abre `path` no lugar do buffer atual (pede para salvar antes, como o `:e`).
+    /// Abre `path`: em aba nova (ou na que já o tem) quando há espaço de trabalho; senão no lugar.
     fn open_file(&mut self, path: &Path, goto: Option<(usize, usize)>) {
+        if self.modo_abas {
+            let mesmo = self.path.as_ref().is_some_and(|p| p == path || p.canonicalize().ok().zip(path.canonicalize().ok()).is_some_and(|(a, b)| a == b));
+            if mesmo {
+                if let Some((r, c)) = goto {
+                    self.ed.set_cursor(r, c);
+                }
+            } else {
+                self.abrir_pedido = Some((path.to_path_buf(), goto));
+            }
+            return;
+        }
+        self.open_file_aqui(path, goto);
+    }
+
+    /// Abre `path` no lugar do buffer atual (pede para salvar antes, como o `:e`).
+    fn open_file_aqui(&mut self, path: &Path, goto: Option<(usize, usize)>) {
         if self.modified() {
             self.say("Alterações não salvas. Salve com :w antes de abrir outro arquivo.".into(), ToastKind::Error);
             return;
         }
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
-        let (old_lsp, old_path) = (self.lsp.take(), self.path.clone());
+        let pool = self.lsp_pool.clone();
         let (term, term_focus, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_dims, self.term_screen.take(), self.notify.take());
         *self = Session::open(path);
         self.root = root;
@@ -863,7 +920,8 @@ impl Session {
         self.term_dims = term_dims;
         self.term_screen = term_screen;
         self.notify = notify;
-        self.lsp_attach(old_lsp, old_path);
+        self.lsp_pool = pool;
+        self.lsp_attach();
         self.tree = tree;
         self.tree_focus = foco;
         self.resize(cols, rows);
@@ -896,6 +954,11 @@ impl Session {
         let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
+        }
+        if livre && self.ed.showcmd() == "g" && matches!(k, Key::Char('t' | 'T')) {
+            self.ed.feed(&[Key::Esc]);
+            self.aba_pedido = Some(if k == Key::Char('t') { PedidoAba::Proxima } else { PedidoAba::Anterior });
+            return;
         }
         if livre && self.ed.showcmd() == "g" && k == Key::Char('d') {
             self.ed.feed(&[Key::Esc]);
@@ -993,9 +1056,14 @@ impl Session {
                     self.say("Alterações não salvas. Use :e! para descartar.".into(), ToastKind::Error);
                 } else {
                     self.saved_rev = self.ed.buf.rev;
-                    self.open_file(Path::new(arg), None);
+                    self.open_file_aqui(Path::new(arg), None);
                 }
             }
+            "tabnew" | "tabe" | "tabedit" => self.aba_pedido = Some(PedidoAba::Nova((!arg.is_empty()).then(|| PathBuf::from(arg)))),
+            "tabc" | "tabclose" => self.aba_pedido = Some(PedidoAba::Fechar { forcar: bang }),
+            "tabn" | "tabnext" => self.aba_pedido = Some(PedidoAba::Proxima),
+            "tabp" | "tabprevious" | "tabN" | "tabNext" => self.aba_pedido = Some(PedidoAba::Anterior),
+            "tabo" | "tabonly" => self.aba_pedido = Some(PedidoAba::So),
             "noh" | "nohlsearch" | "set" | "syntax" | "filetype" => {}
             _ => self.say(format!("Comando desconhecido: {name}"), ToastKind::Error),
         }
@@ -1135,6 +1203,9 @@ impl Session {
             .map(|c| (':', c.to_string()))
             .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
         ViewModel {
+            tabs: Vec::new(),
+            tab_active: 0,
+            doc_id: self.doc_id,
             seq: self.seq,
             rev: self.ed.buf.rev,
             rope: self.ed.buf.rope.clone(),
@@ -1206,6 +1277,212 @@ impl Session {
     }
 }
 
+/// Passa o que é "do espaço de trabalho" (explorador, terminal, líder) de uma aba para outra.
+fn mover_paineis(de: &mut Session, para: &mut Session) {
+    para.tree = de.tree.take();
+    para.tree_focus = std::mem::take(&mut de.tree_focus);
+    para.term = de.term.take();
+    para.term_focus = std::mem::take(&mut de.term_focus);
+    para.term_esc = std::mem::take(&mut de.term_esc);
+    para.term_dims = de.term_dims;
+    para.term_screen = de.term_screen.take();
+    para.leader_key = de.leader_key;
+    para.root = de.root.clone();
+}
+
+/// As abas abertas e a ativa. Cada aba é uma sessão; os servidores de linguagem são compartilhados.
+pub struct Workspace {
+    abas: Vec<Session>,
+    ativa: usize,
+    pool: LspPool,
+    notify: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    leader: char,
+    /// tamanho da área de texto (colunas, linhas)
+    dims: (usize, f32),
+    pub sair: bool,
+}
+
+impl Workspace {
+    pub fn new(arquivo: Option<PathBuf>, leader: char, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Self {
+        let pool: LspPool = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut s = match &arquivo {
+            Some(p) => Session::open(p),
+            None => Session::welcome(),
+        };
+        s.lsp_pool = pool.clone();
+        s.set_leader(leader);
+        s.set_notify(notify.clone());
+        s.modo_abas = true;
+        s.lsp_attach();
+        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, dims: (80, 24.0), sair: false }
+    }
+
+    fn atual(&mut self) -> &mut Session {
+        &mut self.abas[self.ativa]
+    }
+
+    fn nova_sessao(&self, arquivo: Option<&Path>) -> Session {
+        let mut s = match arquivo {
+            Some(p) => Session::open(p),
+            None => Session::new("", None),
+        };
+        s.lsp_pool = self.pool.clone();
+        s.set_leader(self.leader);
+        if let Some(n) = &self.notify {
+            s.set_notify(n.clone());
+        }
+        s.modo_abas = true;
+        s.resize(self.dims.0, self.dims.1);
+        s.lsp_attach();
+        s
+    }
+
+    fn trocar(&mut self, i: usize) {
+        if i == self.ativa || i >= self.abas.len() {
+            return;
+        }
+        let (a, b) = if self.ativa < i {
+            let (x, y) = self.abas.split_at_mut(i);
+            (&mut x[self.ativa], &mut y[0])
+        } else {
+            let (x, y) = self.abas.split_at_mut(self.ativa);
+            (&mut y[0], &mut x[i])
+        };
+        mover_paineis(a, b);
+        self.ativa = i;
+    }
+
+    fn abrir_em_aba(&mut self, arquivo: &Path, goto: Option<(usize, usize)>) {
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let alvo = canon(arquivo);
+        if let Some(i) = self.abas.iter().position(|s| s.path.as_deref().map(canon).as_ref() == Some(&alvo)) {
+            self.trocar(i);
+        } else {
+            let mut nova = self.nova_sessao(Some(arquivo));
+            let ativa = self.ativa;
+            mover_paineis(&mut self.abas[ativa], &mut nova);
+            self.abas.insert(self.ativa + 1, nova);
+            self.ativa += 1;
+        }
+        if let Some((r, c)) = goto {
+            let s = self.atual();
+            let c = c.min(s.ed.buf.line_len(r.min(s.ed.buf.line_count() - 1)));
+            s.ed.set_cursor(r, c);
+        }
+    }
+
+    fn fechar_aba(&mut self, forcar: bool) {
+        if self.abas.len() == 1 {
+            // última aba: `:q` normal
+            if self.atual().modified() && !forcar {
+                self.atual().say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
+            } else {
+                self.sair = true;
+            }
+            return;
+        }
+        if self.atual().modified() && !forcar {
+            self.atual().say("Alterações não salvas. Use :tabc! para fechar sem salvar.".into(), ToastKind::Error);
+            return;
+        }
+        let ativa = self.ativa;
+        let mut velha = self.abas.remove(ativa);
+        self.ativa = ativa.min(self.abas.len() - 1);
+        let nova = self.ativa;
+        mover_paineis(&mut velha, &mut self.abas[nova]);
+    }
+
+    /// Resolve o que a aba ativa pediu (abrir arquivo, comandos de aba, sair).
+    fn depois(&mut self) {
+        for _ in 0..8 {
+            let s = self.atual();
+            if let Some((p, g)) = s.abrir_pedido.take() {
+                self.abrir_em_aba(&p, g);
+                continue;
+            }
+            if let Some(pedido) = s.aba_pedido.take() {
+                match pedido {
+                    PedidoAba::Nova(p) => {
+                        let mut nova = self.nova_sessao(p.as_deref());
+                        let ativa = self.ativa;
+                        mover_paineis(&mut self.abas[ativa], &mut nova);
+                        self.abas.insert(self.ativa + 1, nova);
+                        self.ativa += 1;
+                    }
+                    PedidoAba::Fechar { forcar } => self.fechar_aba(forcar),
+                    PedidoAba::Proxima => {
+                        let n = self.abas.len();
+                        self.trocar((self.ativa + 1) % n);
+                    }
+                    PedidoAba::Anterior => {
+                        let n = self.abas.len();
+                        self.trocar((self.ativa + n - 1) % n);
+                    }
+                    PedidoAba::So => {
+                        let manter = self.abas.remove(self.ativa);
+                        self.abas = vec![manter];
+                        self.ativa = 0;
+                    }
+                }
+                continue;
+            }
+            if s.quit {
+                s.quit = false;
+                // `:q` com várias abas fecha a ativa; na última, sai
+                if self.abas.len() > 1 {
+                    self.fechar_aba(true);
+                } else {
+                    self.sair = true;
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
+    pub fn feed(&mut self, teclas: &str) {
+        self.atual().feed(teclas);
+        self.depois();
+    }
+
+    pub fn resize(&mut self, cols: usize, rows: f32) {
+        self.dims = (cols, rows);
+        self.atual().resize(cols, rows);
+    }
+
+    pub fn scroll(&mut self, linhas: f32) {
+        self.atual().scroll(linhas);
+    }
+
+    pub fn click(&mut self, row: usize, col: usize) {
+        self.atual().click(row, col);
+    }
+
+    pub fn term_resize(&mut self, r: u16, c: u16) {
+        self.atual().term_resize(r, c);
+    }
+
+    /// Vai para a aba `i` (clique na barra).
+    pub fn ir_para(&mut self, i: usize) {
+        self.trocar(i);
+    }
+
+    pub fn view_model(&mut self) -> ViewModel {
+        let mut vm = self.abas[self.ativa].view_model();
+        vm.tabs = self
+            .abas
+            .iter()
+            .map(|s| crate::nview::TabInfo { name: s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
+            .collect();
+        vm.tab_active = self.ativa;
+        vm
+    }
+
+    pub fn n_abas(&self) -> usize {
+        self.abas.len()
+    }
+}
+
 /// Tarefa do editor nativo: lê a fila de comandos da UI e publica o modelo.
 pub async fn native_task(
     shared: Shared,
@@ -1216,33 +1493,29 @@ pub async fn native_task(
     tx: tokio::sync::mpsc::UnboundedSender<crate::UiCommand>,
 ) {
     use crate::UiCommand;
-    let mut s = match &file {
-        Some(p) => Session::open(p),
-        None => Session::welcome(),
-    };
-    s.set_leader(leader);
-    s.set_notify(std::sync::Arc::new(move || {
+    let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
         let _ = tx.send(crate::UiCommand::TermOut);
-    }));
-    s.lsp_attach(None, None);
+    });
+    let mut w = Workspace::new(file, leader, notify);
     while let Some(cmd) = rx.recv().await {
         match cmd {
-            UiCommand::Keys(k) => s.feed(&k),
-            UiCommand::Resize(c, r) => s.resize(c.max(1) as usize, r.max(1) as f32),
+            UiCommand::Keys(k) => w.feed(&k),
+            UiCommand::Resize(c, r) => w.resize(c.max(1) as usize, r.max(1) as f32),
             UiCommand::Focus(_) => continue,
-            UiCommand::Scroll(lines) => s.scroll(lines as f32),
+            UiCommand::Scroll(lines) => w.scroll(lines as f32),
             UiCommand::TermOut => {}
-            UiCommand::TermSize(r, c) => s.term_resize(r.max(2) as u16, c.max(10) as u16),
+            UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
+            UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
             UiCommand::Mouse { button, action, row, col, .. } => match (button, action) {
-                ("left", "press") => s.click(row.max(0) as usize, col.max(0) as usize),
+                ("left", "press") => w.click(row.max(0) as usize, col.max(0) as usize),
                 _ => continue,
             },
         }
-        if s.quit {
+        if w.sair {
             let _ = proxy.send_event(crate::UserEvent::Quit);
             return;
         }
-        *shared.lock().unwrap() = Arc::new(s.view_model());
+        *shared.lock().unwrap() = Arc::new(w.view_model());
         let _ = proxy.send_event(crate::UserEvent::Redraw);
     }
 }
@@ -1479,7 +1752,7 @@ mod testes {
         let mut s = Session::open(&alvo);
         s.root = d.clone();
         s.resize(80, 20.0);
-        s.lsp_attach(None, None);
+        s.lsp_attach();
         let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
         let m = loop {
             let m = modelo(&mut s);
@@ -1545,7 +1818,7 @@ mod testes {
         let mut s = Session::open(&d.join("src/alfa.rs"));
         s.root = d.clone();
         s.resize(80, 20.0);
-        s.lsp_attach(None, None);
+        s.lsp_attach();
         // abre uma linha nova e digita o começo de uma palavra
         s.feed("Gopri");
         let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
@@ -1596,6 +1869,49 @@ mod testes {
         s.feed("G$p");
         assert_eq!(s.ed.lines()[2], "Xijkl!ad");
         assert_eq!(s.ed.lines()[3], "      eh");
+    }
+
+    #[test]
+    fn abas_abrir_trocar_fechar_e_proteger_alteracoes() {
+        let d = projeto("abas");
+        let mut w = Workspace::new(Some(d.join("src/alfa.rs")), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d.clone();
+        assert_eq!(w.n_abas(), 1);
+        // :tabnew com arquivo abre outra aba
+        w.feed(&format!(":tabnew {}<CR>", d.join("src/beta.rs").display()));
+        assert_eq!(w.n_abas(), 2);
+        let vm = w.view_model();
+        assert_eq!(vm.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["alfa.rs", "beta.rs"]);
+        assert_eq!(vm.tab_active, 1);
+        let doc_b = vm.doc_id;
+        // gt / gT
+        w.feed("gt");
+        let vm = w.view_model();
+        assert_eq!((vm.tab_active, vm.name.as_str()), (0, "alfa.rs"));
+        assert_ne!(vm.doc_id, doc_b, "outro documento: a cena recomeça");
+        w.feed("gT");
+        assert_eq!(w.view_model().name, "beta.rs");
+        // o buscador abre numa aba nova; o mesmo arquivo de novo só troca para ela
+        w.feed(" ff");
+        w.feed("LEIA<CR>");
+        assert_eq!(w.n_abas(), 3);
+        assert_eq!(w.view_model().name, "LEIA.md");
+        w.feed(" ffalfa<CR>");
+        assert_eq!(w.n_abas(), 3, "alfa.rs já estava aberto");
+        assert_eq!(w.view_model().name, "alfa.rs");
+        // alteração não salva protege o :q; :q! fecha a aba (as outras continuam)
+        w.feed("x:q<CR>");
+        assert_eq!(w.n_abas(), 3);
+        assert!(w.view_model().toast.is_some_and(|t| t.2 == ToastKind::Error));
+        w.feed(":tabc!<CR>");
+        assert_eq!(w.n_abas(), 2);
+        assert!(!w.sair);
+        // :q na aba limpa fecha só ela; na última, sai
+        w.feed(":q<CR>");
+        assert_eq!(w.n_abas(), 1);
+        w.feed(":q<CR>");
+        assert!(w.sair);
     }
 
     #[test]

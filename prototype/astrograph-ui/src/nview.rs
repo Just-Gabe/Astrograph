@@ -74,6 +74,13 @@ pub struct GitView {
     pub signs: std::sync::Arc<Vec<(usize, crate::git::Sign)>>,
 }
 
+/// Uma aba aberta.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabInfo {
+    pub name: String,
+    pub modified: bool,
+}
+
 /// Uma linha do popup de completar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompItem {
@@ -135,6 +142,11 @@ pub struct ViewModel {
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
     pub completion: Option<CompView>,
+    /// abas abertas (a barra só aparece com duas ou mais) e a ativa
+    pub tabs: Vec<TabInfo>,
+    pub tab_active: usize,
+    /// muda ao trocar de arquivo/aba: a cena zera as animações
+    pub doc_id: u64,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -169,6 +181,9 @@ impl ViewModel {
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
             completion: None,
+            tabs: Vec::new(),
+            tab_active: 0,
+            doc_id: 0,
             flash: None,
         }
     }

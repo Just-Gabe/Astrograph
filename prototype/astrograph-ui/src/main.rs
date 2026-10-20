@@ -74,6 +74,8 @@ enum UiCommand {
     TermOut,
     /// linhas e colunas do painel do terminal
     TermSize(i64, i64),
+    /// clique na barra de abas
+    Tab(i64),
     Focus(bool),
     Mouse {
         button: &'static str,
@@ -359,7 +361,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -1114,6 +1116,12 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tab_hit(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32)) {
+                        let _ = self.tx.send(UiCommand::Tab(i as i64));
+                        return;
+                    }
+                }
                 if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {
                     // clique no explorador: ainda sem ação (o teclado navega)
                     return;

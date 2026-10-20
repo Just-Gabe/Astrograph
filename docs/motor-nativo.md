@@ -48,7 +48,8 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele) | **funcionando** |
 | Git: branch na pílula e sinais de margem (nova/alterada/removida) comparando o buffer ao `HEAD`, ao vivo (`similar`; só lê o `HEAD` com o `git` instalado) | **funcionando** |
 | LSP nativo (cliente JSON-RPC próprio; servidores do PATH ou do Mason): diagnósticos, hover `K`, definição `gd`, completar (popup com filtro local; `Tab`/`<C-y>` aceita, `<C-n>`/`<C-p>` navegam); renomear ainda não | **funcionando** (verificado com o pyright real) |
-| Janelas divididas e abas | roadmap (S3, S4...) |
+| Abas: uma sessão por aba (`:tabnew [arquivo]`, `gt`/`gT`, `:tabc[!]`, `:tabo`, `:q` fecha a aba), barra de abas clicável, servidor LSP compartilhado, explorador e terminal acompanham a aba ativa | **funcionando** |
+| Janelas divididas (`:split`/`:vsplit`) | roadmap — exige separar buffer de janela e a cena por painel (ver as issues) |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
 
 ## Experimentar
