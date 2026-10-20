@@ -1,6 +1,7 @@
-# Compila o app Astrograph (UI em Rust) no Windows e publica no GitHub Releases.
-# O instalador (install.ps1) baixa `astrograph-windows-x64.exe` e o agente nativo
-# `astrograph-agent-windows-x64.exe` e `astrograph-servicos-windows-x64.exe` do release mais novo.
+# Compila o app Astrograph (UI em Rust) e os executáveis auxiliares no Windows, Linux e macOS
+# e publica no GitHub Releases, com o SHA256SUMS.txt que os instaladores conferem.
+# Nomes: astrograph-<plataforma>[.exe], astrograph-agent-<plataforma>[.exe], astrograph-servicos-<plataforma>[.exe]
+# com <plataforma> = windows-x64 | linux-x64 | macos-arm64.
 #
 # Publicar: crie uma tag `v*` (ex.: git tag v0.1.0 && git push origin v0.1.0)
 # ou rode o workflow manualmente informando a tag.
@@ -19,11 +20,21 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: prototype/astrograph-ui
+  compilar:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            plataforma: windows-x64
+            ext: .exe
+          - os: ubuntu-latest
+            plataforma: linux-x64
+            ext: ""
+          - os: macos-14
+            plataforma: macos-arm64
+            ext: ""
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -33,40 +44,42 @@ jobs:
             prototype/astrograph-ui
             prototype/astrograph-agent
             prototype/astrograph-servicos
-      - name: Testes
-        run: cargo test --release
-      - name: Compilar
-        run: cargo build --release
-      - name: Testes do agente
-        working-directory: prototype/astrograph-agent
-        run: cargo test --release
-      - name: Compilar o agente
-        working-directory: prototype/astrograph-agent
-        run: cargo build --release
-      - name: Testes dos serviços
-        working-directory: prototype/astrograph-servicos
-        run: cargo test --release
-      - name: Compilar os serviços
-        working-directory: prototype/astrograph-servicos
-        run: cargo build --release
-      - name: Preparar os executáveis
-        shell: pwsh
+      - name: Testes e compilação
+        shell: bash
         run: |
-          Copy-Item target/release/astrograph-ui.exe astrograph-windows-x64.exe
-          Copy-Item ../astrograph-agent/target/release/astrograph-agent.exe astrograph-agent-windows-x64.exe
-          Copy-Item ../astrograph-servicos/target/release/astrograph-servicos.exe astrograph-servicos-windows-x64.exe
-          # o install.ps1 confere cada download contra este arquivo
-          Get-FileHash astrograph-windows-x64.exe, astrograph-agent-windows-x64.exe, astrograph-servicos-windows-x64.exe -Algorithm SHA256 |
-            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
-            Set-Content -Encoding ascii SHA256SUMS.txt
+          for crate in astrograph-ui astrograph-agent astrograph-servicos; do
+            (cd prototype/$crate && cargo test --release && cargo build --release)
+          done
+      - name: Preparar os executáveis
+        shell: bash
+        run: |
+          mkdir -p saida
+          p="${{ matrix.plataforma }}"; e="${{ matrix.ext }}"
+          cp "prototype/astrograph-ui/target/release/astrograph-ui$e" "saida/astrograph-$p$e"
+          cp "prototype/astrograph-agent/target/release/astrograph-agent$e" "saida/astrograph-agent-$p$e"
+          cp "prototype/astrograph-servicos/target/release/astrograph-servicos$e" "saida/astrograph-servicos-$p$e"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: executaveis-${{ matrix.plataforma }}
+          path: saida/*
+          if-no-files-found: error
+
+  publicar:
+    needs: compilar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: saida
+          pattern: executaveis-*
+          merge-multiple: true
+      - name: SHA256SUMS.txt
+        # o install.ps1 e o install.sh conferem cada download contra este arquivo
+        run: cd saida && sha256sum astrograph-* > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Publicar
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: Astrograph ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            prototype/astrograph-ui/astrograph-windows-x64.exe
-            prototype/astrograph-ui/astrograph-agent-windows-x64.exe
-            prototype/astrograph-ui/astrograph-servicos-windows-x64.exe
-            prototype/astrograph-ui/SHA256SUMS.txt
+          files: saida/*
           fail_on_unmatched_files: true
