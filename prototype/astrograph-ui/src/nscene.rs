@@ -715,4 +715,26 @@ mod testes {
         let (row, vcol) = sc.hit_test(lay.text_x + lay.char_w * 1.5, lay.text_y + lay.line_h * 1.5, 640, 400, &vm);
         assert_eq!((row, vcol), (1, 1));
     }
+
+    /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn custo_do_quadro() {
+        let Some(mut sc) = cena() else { return };
+        let texto: String = (0..60).map(|i| format!("    let valor_{i} = calcular(\"texto\", {i}) + outra_funcao(x, y); // nota\n")).collect();
+        let mut s = Session::new(&texto, Some("a.rs".into()));
+        for (w, h) in [(1280u32, 800u32), (2560, 1600)] {
+            let lay = sc.layout(w, h, 60);
+            s.resize(lay.cols, lay.rows.floor());
+            let vm = s.view_model();
+            let mut buf = vec![0u32; (w * h) as usize];
+            let t0 = Instant::now();
+            let n = 120;
+            for i in 0..n {
+                let mut c = Canvas::new(&mut buf, w, h);
+                sc.paint(&mut c, &vm, t0 + Duration::from_millis(8 * i));
+            }
+            println!("{w}x{h}: {:.2} ms/quadro", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        }
+    }
 }
