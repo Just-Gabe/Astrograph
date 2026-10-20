@@ -223,6 +223,22 @@ pub struct Editor {
     marks: HashMap<char, Pos>,
     /// marca de contexto (`''` e ``` `` ```): de onde o último salto saiu
     pcmark: Option<Pos>,
+    /// lista de saltos (`<C-o>`/`<C-i>`) e o índice atual (== len quando não navegou)
+    jumps: Vec<Pos>,
+    jump_idx: usize,
+    /// marcas `'.` / `'[` / `']` / `'^` e a lista de mudanças (`g;`/`g,`)
+    last_change: Option<Pos>,
+    brk_ini: Option<Pos>,
+    brk_fim: Option<Pos>,
+    insert_stop: Option<Pos>,
+    changes: Vec<Pos>,
+    change_idx: usize,
+    /// um novo passo de desfazer começou desde a última mudança registrada
+    new_change: bool,
+    /// `gJ`: junta sem espaço nem recuo
+    join_raw: bool,
+    /// a inserção atual já mudou o texto (para `']` no <Esc>)
+    ins_mudou: bool,
     /// seleção visual mais recente (para `'<` e `'>`)
     vmarks: Option<(Pos, Pos, VKind)>,
     /// marcas que o desfazer/refazer devolve (aplicadas depois do reajuste por linhas)
@@ -296,6 +312,17 @@ impl Editor {
             macro_depth: 0,
             marks: HashMap::new(),
             pcmark: Some(Pos::new(0, 0)),
+            jumps: Vec::new(),
+            jump_idx: 0,
+            last_change: None,
+            brk_ini: Some(Pos::new(0, 0)),
+            brk_fim: Some(Pos::new(lines.len().saturating_sub(1), 0)),
+            insert_stop: None,
+            changes: Vec::new(),
+            change_idx: 0,
+            new_change: false,
+            join_raw: false,
+            ins_mudou: false,
             vmarks: None,
             marks_back: None,
             put_end: None,
@@ -507,12 +534,78 @@ impl Editor {
         self.key(k);
     }
 
+    /// `setpcmark()`: guarda de onde o salto saiu (marca de contexto + lista de saltos).
+    fn set_pcmark(&mut self, p: Pos) {
+        self.pcmark = Some(p);
+        if self.jumps.len() >= 100 {
+            self.jumps.remove(0);
+        }
+        self.jumps.push(p);
+        self.jump_idx = self.jumps.len();
+    }
+
+    /// Tira da lista de saltos as entradas repetidas na mesma linha (fica a mais recente).
+    fn cleanup_jumps(&mut self) {
+        let n = self.jumps.len();
+        let mut novo: Vec<Pos> = Vec::with_capacity(n);
+        let mut idx = self.jump_idx;
+        for from in 0..n {
+            if self.jump_idx == from {
+                idx = novo.len();
+            }
+            if !self.jumps[from + 1..].iter().any(|q| q.row == self.jumps[from].row) {
+                novo.push(self.jumps[from]);
+            }
+        }
+        if self.jump_idx == n {
+            idx = novo.len();
+        }
+        self.jumps = novo;
+        self.jump_idx = idx;
+    }
+
+    /// `<C-o>` (`count < 0`) e `<C-i>` (`count > 0`).
+    fn jump_older(&mut self, count: i64) {
+        self.cleanup_jumps();
+        let len = self.jumps.len() as i64;
+        if len == 0 {
+            self.failed = true;
+            return;
+        }
+        let mut idx = self.jump_idx as i64;
+        if idx + count < 0 || idx + count >= len {
+            self.failed = true;
+            return;
+        }
+        if idx == len {
+            let cur = self.cursor;
+            self.set_pcmark(cur);
+            self.cleanup_jumps();
+            idx = self.jump_idx as i64 - 1;
+            self.jump_idx = idx.max(0) as usize;
+            if idx + count < 0 {
+                self.failed = true;
+                return;
+            }
+        }
+        idx += count;
+        self.jump_idx = idx as usize;
+        let p = self.jumps[self.jump_idx];
+        let row = p.row.min(self.last_row());
+        self.cursor = Pos::new(row, p.col);
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
     fn set_mark(&mut self, c: char) {
         match c {
             'a'..='z' | 'A'..='Z' => {
                 self.marks.insert(c, self.cursor);
             }
-            '\'' | '`' => self.pcmark = Some(self.cursor),
+            '\'' | '`' => {
+                let cur = self.cursor;
+                self.set_pcmark(cur);
+            }
             _ => self.failed = true,
         }
     }
@@ -522,6 +615,10 @@ impl Editor {
         match c {
             'a'..='z' | 'A'..='Z' => self.marks.get(&c).copied(),
             '\'' | '`' => self.pcmark,
+            '.' => self.last_change,
+            '[' => self.brk_ini,
+            ']' => self.brk_fim,
+            '^' => self.insert_stop,
             '<' | '>' => {
                 let (a, b, kind) = self.vmarks?;
                 let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -628,9 +725,15 @@ impl Editor {
 
     fn key(&mut self, k: Key) {
         // marcas acompanham linhas inseridas/apagadas: compara o texto de antes e depois
-        let old = (!self.marks.is_empty() || self.pcmark.is_some()).then(|| self.buf.rope.clone());
+        let old = self.buf.rope.clone();
+        let rev0 = self.buf.rev;
+        let cur0 = self.cursor;
         self.key_raw(k);
-        if let Some(old) = old {
+        if self.buf.rev != rev0 {
+            // desfazer/refazer devolvem marcas; as demais edições registram a mudança
+            if self.marks_back.is_none() {
+                self.registrar_mudanca(&old, cur0);
+            }
             self.adjust_marks(&old);
         }
         if let Some(back) = self.marks_back.take() {
@@ -638,6 +741,132 @@ impl Editor {
                 self.marks.insert(c, p);
             }
         }
+    }
+
+    /// Descobre onde o texto mudou (início e fim do trecho novo) e atualiza `'.`, `'[`, `']` e a
+    /// lista de mudanças.
+    fn registrar_mudanca(&mut self, old: &Rope, cur0: Pos) {
+        let (n0, n1) = (old.len_lines(), self.buf.rope.len_lines());
+        let old_line = |r: usize| -> String {
+            let l = old.line(r).to_string();
+            l.strip_suffix('\n').unwrap_or(&l).to_string()
+        };
+        let common = n0.min(n1);
+        let mut f = 0;
+        while f < common && old_line(f) == self.buf.line(f) {
+            f += 1;
+        }
+        if f >= common && n0 == n1 {
+            return;
+        }
+        // linhas inseridas/apagadas iguais às vizinhas: o cursor diz onde o Vim marcou a mudança
+        if n0 != n1 {
+            let k = n0.abs_diff(n1);
+            for cand in [cur0.row, self.cursor.row] {
+                if cand >= f {
+                    continue;
+                }
+                let ok = if n1 > n0 {
+                    (0..cand).all(|r| old_line(r) == self.buf.line(r)) && (cand..n0).all(|r| old_line(r) == self.buf.line(r + k))
+                } else {
+                    (0..cand).all(|r| old_line(r) == self.buf.line(r)) && (cand..n1).all(|r| old_line(r + k) == self.buf.line(r))
+                };
+                if ok {
+                    f = cand;
+                    break;
+                }
+            }
+        }
+        // sufixo de linhas iguais
+        let mut suf = 0;
+        while suf < common - f.min(common) && old_line(n0 - 1 - suf) == self.buf.line(n1 - 1 - suf) && n1 - 1 - suf > f.saturating_sub(0) {
+            suf += 1;
+        }
+        let row_new = f.min(n1 - 1);
+        let col_ini = if f < n0 && f < n1 {
+            let (a, b): (Vec<char>, Vec<char>) = (old_line(f).chars().collect(), self.buf.line(f).chars().collect());
+            let p = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+            if n0 == n1 {
+                // o cursor dá a posição exata quando a edição é ambígua (apagar um de vários iguais)
+                let q = cur0.col;
+                if cur0.row == f && q < p && a[q..p].iter().all(|c| Some(c) == a.get(p)) { q } else { p }
+            } else if n0 > n1 {
+                if !a.is_empty() && b.starts_with(&a) { a.len() } else { 0 }
+            } else if !b.is_empty() && a.starts_with(&b) {
+                b.len()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let ini = Pos::new(row_new, col_ini);
+        let fim_row = (n1 - 1).saturating_sub(suf).max(row_new);
+        let fim_line: Vec<char> = self.buf.line(fim_row).chars().collect();
+        let fim_col = if suf > 0 || fim_row != row_new {
+            let o: Vec<char> = old_line(n0 - 1 - suf.min(n0 - 1)).chars().collect();
+            let cs = o.iter().rev().zip(fim_line.iter().rev()).take_while(|(x, y)| x == y).count();
+            (fim_line.len().saturating_sub(cs)).saturating_sub(1).max(if fim_row == row_new { col_ini } else { 0 })
+        } else {
+            let o: Vec<char> = old_line(f.min(n0 - 1)).chars().collect();
+            let cs = o.iter().rev().zip(fim_line.iter().rev()).take_while(|(x, y)| x == y).count().min(fim_line.len().saturating_sub(col_ini));
+            (fim_line.len().saturating_sub(cs)).saturating_sub(1).max(col_ini)
+        };
+        let fim = Pos::new(fim_row, fim_col);
+        // numa inserção, `'[` fica no começo dela e `']` acompanha o que se digita
+        if self.new_change || self.mode != Mode::Insert {
+            self.brk_ini = Some(ini);
+        }
+        self.brk_fim = Some(fim);
+        self.last_change = Some(ini);
+        if self.mode == Mode::Insert {
+            self.ins_mudou = true;
+        }
+        let add = match self.changes.last() {
+            None => true,
+            Some(p) => self.new_change && (p.row != ini.row || p.col + 79 < ini.col || ini.col + 79 < p.col),
+        };
+        if add {
+            if self.changes.len() >= 100 {
+                self.changes.remove(0);
+            }
+            self.changes.push(ini);
+        } else if let Some(u) = self.changes.last_mut() {
+            *u = ini;
+        }
+        self.new_change = false;
+        self.change_idx = self.changes.len();
+    }
+
+    /// `g;` (`count < 0`) e `g,` (`count > 0`).
+    fn change_move(&mut self, count: i64) {
+        let len = self.changes.len() as i64;
+        if len == 0 {
+            self.failed = true;
+            return;
+        }
+        let mut n = self.change_idx as i64;
+        if n + count < 0 {
+            if n == 0 {
+                self.failed = true;
+                return;
+            }
+            n = 0;
+        } else if n + count >= len {
+            if n == len - 1 {
+                self.failed = true;
+                return;
+            }
+            n = len - 1;
+        } else {
+            n += count;
+        }
+        self.change_idx = n as usize;
+        let p = self.changes[n as usize];
+        let row = p.row.min(self.last_row());
+        self.cursor = Pos::new(row, p.col);
+        self.fix_cursor();
+        self.curswant = self.want_here();
     }
 
     fn key_raw(&mut self, k: Key) {
@@ -817,6 +1046,13 @@ impl Editor {
                     Key::Ctrl('a') => done(Cmd::Simple('\u{1}', None)),
                     Key::Ctrl('x') => done(Cmd::Simple('\u{18}', None)),
                     Key::Ctrl('r') => done(Cmd::Simple('R', None)),
+                    Key::Char('g') => match keys.get(i) {
+                        Some(Key::Char(c @ ('J' | 'p' | 'P' | 'v' | 'i' | 'I' | ';' | ','))) => done(Cmd::Simple('g', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
+                    Key::Ctrl('o') => done(Cmd::Simple('\u{f}', None)),
+                    Key::Ctrl('i') | Key::Tab => done(Cmd::Simple('\t', None)),
                     _ => Parse::Invalid,
                 },
             },
@@ -838,7 +1074,7 @@ impl Editor {
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
             Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}'),
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}' | '\u{f}' | '\t'),
         };
         self.search_now = p.search.clone();
         // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
@@ -917,7 +1153,7 @@ impl Editor {
         let falhou_marca = (self.failed && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, '\'' | '`')))
             || (!had_search && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, 'n' | 'N')));
         if jump && !falhou_marca {
-            self.pcmark = Some(pc_before);
+            self.set_pcmark(pc_before);
         }
         self.failed |= failed_before;
     }
@@ -931,6 +1167,54 @@ impl Editor {
             's' => self.operator('c', count, Target::Motion(Mo { c: 'l', g: false, arg: None }), reg),
             'S' => self.operator('c', count, Target::Line, reg),
             'Y' => self.operator('y', count, Target::Motion(Mo { c: '$', g: false, arg: None }), reg),
+            'g' => match arg.unwrap() {
+                ';' => self.change_move(-(count1 as i64)),
+                ',' => self.change_move(count1 as i64),
+                'J' => {
+                    self.join_raw = true;
+                    self.join(count1.max(2));
+                    self.join_raw = false;
+                }
+                'p' | 'P' => {
+                    self.put(arg == Some('p'), count1, reg);
+                    if let Some((linewise, end)) = self.put_end {
+                        self.cursor = if linewise { Pos::new(end.row.min(self.last_row()), 0) } else { end };
+                        self.fix_cursor();
+                        self.curswant = self.want_here();
+                    }
+                }
+                'v' => {
+                    if let Some((a, b, kind)) = self.vmarks {
+                        self.vis = Some(VState { kind, anchor: a });
+                        self.cursor = b;
+                        self.mode = Mode::Visual;
+                        self.fix_cursor();
+                        self.curswant = self.want_here();
+                    } else {
+                        self.failed = true;
+                    }
+                }
+                'i' => {
+                    if let Some(p) = self.insert_stop {
+                        let row = p.row.min(self.last_row());
+                        self.cursor = Pos::new(row, p.col.min(self.buf.line_len(row)));
+                    }
+                    {
+                        self.checkpoint();
+                        self.begin_insert_state('i', count1, None);
+                    }
+                }
+                'I' => {
+                    self.cursor.col = 0;
+                    {
+                        self.checkpoint();
+                        self.begin_insert_state('i', count1, None);
+                    }
+                }
+                _ => {}
+            },
+            '\u{f}' => self.jump_older(-(count1 as i64)),
+            '\t' => self.jump_older(count1 as i64),
             'p' => self.put(true, count1, reg),
             'P' => self.put(false, count1, reg),
             'u' => self.undo_step(count1),
@@ -1386,6 +1670,11 @@ impl Editor {
                 };
                 let start = if kind == Kind::Line { Pos::new(a.row, 0) } else { a };
                 self.last_yank = (self.last_yank.0 + 1, start, end, linewise);
+                self.brk_ini = Some(if kind == Kind::Line { Pos::new(a.row, 0) } else { a });
+                self.brk_fim = Some(match kind {
+                    Kind::Line => Pos::new(b.row, usize::MAX),
+                    _ => Pos::new(end.row, end.col.saturating_sub(1)),
+                });
                 // o cursor vai para o início do trecho
                 match kind {
                     Kind::Line => {
@@ -1587,6 +1876,9 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn put(&mut self, after: bool, count: usize, reg: Option<char>) {
+        // como o Vim: `'[` e `']` começam no cursor, mesmo quando o registrador está vazio
+        self.brk_ini = Some(self.cursor);
+        self.brk_fim = Some(self.cursor);
         let r = match reg {
             Some(c) => self.reg_valor(c),
             None if self.clipboard_unnamedplus => self.reg_valor('+').or_else(|| self.unnamed.clone()),
@@ -1740,7 +2032,7 @@ impl Editor {
             let line = self.buf.line(row + t);
             let mut curr: String = line.clone();
             let mut spaces = 0usize;
-            if t > 0 {
+            if t > 0 && !self.join_raw {
                 curr = line.trim_start_matches([' ', '\t']).to_string();
                 if !curr.is_empty() && !curr.starts_with(')') && sum != 0 && e1 != Some('\t') {
                     // não põe espaço se a linha anterior já acaba em espaço
@@ -2188,6 +2480,7 @@ impl Editor {
 
     fn begin_insert_state(&mut self, cmd: char, count: usize, ai_row: Option<usize>) {
         self.mode = Mode::Insert;
+        self.ins_mudou = false;
         self.ins = Insert { cmd, count, typed: Vec::new(), ai_row };
     }
 
@@ -2260,6 +2553,10 @@ impl Editor {
                             self.insert_raw(*key);
                         }
                     }
+                }
+                self.insert_stop = Some(self.cursor);
+                if self.ins_mudou {
+                    self.brk_fim = Some(self.cursor);
                 }
                 self.mode = Mode::Normal;
                 let bi = self.block_ins.take();
@@ -2363,6 +2660,7 @@ impl Editor {
 
     fn checkpoint(&mut self) {
         self.emptied = false;
+        self.new_change = true;
         if self.replaying && false {
             return;
         }
