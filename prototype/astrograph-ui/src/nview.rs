@@ -65,6 +65,8 @@ pub struct TreeView {
 pub struct TermView {
     pub screen: std::sync::Arc<crate::term::TermScreen>,
     pub focus: bool,
+    /// modo zen: o terminal (agente) ocupa a janela, numa coluna centralizada
+    pub zen: bool,
 }
 
 /// Git do arquivo aberto: branch e sinais da margem (ordenados por linha).

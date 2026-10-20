@@ -28,6 +28,12 @@ const MONO_ITALIC: &[&str] = &["JetBrainsMonoNerdFontMono-Italic.ttf", "JetBrain
 const MONO_BOLD: &[&str] = &["JetBrainsMonoNerdFontMono-Bold.ttf", "JetBrainsMonoNLNerdFont-Bold.ttf", "JetBrainsMono-Bold.ttf", "consolab.ttf", "DejaVuSansMono-Bold.ttf"];
 
 /// Quanto tempo o aviso fica na tela.
+/// largura máxima (colunas), e margens (px lógicos) do modo zen
+const ZEN_COLS: usize = 100;
+const ZEN_PAD_X: f32 = 24.0;
+const ZEN_TOP: f32 = 64.0;
+const ZEN_BOTTOM: f32 = 56.0;
+
 const TOAST_MS: u128 = 3200;
 /// Altura da barra de abas (px lógicos).
 const TAB_H: f32 = 32.0;
@@ -91,6 +97,8 @@ pub struct Scene {
     tab_rects: Vec<(f32, f32)>,
     side: Spring,
     term: Spring,
+    /// modo zen: 0 = normal, 1 = agente em tela cheia
+    zen: Spring,
     term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
     tree_top: Spring,
@@ -167,6 +175,7 @@ impl Scene {
             tab_rects: Vec::new(),
             side: Spring::new(0.0, 24.0, 1.0),
             term: Spring::new(0.0, 22.0, 1.0),
+            zen: Spring::new(0.0, 16.0, 1.0),
             term_cache: None,
             tree_cache: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
@@ -240,8 +249,20 @@ impl Scene {
     /// Linhas e colunas do painel do terminal para uma janela `w`×`h` (pixels).
     pub fn term_dims(&self, w: u32, h: u32) -> (usize, usize) {
         let s = self.scale;
+        if self.zen.target > 0.5 {
+            let (rows, cols) = self.zen_grid(w as f32, h as f32);
+            return (rows, cols);
+        }
         let rows = (((h as f32 * 0.36) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
         let cols = (((w as f32 - self.side.target.max(0.0)) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
+        (rows, cols)
+    }
+
+    /// Linhas e colunas da coluna do modo zen: estreita para ler bem, centrada, com respiro em volta.
+    fn zen_grid(&self, w: f32, h: f32) -> (usize, usize) {
+        let s = self.scale;
+        let cols = (((w - 2.0 * (ZEN_PAD_X + 28.0) * s) / self.char_w).floor() as usize).clamp(20, ZEN_COLS);
+        let rows = (((h - (ZEN_TOP + ZEN_BOTTOM) * s - 2.0 * 24.0 * s) / self.line_h).floor() as usize).max(3);
         (rows, cols)
     }
 
@@ -292,6 +313,7 @@ impl Scene {
             self.comp_reset();
         }
         self.term.target = if vm.term.is_some() { (h * 0.36).round() } else { 0.0 };
+        self.zen.target = if vm.term.as_ref().is_some_and(|t| t.zen) { 1.0 } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
         self.last_paint = Some(now);
@@ -301,7 +323,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.term, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.term, &mut self.zen, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -334,6 +356,7 @@ impl Scene {
         self.paint_side(c, (w, h, s));
         self.paint_term(c, (w, h, s), now);
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
+        self.paint_zen(c, (w, h, s), now);
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.paint_ms = self.paint_ms.max(ms);
@@ -532,7 +555,7 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.term, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = [&self.term, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -1254,9 +1277,52 @@ impl Scene {
         c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::BG, 1.0);
         c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::SURFACE, 0.9);
         c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::WHITE, if tv.focus { 0.16 } else { 0.08 });
+        self.paint_term_cells(c, &tv, x0 + 14.0 * s, y0 + 12.0 * s, y1, w, 1.0, now);
+        c.clip = prev;
+    }
+
+    /// Modo zen: o editor some num véu e o agente ocupa uma coluna centrada, num cartão
+    /// suave. Entra com fade e sobe devagar; sai fazendo o caminho inverso.
+    fn paint_zen(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32), now: Instant) {
+        let z = self.zen.x.clamp(0.0, 1.0);
+        if z < 0.01 {
+            return;
+        }
+        let Some(tv) = self.term_cache.clone() else { return };
+        let e = ease_out_expo(z);
+        // véu: apaga o editor e deixa só um brilho fraco no meio
+        c.rect(0, 0, c.w, c.h, d::BG, 0.97 * e);
+        let (rows, cols) = self.zen_grid(w, h);
+        let (cw, lh) = (self.char_w, self.line_h);
+        let (gw, gh) = (cols as f32 * cw, rows as f32 * lh);
+        let pad = 28.0 * s;
+        let (cardw, cardh) = (gw + 2.0 * pad, gh + 2.0 * 24.0 * s);
+        let rise = (1.0 - e) * 18.0 * s;
+        let x = ((w - cardw) / 2.0).round();
+        let y = (((h - cardh) / 2.0) + (ZEN_TOP - ZEN_BOTTOM) * s * 0.5 + rise).round();
+        c.shadow(x, y, cardw, cardh, 22.0 * s, 60.0 * s, 24.0 * s, d::BLACK, 0.55 * e);
+        c.rrect(x, y, cardw, cardh, 22.0 * s, d::SURFACE, 0.55 * e);
+        c.rrect_border(x, y, cardw, cardh, 22.0 * s, 1.0, d::WHITE, if tv.focus { 0.10 } else { 0.05 } * e);
+        // título discreto acima do cartão e dica de saída abaixo
+        let tpx = 12.0 * s;
+        let titulo = "AGENTE";
+        let tw = self.ui_semi.measure(titulo, tpx);
+        c.text(&mut self.ui_semi, tpx, ((w - tw) / 2.0).round(), y - 18.0 * s, titulo, d::DIM, 0.9 * e);
+        let dica = "Ctrl-\\  Ctrl-n  volta ao editor";
+        let dpx = 11.5 * s;
+        let dw = self.ui.measure(dica, dpx);
+        c.text(&mut self.ui, dpx, ((w - dw) / 2.0).round(), y + cardh + 26.0 * s, dica, d::FAINT, 0.9 * e);
+        let prev = c.clip;
+        c.set_clip(x as i32, y as i32, (x + cardw) as i32, (y + cardh) as i32);
+        self.paint_term_cells(c, &tv, x + pad, y + 24.0 * s, y + cardh - 24.0 * s, x + cardw - pad + cw, e, now);
+        c.clip = prev;
+    }
+
+    /// Células do terminal a partir de (`left`, `top`); `k` é a opacidade (fade do zen).
+    #[allow(clippy::too_many_arguments)]
+    fn paint_term_cells(&mut self, c: &mut Canvas, tv: &TermView, left: f32, top: f32, y1: f32, xmax: f32, k: f32, now: Instant) {
         let (px, lh, cw) = (self.font_px, self.line_h, self.char_w);
-        let left = x0 + 14.0 * s;
-        let top = y0 + 12.0 * s;
+        let s = self.scale;
         for (r, row) in tv.screen.rows.iter().enumerate() {
             let y = top + r as f32 * lh;
             if y + lh > y1 {
@@ -1264,11 +1330,11 @@ impl Scene {
             }
             for (cidx, cell) in row.iter().enumerate() {
                 let x = left + cidx as f32 * cw;
-                if x + cw > w {
+                if x + cw > xmax {
                     break;
                 }
                 if let Some(bg) = cell.bg {
-                    c.rect(x as i32, y as i32, cw.ceil() as i32 + 1, lh as i32, bg, 1.0);
+                    c.rect(x as i32, y as i32, cw.ceil() as i32 + 1, lh as i32, bg, k);
                 }
                 if cell.cont || cell.ch == ' ' {
                     continue;
@@ -1281,9 +1347,9 @@ impl Scene {
                 } else {
                     &mut self.mono
                 };
-                c.glyph_at(font, px, x, y + self.ascent, cell.ch, color, 1.0);
+                c.glyph_at(font, px, x, y + self.ascent, cell.ch, color, k);
                 if cell.underline {
-                    c.rect(x as i32, (y + lh - 3.0 * s) as i32, cw as i32, 1.max(s as i32), color, 0.9);
+                    c.rect(x as i32, (y + lh - 3.0 * s) as i32, cw as i32, 1.max(s as i32), color, 0.9 * k);
                 }
             }
         }
@@ -1293,17 +1359,16 @@ impl Scene {
             let (x, y) = (left + cc as f32 * cw, top + cr as f32 * lh);
             let (blink, _) = self.blink(now);
             if tv.focus {
-                c.rrect(x, y + 1.0, cw, lh - 2.0, 2.0 * s, d::GREEN, 0.9 * blink.max(0.35));
+                c.rrect(x, y + 1.0, cw, lh - 2.0, 2.0 * s, d::GREEN, 0.9 * blink.max(0.35) * k);
                 if let Some(cell) = tv.screen.rows.get(cr).and_then(|r| r.get(cc)) {
                     if cell.ch != ' ' && !cell.cont {
-                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::BG, blink.max(0.35));
+                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::BG, blink.max(0.35) * k);
                     }
                 }
             } else {
-                c.rrect_border(x, y + 1.0, cw, lh - 2.0, 2.0 * s, 1.0, d::GREEN, 0.7);
+                c.rrect_border(x, y + 1.0, cw, lh - 2.0, 2.0 * s, 1.0, d::GREEN, 0.7 * k);
             }
         }
-        c.clip = prev;
     }
 
     /// Explorador: painel que desliza da esquerda, itens com recuo, seleção que desliza.
@@ -1940,7 +2005,7 @@ mod testes {
         let mut vm = s.view_model();
         let t0 = Instant::now();
         let sem = quadro(&mut sc, &vm, w, h, t0);
-        vm.term = Some(crate::nview::TermView { screen: tela, focus: true });
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
         let mut com = sem.clone();
         for i in 1..60 {
             com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
@@ -1954,6 +2019,45 @@ mod testes {
             quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
         }
         assert!((sc.layout(w, h, 1).rows - rows0).abs() < 0.01, "e volta ao fechar");
+    }
+
+    #[test]
+    fn zen_cobre_a_janela_com_uma_coluna_centrada_e_volta() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (1000u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: true,
+            exited: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
+        let mut normal = quadro(&mut sc, &vm, w, h, t0);
+        for i in 1..60 {
+            normal = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        vm.term.as_mut().unwrap().zen = true;
+        let mut zen = normal.clone();
+        for i in 60..140 {
+            zen = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(normal.iter().zip(&zen).filter(|(a, b)| a != b).count() > 50_000, "o zen repinta a janela");
+        let (tr, tc) = sc.term_dims(w, h);
+        assert!(tc <= super::ZEN_COLS && tc >= 60, "coluna estreita: {tc}");
+        assert!(tr > 20, "ocupa a altura: {tr}");
+        // os cantos ficam só com o véu (sem o editor nem o terminal)
+        assert_eq!(zen[0], zen[(w * h - 1) as usize], "cantos iguais");
+        vm.term.as_mut().unwrap().zen = false;
+        let mut volta = zen.clone();
+        for i in 140..240 {
+            volta = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(volta.iter().zip(&normal).filter(|(a, b)| a != b).count() < 200, "e volta ao normal");
     }
 
     #[test]

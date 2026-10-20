@@ -87,6 +87,7 @@ pub struct Session {
     tree_focus: bool,
     term: Option<Term>,
     term_focus: bool,
+    term_zen: bool,
     lsp: Option<LspRef>,
     lsp_pool: LspPool,
     comp: Option<Comp>,
@@ -162,6 +163,7 @@ impl Session {
             tree_focus: false,
             term: None,
             term_focus: false,
+            term_zen: false,
             lsp: None,
             lsp_pool: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             comp: None,
@@ -358,6 +360,7 @@ impl Session {
                 [Key::Char('T')] => self.term_close(),
                 [Key::Char('A')] => return,
                 [Key::Char('A'), Key::Char('l')] => self.open_agent(),
+                [Key::Char('A'), Key::Char('z')] => self.toggle_zen(),
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
@@ -691,11 +694,24 @@ impl Session {
         self.term_spawn(portable_pty::CommandBuilder::new(nome));
     }
 
+    /// `<Líder>Az`: modo zen. Abre o agente (se não houver terminal) em tela cheia, com o teclado nele.
+    fn toggle_zen(&mut self) {
+        if self.term.is_none() {
+            self.open_agent();
+            if self.term.is_none() {
+                return;
+            }
+        }
+        self.term_zen = !self.term_zen;
+        self.term_focus = true;
+    }
+
     fn term_close(&mut self) {
         if let Some(mut t) = self.term.take() {
             t.matar();
         }
         self.term_focus = false;
+        self.term_zen = false;
         self.term_esc = false;
         self.term_screen = None;
     }
@@ -715,6 +731,7 @@ impl Session {
             self.term_esc = false;
             if keys.eq_ignore_ascii_case("<C-n>") {
                 self.term_focus = false;
+                self.term_zen = false;
                 // o que foi feito no terminal pode ter mudado o git (commit, checkout...)
                 self.git_load();
                 return;
@@ -911,12 +928,13 @@ impl Session {
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
         let pool = self.lsp_pool.clone();
-        let (term, term_focus, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_dims, self.term_screen.take(), self.notify.take());
+        let (term, term_focus, term_zen, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_zen, self.term_dims, self.term_screen.take(), self.notify.take());
         *self = Session::open(path);
         self.root = root;
         self.leader_key = lider;
         self.term = term;
         self.term_focus = term_focus;
+        self.term_zen = term_zen;
         self.term_dims = term_dims;
         self.term_screen = term_screen;
         self.notify = notify;
@@ -1243,7 +1261,7 @@ impl Session {
                 }
             }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
-            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus }),
+            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen }),
             tree: self.tree.as_ref().map(|t| {
                 let first = t.sel.saturating_sub(100);
                 TreeView {
@@ -1283,6 +1301,7 @@ fn mover_paineis(de: &mut Session, para: &mut Session) {
     para.tree_focus = std::mem::take(&mut de.tree_focus);
     para.term = de.term.take();
     para.term_focus = std::mem::take(&mut de.term_focus);
+    para.term_zen = std::mem::take(&mut de.term_zen);
     para.term_esc = std::mem::take(&mut de.term_esc);
     para.term_dims = de.term_dims;
     para.term_screen = de.term_screen.take();
@@ -1676,6 +1695,26 @@ mod testes {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn zen_alterna_e_ctrl_barra_ctrl_n_sai() {
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.feed(" t");
+        assert!(!modelo(&mut s).term.as_ref().unwrap().zen);
+        s.toggle_zen();
+        assert!(modelo(&mut s).term.as_ref().is_some_and(|t| t.zen && t.focus), "zen com o teclado no terminal");
+        s.toggle_zen();
+        assert!(!modelo(&mut s).term.as_ref().unwrap().zen);
+        s.toggle_zen();
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        let m = modelo(&mut s);
+        assert!(m.term.as_ref().is_some_and(|t| !t.zen && !t.focus), "sair devolve o editor");
+        s.term_close();
+    }
+
     #[test]
     fn espaco_t_abre_o_terminal_recebe_teclas_e_devolve_o_foco() {
         std::env::set_var("SHELL", "/bin/sh");

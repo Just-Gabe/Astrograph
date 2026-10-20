@@ -55,6 +55,32 @@ fn commit_atual(raiz: &Path) -> String {
     git(raiz, &["rev-parse", "--short", "HEAD"], LIMITE_GIT).texto()
 }
 
+/// Pastas que entram no build de `crate_`: ela mesma e as crates locais de que depende
+/// (`path = "../x"` no Cargo.toml, em qualquer nivel). Sem isso, mudar o motor
+/// (`astrograph-core`) nao recompilaria o app.
+pub fn pastas_do_build(raiz: &Path, crate_: &str) -> Vec<String> {
+    let mut fila = vec![crate_.to_string()];
+    let mut vistas: Vec<String> = Vec::new();
+    while let Some(c) = fila.pop() {
+        if vistas.contains(&c) {
+            continue;
+        }
+        let toml = fs::read_to_string(raiz.join("prototype").join(&c).join("Cargo.toml")).unwrap_or_default();
+        for linha in toml.lines() {
+            let Some(i) = linha.find("path") else { continue };
+            let resto = linha[i + 4..].trim_start();
+            let Some(resto) = resto.strip_prefix('=') else { continue };
+            let Some(resto) = resto.trim_start().strip_prefix('"') else { continue };
+            let Some(f) = resto.find('"') else { continue };
+            if let Some(nome) = resto[..f].strip_prefix("../") {
+                fila.push(nome.trim_end_matches('/').to_string());
+            }
+        }
+        vistas.push(c);
+    }
+    vistas
+}
+
 /// O que precisa de build: falta o executavel (e a ultima falha nao foi neste
 /// commit) ou o codigo da crate mudou entre `de` e `para`.
 pub fn precisam(raiz: &Path, mudanca: Option<(&str, &str)>) -> Vec<&'static Alvo> {
@@ -67,7 +93,10 @@ pub fn precisam(raiz: &Path, mudanca: Option<(&str, &str)>) -> Vec<&'static Alvo
             match mudanca {
                 Some((de, para)) if existe => {
                     // 1 = mudou; erro (commit sumiu) = assume que mudou
-                    git(raiz, &["diff", "--quiet", de, para, "--", &format!("prototype/{}", a.crate_)], LIMITE_GIT).codigo != 0
+                    let mut args: Vec<String> = ["diff", "--quiet", de, para, "--"].iter().map(|s| s.to_string()).collect();
+                    args.extend(pastas_do_build(raiz, a.crate_).iter().map(|c| format!("prototype/{c}")));
+                    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                    git(raiz, &args, LIMITE_GIT).codigo != 0
                 }
                 _ => {
                     let falhou = fs::read_to_string(marca_falha(raiz, a)).map(|s| s.trim() == commit).unwrap_or(false);
@@ -116,4 +145,20 @@ pub fn compilar(raiz: &Path, mudanca: Option<(&str, &str)>) -> (Vec<String>, Vec
         }
     }
     (ok, falhou)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn o_app_depende_do_motor_e_dos_servicos() {
+        let raiz = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut ui = pastas_do_build(&raiz, "astrograph-ui");
+        ui.sort();
+        for esperado in ["astrograph-core", "astrograph-servicos", "astrograph-syntax", "astrograph-ui"] {
+            assert!(ui.iter().any(|c| c == esperado), "{esperado} em {ui:?}");
+        }
+        assert_eq!(pastas_do_build(&raiz, "astrograph-agent"), vec!["astrograph-agent".to_string()]);
+    }
 }
