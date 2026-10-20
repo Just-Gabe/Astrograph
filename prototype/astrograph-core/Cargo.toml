@@ -1,0 +1,21 @@
+[package]
+name = "astrograph-core"
+version = "0.1.0"
+edition = "2021"
+description = "Astrograph: nucleo do editor modal em Rust (buffer, modos, movimentos, operadores, desfazer), sem Neovim"
+publish = false
+
+[dependencies]
+ropey = "1.6"
+unicode-width = "0.2"
+
+[dev-dependencies]
+serde_json = "1"
+nvim-rs = { version = "0.9", features = ["use_tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync"] }
+async-trait = "0.1"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 4
