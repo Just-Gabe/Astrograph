@@ -7,8 +7,11 @@
 #   2. Instala a Nerd Font JetBrainsMono (por usuário, sem admin) + registra no Windows
 #   3. (Opcional) aponta a fonte do Windows Terminal para a Nerd Font
 #   4. Clona o Astrograph em %LOCALAPPDATA%\Astrograph
-#   5. Liga a config: %LOCALAPPDATA%\nvim  ->  Astrograph\template (com backup do antigo)
-#   6. Instala o app Astrograph (UI em Rust): atalho no menu Iniciar e o comando `astrograph`
+#   5. Liga a config: %LOCALAPPDATA%\nvim  ->  Astrograph\template. Se já houver
+#      uma config do Neovim, pergunta: limpar e substituir, importar ou manter
+#      (ASTROGRAPH_CONFIG_EXISTENTE=limpar|importar|manter responde sem perguntar)
+#   6. Instala o app Astrograph (UI em Rust): baixa do GitHub Releases; sem
+#      release, instala o Rust + Build Tools do Visual C++ e compila
 #   7. Baixa os plugins do Neovim (Lazy) + ferramentas do Mason
 #
 # É idempotente: o que já existe na máquina (programas, fonte, clone) não é
@@ -31,6 +34,63 @@ function Warn($m) { Write-Host "[astrograph] $m" -ForegroundColor Yellow }
 # --- 0. Pré-requisitos -----------------------------------------------------
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
   throw 'winget não encontrado. Instale o "App Installer" pela Microsoft Store e rode o script de novo.'
+}
+
+function Test-Interactive {
+  if ([Console]::IsInputRedirected) { return $false }
+  try { $null = [Console]::KeyAvailable; return $true } catch { return $false }
+}
+
+# --- 0b. Config do Neovim que já existe na máquina --------------------------
+# Pergunta logo no início: escolher "manter" não deve custar a instalação toda.
+$Template = Join-Path $Root 'template'
+$DataDir  = Join-Path $env:LOCALAPPDATA 'nvim-data'
+$LocalDir = if ($env:ASTROGRAPH_LOCAL) { $env:ASTROGRAPH_LOCAL } else { Join-Path $env:LOCALAPPDATA 'astrograph-local' }
+$existing = $null        # pasta com a config de antes (ou destino da ligação antiga)
+$existingIsLink = $false
+$configMode = 'nova'
+$cfgItem = Get-Item -LiteralPath $Config -Force -ErrorAction SilentlyContinue
+if ($cfgItem) {
+  if ($cfgItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    $target = (@($cfgItem.Target) -join '').TrimEnd('\')
+    if ($target -ne $Template.TrimEnd('\') -and (Test-Path -LiteralPath $target)) {
+      $existing = $target; $existingIsLink = $true
+    }
+  } elseif (Get-ChildItem -LiteralPath $Config -Force | Select-Object -First 1) {
+    $existing = $Config
+  }
+}
+if ($existing) {
+  $oldInit = Join-Path $existing 'init.lua'
+  $isOldAstrograph = (Test-Path $oldInit) -and ((Get-Content $oldInit -Raw) -match 'Astrograph')
+  $configMode = "$env:ASTROGRAPH_CONFIG_EXISTENTE".Trim().ToLower()
+  if ($configMode -and $configMode -notin @('limpar', 'importar', 'manter')) {
+    Warn "ASTROGRAPH_CONFIG_EXISTENTE='$configMode' não reconhecido (use limpar, importar ou manter)."
+    $configMode = ''
+  }
+  if (-not $configMode -and $isOldAstrograph) {
+    # cópia antiga do próprio Astrograph (não a ligação): importar duplicaria
+    # os plugins do Astrograph; vai para backup e a ligação nova entra
+    Info "Achei uma cópia antiga do Astrograph em ${existing}: vai para backup e é substituída."
+    $configMode = 'limpar'
+  }
+  if (-not $configMode) {
+    if (Test-Interactive) {
+      $desc = if ($existingIsLink) { "uma ligação para $existing" } else { $existing }
+      Write-Host ''
+      Warn "Já existe uma config do Neovim: $desc"
+      Write-Host '  [1] Limpar e substituir  config e dados antigos (plugins, Mason) vão para backup; começa do zero'
+      Write-Host '  [2] Importar             faz o backup e traz seus plugins (lua/plugins), polish, módulos,'
+      Write-Host "                           ftplugin/after/snippets para os plugins locais ($LocalDir)"
+      Write-Host '  [3] Manter               não mexe na config do Neovim (instala o resto do Astrograph)'
+      $pick = (Read-Host '  escolha [1]').Trim()
+      $configMode = switch ($pick) { '2' { 'importar' } '3' { 'manter' } default { 'limpar' } }
+    } else {
+      Info 'Sem terminal interativo: a config existente vai para backup e é substituída (ASTROGRAPH_CONFIG_EXISTENTE muda isso).'
+      $configMode = 'limpar'
+    }
+  }
+  Info "Config existente: $configMode"
 }
 
 # --- 1. Pacotes (winget): só o que falta ------------------------------------
@@ -165,47 +225,203 @@ if ($appOpen) {
   Info "Clonando o Astrograph em $Root"
   git clone --depth 1 $Repo $Root
 }
+# Arquivo da config sumido do clone (pull interrompido, antivírus...): o nvim
+# abriria com "module 'polish' not found". Restaura só o que foi apagado.
+$gone = @(git -C $Root ls-files -d -- template 2>$null | Where-Object { $_ })
+if ($gone.Count -gt 0) {
+  git -C $Root checkout -- $gone
+  Info "Restaurados $($gone.Count) arquivo(s) da config que faltavam no clone"
+}
 
 # --- 5. Ligar a config -----------------------------------------------------
-$Template = Join-Path $Root 'template'
-$linked = $false
-if (Test-Path $Config) {
-  $item = Get-Item $Config -Force
-  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-    if ((@($item.Target) -join '').TrimEnd('\') -eq $Template.TrimEnd('\')) {
-      $linked = $true
-    } else {
+# Traz o que dá para reaproveitar da config antiga para os plugins locais
+# (astrograph-local, fora do git). Nunca sobrescreve um arquivo que já esteja lá.
+function Import-NvimConfig($src) {
+  $specs = Join-Path $LocalDir 'specs'
+  $plug  = Join-Path $LocalDir 'plugin'
+  $lua   = Join-Path $LocalDir 'lua'
+  New-Item -ItemType Directory -Force -Path $specs, $plug, $lua | Out-Null
+  $done = New-Object System.Collections.Generic.List[string]
+  $kept = New-Object System.Collections.Generic.List[string]
+  function Put($from, $to) {
+    if (Test-Path -LiteralPath $to) { $kept.Add($to); return }
+    New-Item -ItemType Directory -Force -Path (Split-Path $to) | Out-Null
+    Copy-Item -LiteralPath $from $to -Recurse
+    $done.Add($to)
+  }
+  $srcLua = Join-Path $src 'lua'
+  # specs do lazy: cada arquivo de lua/plugins vira um spec local
+  $plugins = Join-Path $srcLua 'plugins'
+  if (Test-Path $plugins) {
+    Get-ChildItem $plugins -Filter '*.lua' -File | ForEach-Object { Put $_.FullName (Join-Path $specs "importado-$($_.Name)") }
+    Get-ChildItem $plugins -Directory | ForEach-Object {
+      Put $_.FullName (Join-Path $lua "plugins\$($_.Name)")
+      $init = Join-Path $_.FullName 'init.lua'
+      if (Test-Path $init) { Put $init (Join-Path $specs "importado-$($_.Name).lua") }
+    }
+  }
+  $community = Join-Path $srcLua 'community.lua'
+  if (Test-Path $community) { Put $community (Join-Path $specs 'importado-community.lua') }
+  # polish roda depois dos plugins: vira um plugin/ do astrograph-local
+  $polish = Join-Path $srcLua 'polish.lua'
+  if (Test-Path $polish) { Put $polish (Join-Path $plug 'zz-importado-polish.lua') }
+  # demais módulos (com os nomes de origem, para os `require` continuarem valendo)
+  $ours = @('plugins', 'polish.lua', 'lazy_setup.lua', 'community.lua', 'astrograph')
+  if (Test-Path $srcLua) {
+    Get-ChildItem $srcLua -Force | Where-Object { $ours -notcontains $_.Name } |
+      ForEach-Object { Put $_.FullName (Join-Path $lua $_.Name) }
+  }
+  # LazyVim: options/keymaps/autocmds são carregados pela distro; aqui, por nós
+  $lazyvim = @('options', 'keymaps', 'autocmds') | Where-Object { Test-Path (Join-Path $srcLua "config\$_.lua") }
+  if ($lazyvim) {
+    $tmp = Join-Path $env:TEMP 'astrograph-importado-config.lua'
+    $body = ($lazyvim | ForEach-Object { "pcall(require, `"config.$_`")" }) -join "`n"
+    [IO.File]::WriteAllText($tmp, "-- importado da config antiga (LazyVim)`n$body`n", (New-Object System.Text.UTF8Encoding($false)))
+    Put $tmp (Join-Path $plug 'zz-importado-config.lua')
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+  }
+  # pastas que o Neovim lê direto do runtimepath
+  foreach ($d in @('after', 'ftplugin', 'ftdetect', 'snippets', 'spell', 'queries', 'syntax', 'indent', 'colors', 'autoload')) {
+    $p = Join-Path $src $d
+    if (Test-Path $p) { Put $p (Join-Path $LocalDir $d) }
+  }
+  # init.lua solto (só opções/atalhos) entra; um que monta o próprio lazy.nvim, não
+  $initLua = Join-Path $src 'init.lua'
+  $initVim = Join-Path $src 'init.vim'
+  if ((Test-Path $initLua) -and ((Get-Content $initLua -Raw) -notmatch 'lazy')) {
+    Put $initLua (Join-Path $plug '00-importado-init.lua')
+  } elseif (Test-Path $initVim) {
+    Put $initVim (Join-Path $plug '00-importado-init.vim')
+  } elseif (Test-Path $initLua) {
+    Warn "init.lua antigo monta o próprio gerenciador de plugins: não importei ($initLua). Copie à mão o que quiser."
+  }
+  $manifest = @("Importado em $(Get-Date -Format 'yyyy-MM-dd HH:mm') de: $src", '',
+    'Para desfazer, apague os arquivos abaixo.', '') + $done
+  if ($kept.Count) { $manifest += @('', 'Não copiados (já existiam):') + $kept }
+  Add-Content -Path (Join-Path $LocalDir 'IMPORTADO.txt') -Value $manifest -Encoding UTF8
+  Info "Importados $($done.Count) item(ns) para $LocalDir (lista em IMPORTADO.txt)"
+  if ($kept.Count) { Warn "$($kept.Count) item(ns) já existiam em $LocalDir e foram mantidos" }
+}
+
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+if ($configMode -eq 'manter') {
+  Warn "Config do Neovim mantida: o nvim continua abrindo a sua config, não a do Astrograph."
+} else {
+  if ($existing) {
+    if ($existingIsLink) {
       # só o link: o Remove-Item numa junction pergunta "tem filhos, apagar?" e,
       # confirmado, apagaria o conteúdo do destino
       [IO.Directory]::Delete($Config)
+      Info "Ligação antiga removida ($Config -> $existing; o destino ficou intacto)"
+    } else {
+      $existing = "$Config.backup-$stamp"
+      try { Move-Item -LiteralPath $Config $existing }
+      catch { throw "Não consegui mover $Config (algum nvim aberto?). Feche o Neovim/Astrograph e rode de novo." }
+      Info "Config anterior movida para $existing"
     }
-  } else {
-    $backup = "$Config.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    Move-Item $Config $backup
-    Info "Config anterior movida para $backup"
+    if ($configMode -eq 'importar') { Import-NvimConfig $existing }
+    if ($configMode -eq 'limpar' -and (Test-Path $DataDir)) {
+      # plugins/estado da config antiga misturados com os do Astrograph dão
+      # erro difícil de achar; o backup permite voltar
+      try {
+        Move-Item -LiteralPath $DataDir "$DataDir.backup-$stamp"
+        Info "Dados antigos (plugins, Mason, histórico) movidos para $DataDir.backup-$stamp"
+      } catch { Warn "Não consegui mover $DataDir (algum nvim aberto?). Os dados antigos ficaram." }
+    }
+    # cache de bytecode do vim.loader: se refaz sozinho
+    Remove-Item (Join-Path $env:TEMP 'nvim\luac') -Recurse -Force -ErrorAction SilentlyContinue
   }
-}
-if ($linked) {
-  Info "Config já ligada: $Config -> $Template"
-} else {
-  cmd /c mklink /J "$Config" $Template | Out-Null
-  Info "Ligado: $Config -> $Template"
+  $cfgItem = Get-Item -LiteralPath $Config -Force -ErrorAction SilentlyContinue
+  $linked = $cfgItem -and ($cfgItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+    ((@($cfgItem.Target) -join '').TrimEnd('\') -eq $Template.TrimEnd('\'))
+  if ($linked) {
+    Info "Config já ligada: $Config -> $Template"
+  } else {
+    # ligação quebrada ou pasta vazia que sobrou
+    # (Delete sem recursão: falha em vez de apagar se houver conteúdo)
+    if ($cfgItem) { [IO.Directory]::Delete($Config) }
+    cmd /c mklink /J "$Config" $Template | Out-Null
+    Info "Ligado: $Config -> $Template"
+  }
 }
 
 # --- 5b. App Astrograph (UI em Rust) ---------------------------------------
 # O Astrograph é a janela própria (Rust) com o Neovim como motor. Baixa o
 # executável do GitHub Releases só quando sai uma versão nova; sem release
-# publicado, compila a partir do código se houver Rust (cargo) na máquina.
+# publicado (ou com download recusado), instala o que falta e compila do código.
 $BinDir   = Join-Path $Root 'bin'
 $AppExe   = Join-Path $BinDir 'astrograph.exe'
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
 # o rustup instala em ~\.cargo\bin, mas nem sempre põe a pasta no PATH
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-  $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-  if (Test-Path (Join-Path $cargoBin 'cargo.exe')) { $env:Path = "$cargoBin;$env:Path" }
+$cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $cargoBin 'cargo.exe'))) {
+  $env:Path = "$cargoBin;$env:Path"
 }
-$hasCargo = [bool](Get-Command cargo -ErrorAction SilentlyContinue)
+
+$isArm = $env:PROCESSOR_ARCHITECTURE -eq 'ARM64'
+$rustHost = if ($isArm) { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
+$vcComponent = if ($isArm) { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
+
+# Linker do Visual C++ (link.exe), que o Rust usa no Windows. A toolchain GNU
+# (MinGW) não serve: o ld dela não acha os arquivos quando o caminho do perfil
+# tem acento (C:\Users\João...), nem com os nomes curtos 8.3.
+function Test-MsvcLinker {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+  if (-not (Test-Path $vswhere)) { return $false }
+  $found = & $vswhere -latest -products * -requires $vcComponent -property installationPath 2>$null
+  return [bool]$found
+}
+
+# Deixa a máquina pronta para compilar: Build Tools do Visual C++ + Rust
+# (rustup, toolchain MSVC). Roda uma vez só, e só quando precisa compilar.
+$script:rustReady = $null
+$script:cargoArgs = @()
+function Ensure-Rust {
+  if ($null -ne $script:rustReady) { return $script:rustReady }
+  $script:rustReady = $false
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    if (-not (Test-MsvcLinker)) {
+      Info 'Instalando o Visual Studio Build Tools (linker C++ do Rust; ~2 GB, o Windows pede permissão de administrador)...'
+      winget install --id Microsoft.VisualStudio.BuildTools -e --silent `
+        --accept-package-agreements --accept-source-agreements --disable-interactivity `
+        --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add $vcComponent --includeRecommended" | Out-Null
+      if (-not (Test-MsvcLinker)) {
+        Warn 'O Build Tools do Visual C++ não ficou instalado (permissão negada?). Rode de novo como administrador.'
+        return $false
+      }
+      Info 'Build Tools do Visual C++ instalado'
+    }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+      Info 'Instalando o Rust (rustup, toolchain estável)...'
+      $init = Join-Path $env:TEMP 'rustup-init.exe'
+      Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/$rustHost/rustup-init.exe" -OutFile $init -UseBasicParsing
+      & $init -y --profile minimal --default-toolchain stable --default-host $rustHost 2>&1 | Out-Null
+      $code = $LASTEXITCODE
+      Remove-Item $init -ErrorAction SilentlyContinue
+      $env:Path = "$cargoBin;$env:Path"
+      if ($code -ne 0 -or -not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Warn "Não consegui instalar o Rust (rustup-init saiu com $code)."
+        return $false
+      }
+      Info 'Rust instalado'
+    } elseif (Get-Command rustup -ErrorAction SilentlyContinue) {
+      # Rust que já existia com outra toolchain padrão (ex.: GNU): compila com a MSVC
+      $active = (rustup show active-toolchain 2>$null | Out-String)
+      if ($active -notmatch 'msvc') {
+        Info 'Rust sem a toolchain MSVC como padrão: instalando a stable-msvc só para compilar o Astrograph...'
+        rustup toolchain install "stable-$rustHost" --profile minimal 2>&1 | Out-Null
+        $script:cargoArgs = @("+stable-$rustHost")
+      }
+    }
+    $script:rustReady = $true
+    return $true
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
+}
 
 $release = $null
 try {
@@ -259,18 +475,26 @@ function Install-Binary($label, $exeName, $assetName, $crate, $builtName) {
     }
     if (& $place $tmp) { Set-Content $stamp $release.tag_name; Info "$label instalado (SHA256 conferido)" }
     Remove-Item $tmp -ErrorAction SilentlyContinue
-  } elseif ($hasCargo) {
+  } else {
     if ((Test-Path $exe) -and $installed -eq "src-$commit") { Info "$label já compilado desta versão"; return }
-    Info "Compilando o $label (Rust; ~2 min na primeira vez)..."
+    if ($env:ASTROGRAPH_SEM_COMPILAR -eq '1') { Warn "$label sem versão publicada e ASTROGRAPH_SEM_COMPILAR=1: pulei."; return }
+    if (-not (Ensure-Rust)) { Warn "$label não instalado: falta o Rust para compilar."; return }
+    Info "Compilando o $label (Rust; ~2 a 5 min na primeira vez)..."
+    $log = Join-Path $env:TEMP "astrograph-build-$crate.log"
+    $built = Join-Path $Root "prototype\$crate\target\release\$builtName"
+    Remove-Item $built -ErrorAction SilentlyContinue
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    cargo build --release --manifest-path (Join-Path $Root "prototype\$crate\Cargo.toml") 2>&1 | Out-Null
+    $cargoCmd = @($script:cargoArgs) + @('build', '--release', '--manifest-path', (Join-Path $Root "prototype\$crate\Cargo.toml"))
+    & cargo @cargoCmd 2>&1 | ForEach-Object { "$_" } | Set-Content $log -Encoding UTF8
+    $buildCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
-    $built = Join-Path $Root "prototype\$crate\target\release\$builtName"
-    if ((Test-Path $built) -and (& $place $built)) { Set-Content $stamp "src-$commit"; Info "$label compilado e instalado" }
-    else { Warn "Não consegui compilar o $label." }
-  } else {
-    Warn "$label ainda sem versão publicada e sem Rust para compilar."
+    if ($buildCode -eq 0 -and (Test-Path $built)) {
+      if (& $place $built) { Set-Content $stamp "src-$commit"; Info "$label compilado e instalado" }
+    } else {
+      Warn "Não consegui compilar o $label (cargo saiu com $buildCode). Final do log ($log):"
+      Get-Content $log -Tail 15 | ForEach-Object { Write-Host "    $_" }
+    }
   }
 }
 
@@ -301,7 +525,9 @@ if (Test-Path $AppExe) {
 }
 
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) ------------------------
-if (Get-Command nvim -ErrorAction SilentlyContinue) {
+if ($configMode -eq 'manter') {
+  Info 'Config do Neovim mantida: pulei os plugins do Astrograph (rodariam na sua config).'
+} elseif (Get-Command nvim -ErrorAction SilentlyContinue) {
   Info 'Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)...'
   # No PowerShell 5.1 um comando nativo que escreve em stderr aborta o script
   # quando $ErrorActionPreference='Stop' (o nvim/treesitter escreve bastante).
@@ -317,7 +543,10 @@ if (Get-Command nvim -ErrorAction SilentlyContinue) {
   $themeOut = ((nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>&1) -join '')
   $ErrorActionPreference = $prevEap
   $themeName = if ($themeOut -match 'ARTHEME=(\S+)') { $Matches[1] } else { 'desconhecido' }
-  if ($themeName -match 'astrograph') {
+  if ($themeOut -match "module '([^']+)' not found") {
+    Warn "O nvim abriu com erro: módulo '$($Matches[1])' não encontrado. A config ligada em $Config está incompleta."
+    Warn "Confira com: git -C `"$Root`" status   (ou rode o instalador de novo com ASTROGRAPH_CONFIG_EXISTENTE=limpar)"
+  } elseif ($themeName -match 'astrograph') {
     Info "Tema astrograph ativo ($themeName)."
   } else {
     Warn "Tema astrograph NÃO carregou (colorscheme='$themeName'). Abra o nvim e rode: :colorscheme astrograph"

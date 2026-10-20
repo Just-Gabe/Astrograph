@@ -22,8 +22,10 @@ curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.s
 ```
 
 O instalador cuida de tudo: Neovim 0.11+, Git, ripgrep, fd, compilador C, a
-JetBrainsMono Nerd Font, o clone do Astrograph e a ligação da config (com backup da
-antiga). No fim, um checklist opcional instala agentes de IA: Claude Code, opencode,
+JetBrainsMono Nerd Font, o clone do Astrograph, o app em Rust (baixado do release ou
+compilado, instalando Rust e linker se faltarem) e a ligação da config. Se já houver
+uma config do Neovim, ele pergunta se limpa e substitui, importa seus plugins ou
+mantém. No fim, um checklist opcional instala agentes de IA: Claude Code, opencode,
 Codex, Gemini e Ollama. Em seguida ele instala o que o chat precisa e oferece
 fazer o **login de cada agente** ali mesmo. Depois é só abrir um terminal novo e
 rodar `nvim`.

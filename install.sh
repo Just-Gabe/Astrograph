@@ -8,8 +8,11 @@
 #   2. Garante Neovim 0.11+ (usa o do sistema; se for antigo, baixa o tarball oficial)
 #   3. Instala a Nerd Font JetBrainsMono em ~/.local/share/fonts (+ fc-cache)
 #   4. Clona o Astrograph em ~/Astrograph
-#   5. Liga a config: ~/.config/nvim  ->  ~/Astrograph/template (com backup do antigo)
-#   6. Baixa os plugins do Neovim (Lazy) + ferramentas do Mason
+#   5. Liga a config: ~/.config/nvim  ->  ~/Astrograph/template. Se já houver
+#      uma config do Neovim, pergunta: limpar e substituir, importar ou manter
+#      (ASTROGRAPH_CONFIG_EXISTENTE=limpar|importar|manter responde sem perguntar)
+#   6. Instala o Rust (rustup) e compila o agente nativo e o app Astrograph
+#   7. Baixa os plugins do Neovim (Lazy) + ferramentas do Mason
 #
 # É idempotente: pode rodar de novo sem medo.
 
@@ -41,6 +44,57 @@ npm_global() {
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
+
+TTY=""
+if exec 3<>/dev/tty 2>/dev/null; then TTY=1; fi
+
+# --- 0. Config do Neovim que já existe na máquina --------------------------
+# Pergunta logo no início: escolher "manter" não deve custar a instalação toda.
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+DATA_DIR="$DATA_HOME/nvim"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nvim"
+LOCAL_DIR="${ASTROGRAPH_LOCAL:-$DATA_HOME/astrograph-local}"
+EXISTING=""      # pasta com a config de antes (ou destino do link antigo)
+EXISTING_LINK=""
+CONFIG_MODE="nova"
+if [ -L "$CONFIG" ]; then
+  target="$(readlink -f "$CONFIG" 2>/dev/null || readlink "$CONFIG")"
+  if [ -d "$target" ] && [ "$target" != "$(cd "$ROOT/template" 2>/dev/null && pwd -P)" ]; then
+    EXISTING="$target"; EXISTING_LINK=1
+  fi
+elif [ -d "$CONFIG" ] && [ -n "$(ls -A "$CONFIG" 2>/dev/null)" ]; then
+  EXISTING="$CONFIG"
+fi
+if [ -n "$EXISTING" ]; then
+  CONFIG_MODE="$(printf '%s' "${ASTROGRAPH_CONFIG_EXISTENTE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$CONFIG_MODE" in
+    limpar | importar | manter | "") ;;
+    *) warn "ASTROGRAPH_CONFIG_EXISTENTE='$CONFIG_MODE' não reconhecido (use limpar, importar ou manter)."; CONFIG_MODE="" ;;
+  esac
+  if [ -z "$CONFIG_MODE" ] && [ -f "$EXISTING/init.lua" ] && grep -q Astrograph "$EXISTING/init.lua"; then
+    # cópia antiga do próprio Astrograph: importar duplicaria os plugins dele
+    info "Achei uma cópia antiga do Astrograph em $EXISTING: vai para backup e é substituída."
+    CONFIG_MODE="limpar"
+  fi
+  if [ -z "$CONFIG_MODE" ]; then
+    if [ -n "$TTY" ]; then
+      desc="$EXISTING"; [ -n "$EXISTING_LINK" ] && desc="um link para $EXISTING"
+      printf '\n'
+      warn "Já existe uma config do Neovim: $desc"
+      printf '  [1] Limpar e substituir  config e dados antigos (plugins, Mason) vão para backup; começa do zero\n'
+      printf '  [2] Importar             faz o backup e traz seus plugins (lua/plugins), polish, módulos,\n'
+      printf '                           ftplugin/after/snippets para os plugins locais (%s)\n' "$LOCAL_DIR"
+      printf '  [3] Manter               não mexe na config do Neovim (instala o resto do Astrograph)\n'
+      printf '  escolha [1]: '
+      IFS= read -r -u 3 pick || pick=""
+      case "$pick" in 2) CONFIG_MODE="importar" ;; 3) CONFIG_MODE="manter" ;; *) CONFIG_MODE="limpar" ;; esac
+    else
+      info "Sem terminal interativo: a config existente vai para backup e é substituída (ASTROGRAPH_CONFIG_EXISTENTE muda isso)."
+      CONFIG_MODE="limpar"
+    fi
+  fi
+  info "Config existente: $CONFIG_MODE"
+fi
 
 # --- 1. Dependências do sistema -------------------------------------------
 info "Sistema: $OS ($ARCH)"
@@ -145,19 +199,179 @@ else
   info "Clonando o Astrograph em $ROOT"
   git clone --depth 1 "$REPO" "$ROOT"
 fi
+# Arquivo da config sumido do clone (pull interrompido...): o nvim abriria com
+# "module 'polish' not found". Restaura só o que foi apagado.
+gone="$(git -C "$ROOT" ls-files -d -- template 2>/dev/null || true)"
+if [ -n "$gone" ]; then
+  printf '%s\n' "$gone" | (cd "$ROOT" && xargs git checkout --)
+  info "Restaurados $(printf '%s\n' "$gone" | wc -l | tr -d ' ') arquivo(s) da config que faltavam no clone"
+fi
 
 # --- 5. Ligar a config -----------------------------------------------------
-mkdir -p "$(dirname "$CONFIG")"
-if [ -e "$CONFIG" ] && [ ! -L "$CONFIG" ]; then
-  backup="$CONFIG.backup-$(date +%Y%m%d-%H%M%S)"
-  mv "$CONFIG" "$backup"
-  info "Config anterior movida para $backup"
-fi
-ln -sfn "$ROOT/template" "$CONFIG"
-info "Ligado: $CONFIG -> $ROOT/template"
+# Traz o que dá para reaproveitar da config antiga para os plugins locais
+# (astrograph-local, fora do git). Nunca sobrescreve o que já esteja lá.
+IMPORT_DONE=()
+IMPORT_KEPT=()
+put() {
+  if [ -e "$2" ]; then IMPORT_KEPT+=("$2"); return 0; fi
+  mkdir -p "$(dirname "$2")"
+  cp -R "$1" "$2"
+  IMPORT_DONE+=("$2")
+}
+import_nvim_config() {
+  local src="$1" f d name body=""
+  mkdir -p "$LOCAL_DIR/specs" "$LOCAL_DIR/plugin" "$LOCAL_DIR/lua"
+  # specs do lazy: cada arquivo de lua/plugins vira um spec local
+  if [ -d "$src/lua/plugins" ]; then
+    for f in "$src/lua/plugins"/*.lua; do
+      if [ -f "$f" ]; then put "$f" "$LOCAL_DIR/specs/importado-$(basename "$f")"; fi
+    done
+    for d in "$src/lua/plugins"/*/; do
+      [ -d "$d" ] || continue
+      name="$(basename "$d")"
+      put "${d%/}" "$LOCAL_DIR/lua/plugins/$name"
+      if [ -f "$d/init.lua" ]; then put "$d/init.lua" "$LOCAL_DIR/specs/importado-$name.lua"; fi
+    done
+  fi
+  if [ -f "$src/lua/community.lua" ]; then put "$src/lua/community.lua" "$LOCAL_DIR/specs/importado-community.lua"; fi
+  # polish roda depois dos plugins: vira um plugin/ do astrograph-local
+  if [ -f "$src/lua/polish.lua" ]; then put "$src/lua/polish.lua" "$LOCAL_DIR/plugin/zz-importado-polish.lua"; fi
+  # demais módulos (com os nomes de origem, para os `require` continuarem valendo)
+  if [ -d "$src/lua" ]; then
+    for f in "$src/lua"/* "$src/lua"/.[!.]*; do
+      [ -e "$f" ] || continue
+      case "$(basename "$f")" in plugins | polish.lua | lazy_setup.lua | community.lua | astrograph) continue ;; esac
+      put "$f" "$LOCAL_DIR/lua/$(basename "$f")"
+    done
+  fi
+  # LazyVim: options/keymaps/autocmds são carregados pela distro; aqui, por nós
+  for name in options keymaps autocmds; do
+    if [ -f "$src/lua/config/$name.lua" ]; then body="${body}pcall(require, \"config.$name\")"$'\n'; fi
+  done
+  if [ -n "$body" ]; then
+    printf -- '-- importado da config antiga (LazyVim)\n%s' "$body" >/tmp/astrograph-importado-config.lua
+    put /tmp/astrograph-importado-config.lua "$LOCAL_DIR/plugin/zz-importado-config.lua"
+    rm -f /tmp/astrograph-importado-config.lua
+  fi
+  # pastas que o Neovim lê direto do runtimepath
+  for d in after ftplugin ftdetect snippets spell queries syntax indent colors autoload; do
+    if [ -d "$src/$d" ]; then put "$src/$d" "$LOCAL_DIR/$d"; fi
+  done
+  # init.lua solto (só opções/atalhos) entra; um que monta o próprio lazy.nvim, não
+  if [ -f "$src/init.lua" ] && ! grep -q lazy "$src/init.lua"; then
+    put "$src/init.lua" "$LOCAL_DIR/plugin/00-importado-init.lua"
+  elif [ -f "$src/init.vim" ]; then
+    put "$src/init.vim" "$LOCAL_DIR/plugin/00-importado-init.vim"
+  elif [ -f "$src/init.lua" ]; then
+    warn "init.lua antigo monta o próprio gerenciador de plugins: não importei ($src/init.lua). Copie à mão o que quiser."
+  fi
+  {
+    printf 'Importado em %s de: %s\n\nPara desfazer, apague os arquivos abaixo.\n\n' "$(date '+%Y-%m-%d %H:%M')" "$src"
+    for f in ${IMPORT_DONE[@]+"${IMPORT_DONE[@]}"}; do printf '%s\n' "$f"; done
+    if [ "${#IMPORT_KEPT[@]}" -gt 0 ]; then
+      printf '\nNão copiados (já existiam):\n'
+      for f in "${IMPORT_KEPT[@]}"; do printf '%s\n' "$f"; done
+    fi
+  } >>"$LOCAL_DIR/IMPORTADO.txt"
+  info "Importados ${#IMPORT_DONE[@]} item(ns) para $LOCAL_DIR (lista em IMPORTADO.txt)"
+  if [ "${#IMPORT_KEPT[@]}" -gt 0 ]; then warn "${#IMPORT_KEPT[@]} item(ns) já existiam em $LOCAL_DIR e foram mantidos"; fi
+}
 
-# --- 6. Baixar plugins (Lazy) e ferramentas (Mason) -----------------------
-if command -v nvim >/dev/null 2>&1; then
+stamp="$(date +%Y%m%d-%H%M%S)"
+if [ "$CONFIG_MODE" = "manter" ]; then
+  warn "Config do Neovim mantida: o nvim continua abrindo a sua config, não a do Astrograph."
+else
+  mkdir -p "$(dirname "$CONFIG")"
+  if [ -n "$EXISTING" ]; then
+    if [ -n "$EXISTING_LINK" ]; then
+      rm -f "$CONFIG" # só o link; o destino fica intacto
+      info "Link antigo removido ($CONFIG -> $EXISTING; o destino ficou intacto)"
+    else
+      EXISTING="$CONFIG.backup-$stamp"
+      mv "$CONFIG" "$EXISTING"
+      info "Config anterior movida para $EXISTING"
+    fi
+    if [ "$CONFIG_MODE" = "importar" ]; then import_nvim_config "$EXISTING"; fi
+    if [ "$CONFIG_MODE" = "limpar" ]; then
+      # plugins/estado da config antiga misturados com os do Astrograph dão
+      # erro difícil de achar; o backup permite voltar
+      for d in "$DATA_DIR" "$STATE_DIR"; do
+        if [ -d "$d" ]; then mv "$d" "$d.backup-$stamp" && info "Dados antigos movidos para $d.backup-$stamp"; fi
+      done
+    fi
+    # cache de bytecode do vim.loader: se refaz sozinho
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/nvim/luac"
+  fi
+  # pasta vazia que sobrou (rmdir falha em vez de apagar se houver conteúdo)
+  if [ -d "$CONFIG" ] && [ ! -L "$CONFIG" ]; then rmdir "$CONFIG"; fi
+  ln -sfn "$ROOT/template" "$CONFIG"
+  info "Ligado: $CONFIG -> $ROOT/template"
+fi
+
+# --- 6. Agente nativo e app Astrograph (Rust) ------------------------------
+# Não há executável publicado para Linux/macOS: instala o Rust (rustup, sem
+# root) e compila do código. O editor procura o agente em ~/Astrograph/bin.
+APP_BIN="$ROOT/bin"
+mkdir -p "$APP_BIN"
+COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo desconhecido)"
+RUST_READY=""
+ensure_rust() {
+  if [ "$RUST_READY" = 1 ]; then return 0; fi
+  if [ "$RUST_READY" = 0 ]; then return 1; fi
+  RUST_READY=0
+  # shellcheck disable=SC1091
+  if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    info "Instalando o Rust (rustup, toolchain estável)..."
+    if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+      sh -s -- -y --profile minimal --default-toolchain stable >/tmp/astrograph-rustup.log 2>&1; then
+      warn "Não consegui instalar o Rust (log em /tmp/astrograph-rustup.log)."
+      return 1
+    fi
+    # shellcheck disable=SC1091
+    . "$HOME/.cargo/env"
+    info "Rust instalado"
+  fi
+  command -v cargo >/dev/null 2>&1 || return 1
+  RUST_READY=1
+}
+# build_binary <rótulo> <crate> <executável instalado>
+build_binary() {
+  local label="$1" crate="$2" bin="$3"
+  local stampf="$APP_BIN/$3.version" log="/tmp/astrograph-build-$2.log"
+  if [ -x "$APP_BIN/$bin" ] && [ "$(cat "$stampf" 2>/dev/null)" = "src-$COMMIT" ]; then
+    info "$label já compilado desta versão"
+    return 0
+  fi
+  if ! ensure_rust; then warn "$label não instalado: falta o Rust para compilar."; return 1; fi
+  info "Compilando o $label (Rust; ~2 a 5 min na primeira vez)..."
+  if cargo build --release --manifest-path "$ROOT/prototype/$crate/Cargo.toml" >"$log" 2>&1 &&
+    cp "$ROOT/prototype/$crate/target/release/$crate" "$APP_BIN/$bin"; then
+    printf 'src-%s\n' "$COMMIT" >"$stampf"
+    info "$label compilado e instalado"
+  else
+    warn "Não consegui compilar o $label. Final do log ($log):"
+    tail -n 15 "$log" | sed 's/^/    /'
+    return 1
+  fi
+}
+if [ "${ASTROGRAPH_SEM_COMPILAR:-}" = "1" ]; then
+  warn "ASTROGRAPH_SEM_COMPILAR=1: pulei o agente nativo e o app."
+else
+  # ponte com os agentes (Claude Code, opencode...): usada por <Leader>Ae no editor
+  build_binary "agente nativo" astrograph-agent astrograph-agent || true
+  if build_binary "app Astrograph" astrograph-ui astrograph; then
+    ln -sfn "$APP_BIN/astrograph" "$BIN_DIR/astrograph"
+    info "Comando \"astrograph\" em $BIN_DIR"
+  else
+    warn "Sem o app, o Astrograph segue funcionando no terminal (nvim)."
+  fi
+fi
+
+# --- 7. Baixar plugins (Lazy) e ferramentas (Mason) -----------------------
+if [ "$CONFIG_MODE" = "manter" ]; then
+  info "Config do Neovim mantida: pulei os plugins do Astrograph (rodariam na sua config)."
+elif command -v nvim >/dev/null 2>&1; then
   info "Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)..."
   # O último passo compila os parsers do Treesitter (alguns segundos) para o
   # primeiro arquivo aberto já vir com o realce de sintaxe pronto.
@@ -165,13 +379,17 @@ if command -v nvim >/dev/null 2>&1; then
 
   # Confere que a config subiu com o tema certo (senão caiu no fallback)
   info "Verificando o tema..."
-  theme_out="$(nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>/dev/null || true)"
+  theme_out="$(nvim --headless "+lua vim.wait(1500); io.write('ARTHEME='..(vim.g.colors_name or 'nil'))" +qa 2>&1 || true)"
   case "$theme_out" in
     *ARTHEME=*) theme_name="${theme_out##*ARTHEME=}"; theme_name="${theme_name%%[[:space:]]*}" ;;
     *) theme_name="" ;;
   esac
   if [ -z "$theme_name" ]; then theme_name="desconhecido"; fi
-  if printf '%s' "$theme_name" | grep -q astrograph; then
+  missing_mod="$(printf '%s' "$theme_out" | sed -n "s/.*module '\([^']*\)' not found.*/\1/p" | head -n1)"
+  if [ -n "$missing_mod" ]; then
+    warn "O nvim abriu com erro: módulo '$missing_mod' não encontrado. A config ligada em $CONFIG está incompleta."
+    warn "Confira com: git -C \"$ROOT\" status   (ou rode o instalador de novo com ASTROGRAPH_CONFIG_EXISTENTE=limpar)"
+  elif printf '%s' "$theme_name" | grep -q astrograph; then
     info "Tema astrograph ativo ($theme_name)."
   else
     warn "Tema astrograph NÃO carregou (colorscheme='$theme_name'). Rode: nvim e :colorscheme astrograph"
@@ -180,7 +398,7 @@ else
   warn "nvim não encontrado no PATH. Abra um terminal novo e rode: nvim"
 fi
 
-# --- 7. Agentes (opcional, via checklist) ---------------------------------
+# --- 8. Agentes (opcional, via checklist) ---------------------------------
 AGENT_IDS=(claude opencode codex gemini ollama)
 AGENT_BINS=(claude opencode codex gemini ollama)
 AGENT_LABELS=("Claude Code" "opencode" "Codex CLI" "Gemini CLI" "Ollama")
@@ -321,7 +539,7 @@ if [ "${#SELECTED_IDS[@]}" -gt 0 ]; then
 
 fi
 
-# --- 8. Configurar os agentes instalados (ponte do chat + login) ----------
+# --- 9. Configurar os agentes instalados (ponte do chat + login) ----------
 # Roda para TODOS os agentes no PATH, inclusive os que já existiam: o chat do
 # editor (<Leader>Ac) precisa da ponte ACP, e cada CLI precisa de login.
 # Sem terminal interativo, ou com ASTROGRAPH_NO_LOGIN=1, só mostra os comandos.

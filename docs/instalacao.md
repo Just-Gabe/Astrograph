@@ -35,13 +35,44 @@ Treesitter terminam de compilar em segundo plano.
 | Fonte | JetBrainsMono Nerd Font (por usuário, sem admin) e ajusta o Windows Terminal | `~/.local/share/fonts` + `fc-cache` |
 | Código | clona em `%LOCALAPPDATA%\Astrograph` | clona em `~/Astrograph` |
 | Config | liga `%LOCALAPPDATA%\nvim` → `Astrograph\template` | liga `~/.config/nvim` → `~/Astrograph/template` |
+| App e agente nativo (Rust) | baixa do GitHub Releases (SHA256 conferido); sem release, instala o Build Tools do Visual C++ e o Rust e compila | instala o Rust (rustup) e compila |
 | Plugins | `Lazy! restore` + ferramentas do Mason | igual |
 | Agentes | checklist opcional (Claude Code, opencode, Codex, Gemini, Ollama) | igual |
 | Login dos agentes | instala a ponte do chat e oferece login em cada agente instalado | igual |
 
 {: .note }
 Os dois scripts podem rodar de novo sem problema: atualizam o clone, mantêm a
-config ligada e fazem **backup** de uma config antiga do Neovim antes de trocar.
+config ligada e restauram arquivos da config que tenham sumido do clone.
+
+## Já tenho uma config do Neovim
+
+Se já existir uma config em `%LOCALAPPDATA%\nvim` (ou `~/.config/nvim`), o
+instalador pergunta o que fazer:
+
+| Opção | O que acontece |
+| --- | --- |
+| **1. Limpar e substituir** (padrão) | a config vai para `nvim.backup-<data>` e os dados (plugins, Mason, histórico) para `nvim-data.backup-<data>`; o Astrograph começa do zero |
+| **2. Importar** | faz o mesmo backup da config e copia para os plugins locais (`astrograph-local`): os specs de `lua/plugins`, `polish.lua`, `community.lua`, os demais módulos de `lua/`, `options`/`keymaps`/`autocmds` do LazyVim e as pastas `after/`, `ftplugin/`, `snippets/`, `spell/`... A lista fica em `astrograph-local/IMPORTADO.txt` |
+| **3. Manter** | não mexe na config do Neovim; instala o resto (clone, app, agentes) |
+
+Uma cópia antiga do próprio Astrograph vai direto para backup (importar
+duplicaria os plugins). Sem terminal interativo vale a opção 1; para escolher,
+defina `ASTROGRAPH_CONFIG_EXISTENTE=limpar`, `importar` ou `manter`.
+
+{: .note }
+Um `init.lua` que monta o próprio lazy.nvim (estilo kickstart) não é importado:
+ele fica no backup para você copiar o que quiser.
+
+## Compilação do app (Rust)
+
+No Windows o instalador baixa o app e o agente do release mais novo. Sem
+release, ele prepara a máquina e compila: instala o **Visual Studio Build
+Tools** (linker do Visual C++; ~2 GB, o Windows pede permissão de
+administrador) e o **Rust** pela rustup. A toolchain GNU (MinGW) não é usada
+porque o linker dela falha quando o caminho do perfil tem acento
+(`C:\Users\João`). No Linux/macOS não há executável publicado: o instalador
+instala o Rust (sem root) e compila. Se a compilação falhar, ele mostra o fim
+do log. `ASTROGRAPH_SEM_COMPILAR=1` pula essa etapa.
 
 ## Instalação sem perguntas
 
@@ -96,4 +127,5 @@ repositório. Reinicie o Neovim depois. Rodar o instalador de novo também atual
 2. Apague o clone: `%LOCALAPPDATA%\Astrograph` ou `~/Astrograph`.
 3. Opcional: apague os dados (plugins, Mason, histórico) em `%LOCALAPPDATA%\nvim-data`
    ou `~/.local/share/nvim`.
-4. Se você tinha uma config antes, ela está em `nvim.backup-<data>` ao lado.
+4. Se você tinha uma config antes, ela está em `nvim.backup-<data>` ao lado (e os
+   dados em `nvim-data.backup-<data>`, se escolheu limpar).
