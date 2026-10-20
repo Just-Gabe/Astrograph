@@ -111,6 +111,8 @@ pub struct Scene {
     zen: Spring,
     /// camada em pintura (a barra de abas sobe quando os painéis ocupam a janela)
     camada: Camada,
+    /// onde o terminal foi pintado: (esquerda, topo, linhas, colunas), para o mouse
+    term_geom: Option<(f32, f32, usize, usize)>,
     term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
     tree_top: Spring,
@@ -189,6 +191,7 @@ impl Scene {
             term: Spring::new(0.0, 22.0, 1.0),
             zen: Spring::new(0.0, 16.0, 1.0),
             camada: Camada::Tudo,
+            term_geom: None,
             term_cache: None,
             tree_cache: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
@@ -319,6 +322,18 @@ impl Scene {
         (lay.cols, lay.rows.floor().max(3.0))
     }
 
+    /// Célula (linha, coluna) do terminal sob o ponto, se o terminal está à mostra e o ponto cai
+    /// nele. Com `preso`, pontos fora são levados à célula mais próxima (arrastar uma seleção).
+    pub fn term_hit(&self, x: f32, y: f32, preso: bool) -> Option<(usize, usize)> {
+        let (left, top, rows, cols) = self.term_geom?;
+        let (fx, fy) = ((x - left) / self.char_w, (y - top) / self.line_h);
+        let dentro = fx >= 0.0 && fy >= 0.0 && (fx as usize) < cols && (fy as usize) < rows;
+        if !dentro && !preso {
+            return None;
+        }
+        Some(((fy.max(0.0) as usize).min(rows.saturating_sub(1)), (fx.max(0.0) as usize).min(cols.saturating_sub(1))))
+    }
+
     /// O ponto (em pixels) está sobre o explorador?
     pub fn in_side(&self, x: f32) -> bool {
         self.side.x > 1.0 && x < self.side.x
@@ -339,6 +354,9 @@ impl Scene {
 
     pub fn paint_camada(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, camada: Camada) -> Frame {
         self.camada = camada;
+        if camada != Camada::Casca || self.term.x < 2.0 {
+            self.term_geom = None;
+        }
         let t0 = Instant::now();
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
@@ -1433,6 +1451,12 @@ impl Scene {
     fn paint_term_cells(&mut self, c: &mut Canvas, tv: &TermView, left: f32, top: f32, y1: f32, xmax: f32, k: f32, now: Instant) {
         let (px, lh, cw) = (self.font_px, self.line_h, self.char_w);
         let s = self.scale;
+        let (nrows, ncols) = (tv.screen.rows.len(), tv.screen.rows.first().map_or(0, |r| r.len()));
+        if !matches!(self.camada, Camada::Painel { .. }) {
+            self.term_geom = Some((left, top, nrows, ncols));
+        }
+        // seleção em ordem de leitura
+        let sel = tv.sel.map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
         for (r, row) in tv.screen.rows.iter().enumerate() {
             let y = top + r as f32 * lh;
             if y + lh > y1 {
@@ -1442,6 +1466,11 @@ impl Scene {
                 let x = left + cidx as f32 * cw;
                 if x + cw > xmax {
                     break;
+                }
+                if let Some((a, b)) = sel {
+                    if (r, cidx) >= a && (r, cidx) <= b {
+                        c.rect(x as i32, y as i32, cw.ceil() as i32, lh as i32, d::ACCENT, 0.38 * k);
+                    }
                 }
                 if let Some(bg) = cell.bg {
                     c.rect(x as i32, y as i32, cw.ceil() as i32 + 1, lh as i32, bg, k);
@@ -1478,6 +1507,28 @@ impl Scene {
             } else {
                 c.rrect_border(x, y + 1.0, cw, lh - 2.0, 2.0 * s, 1.0, d::GREEN, 0.7 * k);
             }
+        }
+        // histórico à mostra: pílula discreta no canto
+        if tv.screen.scroll > 0 {
+            let txt = format!("↑ {} linhas", tv.screen.scroll);
+            let tpx = 11.5 * s;
+            let tw = self.ui_semi.measure(&txt, tpx);
+            let (bw, bh) = (tw + 20.0 * s, 22.0 * s);
+            let bx = (xmax - bw - 6.0 * s).max(left);
+            c.rrect(bx, top - 4.0 * s, bw, bh, bh / 2.0, d::SURFACE_HI, 0.95 * k);
+            c.text(&mut self.ui_semi, tpx, bx + 10.0 * s, top - 4.0 * s + bh / 2.0 + tpx * 0.36, &txt, d::TEXT, k);
+        }
+        // processo terminou: avisa na última linha
+        if tv.screen.exited {
+            let txt = "processo terminou · qualquer tecla fecha o painel";
+            let tpx = 12.0 * s;
+            let tw = self.ui.measure(txt, tpx);
+            let (bw, bh) = (tw + 28.0 * s, 26.0 * s);
+            let bx = (left + (xmax - left - bw) / 2.0).max(left);
+            let by = (y1 - bh - 8.0 * s).max(top);
+            c.rrect(bx, by, bw, bh, bh / 2.0, d::SURFACE_HI, 0.97 * k);
+            c.rrect_border(bx, by, bw, bh, bh / 2.0, 1.0, d::ORANGE, 0.5 * k);
+            c.text(&mut self.ui, tpx, bx + 14.0 * s, by + bh / 2.0 + tpx * 0.36, txt, d::TEXT_STRONG, k);
         }
     }
 
@@ -2109,13 +2160,17 @@ mod testes {
             cursor: (0, 1),
             cursor_visible: true,
             exited: false,
+            scroll: 0,
+            mouse: Default::default(),
+            bracketed: false,
+            alternada: false,
         });
         let mut s = Session::new("abc\n", None);
         s.resize(lay0.cols, rows0.floor());
         let mut vm = s.view_model();
         let t0 = Instant::now();
         let sem = quadro(&mut sc, &vm, w, h, t0);
-        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, sel: None });
         let mut com = sem.clone();
         for i in 1..60 {
             com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
@@ -2132,6 +2187,59 @@ mod testes {
     }
 
     #[test]
+    fn terminal_mouse_acha_a_celula_e_a_selecao_pinta() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: false,
+            exited: false,
+            scroll: 0,
+            mouse: Default::default(),
+            bracketed: false,
+            alternada: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        assert!(sc.term_hit(100.0, 500.0, false).is_none(), "sem terminal não há célula");
+        vm.term = Some(crate::nview::TermView { screen: tela.clone(), focus: true, zen: false, sel: None });
+        let mut sem = Vec::new();
+        for i in 0..70 {
+            sem = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        let (left, top, rows, cols) = sc.term_geom.expect("terminal pintado");
+        assert_eq!((rows, cols), (8, 40));
+        let (cw, lh) = (sc.char_w, sc.line_h);
+        assert_eq!(sc.term_hit(left + cw * 5.5, top + lh * 3.5, false), Some((3, 5)));
+        assert_eq!(sc.term_hit(left - 20.0, top + lh * 3.5, false), None, "fora, à esquerda");
+        // preso: arrastar para fora leva à célula mais perto
+        assert_eq!(sc.term_hit(left - 20.0, top - 20.0, true), Some((0, 0)));
+        assert_eq!(sc.term_hit(left + cw * 500.0, top + lh * 500.0, true), Some((7, 39)));
+        // a seleção acende as células
+        vm.term.as_mut().unwrap().sel = Some(((1, 2), (3, 5)));
+        let mut com = sem.clone();
+        for i in 70..80 {
+            com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sem.iter().zip(&com).filter(|(a, b)| a != b).count() > 2_000, "seleção pintada");
+        // histórico à mostra e processo terminado também desenham algo
+        let mut v2 = vm.clone();
+        let mut t2 = (*tela).clone();
+        t2.scroll = 12;
+        t2.exited = true;
+        v2.term = Some(crate::nview::TermView { screen: std::sync::Arc::new(t2), focus: true, zen: false, sel: None });
+        let mut av = com.clone();
+        for i in 80..90 {
+            av = quadro(&mut sc, &v2, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(com.iter().zip(&av).filter(|(a, b)| a != b).count() > 1_000, "indicadores");
+    }
+
+    #[test]
     fn zen_cobre_a_janela_com_uma_coluna_centrada_e_volta() {
         let Some(mut sc) = cena() else { return };
         let (w, h) = (1000u32, 700u32);
@@ -2141,12 +2249,16 @@ mod testes {
             cursor: (0, 1),
             cursor_visible: true,
             exited: false,
+            scroll: 0,
+            mouse: Default::default(),
+            bracketed: false,
+            alternada: false,
         });
         let mut s = Session::new("abc\n", None);
         s.resize(lay0.cols, lay0.rows.floor());
         let mut vm = s.view_model();
         let t0 = Instant::now();
-        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, sel: None });
         let mut normal = quadro(&mut sc, &vm, w, h, t0);
         for i in 1..60 {
             normal = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
