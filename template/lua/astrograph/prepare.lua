@@ -82,6 +82,7 @@ local function draw()
         width = 3,
         height = 1,
         style = "minimal",
+        border = "none", -- sem herdar o `winborder` do usuário
         focusable = false,
         zindex = 250,
         noautocmd = true,

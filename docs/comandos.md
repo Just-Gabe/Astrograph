@@ -9,7 +9,7 @@ nav_order: 5
 
 | Comando | O que faz |
 | --- | --- |
-| `:Astrograph atualizar` | Baixa a versão nova (`git pull` no clone) e sincroniza os plugins com o `lazy-lock.json` |
+| `:Astrograph atualizar` | Atualiza em segundo plano e sem risco: guarda suas alterações, avança o clone, sincroniza os plugins, recompila o app em Rust se ele mudou e confere que a config sobe; se não subir, volta para a versão anterior. Veja abaixo |
 | `:Astrograph saude` | Abre o diagnóstico (`:checkhealth astrograph`) |
 | `:Astrograph agentes` | Mostra cada agente de IA: instalado, logado e com o chat pronto |
 | `:Astrograph preparo` | Mostra o que o preparo em segundo plano detectou (linguagens, git) e o que está rodando |
@@ -44,3 +44,15 @@ editor de funcionar direito. Cada linha diz qual atalho ou recurso depende daqui
 | `<Leader>li` | Servidores de linguagem ativos no buffer |
 | `:checkhealth` | Diagnóstico completo do Neovim e de todos os plugins |
 | `:AstroVersion` | Versão do core |
+
+### Como o `:Astrograph atualizar` protege você
+
+| Situação | O que acontece |
+| --- | --- |
+| Sem internet | Avisa e não muda nada |
+| Você editou arquivos da config (ou deixou arquivos soltos que atrapalhariam um novo) | Ficam guardados (`git stash`), a versão nova entra e as suas alterações voltam; se conflitarem, a versão nova fica limpa e as suas ficam no `git stash list` |
+| O histórico do Astrograph foi reescrito (clone do instalador) | Segue para a versão nova e guarda a anterior em `astrograph-backup-<data>` (os 3 últimos) |
+| Clone de desenvolvimento com commits seus | Recusa e não mexe em nada: atualize com `git merge`/`rebase` |
+| A versão nova não carrega no seu computador | Volta para a anterior, devolve suas alterações e mostra o erro |
+| Dois Neovim atualizando ao mesmo tempo | O segundo espera |
+| O app em Rust mudou e há `cargo` | Recompila só o que mudou; o executável novo entra por rename, sem derrubar o app aberto |

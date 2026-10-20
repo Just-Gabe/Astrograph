@@ -87,6 +87,11 @@ pub fn indent_enabled() -> bool {
     std::env::var("ASTROGRAPH_INDENT").map_or(true, |v| v != "nvim")
 }
 
+/// Textobjects em Rust (`ASTROGRAPH_TEXTOBJ=nvim` volta ao nvim-treesitter-textobjects).
+pub fn textobj_enabled() -> bool {
+    std::env::var("ASTROGRAPH_TEXTOBJ").map_or(true, |v| v != "nvim")
+}
+
 /// Traduz as notificacoes do nvim que interessam ao realce.
 pub fn parse_notify(name: &str, args: &[Value]) -> Option<Event> {
     match name {
@@ -191,6 +196,70 @@ pub async fn indent(estado: &Shared, args: &[Value]) -> Value {
         if left.is_zero() || tokio::time::timeout(left, notified).await.is_err() {
             return Value::from(-1);
         }
+    }
+}
+
+/// Espera a copia do buffer alcancar `tick` (ate `INDENT_WAIT`) e roda `f` nela.
+/// `None`: buffer desconhecido ou copia atrasada; quem pediu usa o nvim.
+async fn with_doc<R>(estado: &Shared, buf: i64, tick: i64, f: impl Fn(&Document) -> R) -> Option<R> {
+    let deadline = Instant::now() + INDENT_WAIT;
+    loop {
+        let notified = estado.aplicado.notified();
+        {
+            let bufs = estado.bufs.lock().unwrap();
+            match bufs.get(&buf) {
+                Some(Buf { doc: Some(doc), tick: t, .. }) if *t >= tick => return Some(f(doc)),
+                None => return None,
+                _ => {}
+            }
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || tokio::time::timeout(left, notified).await.is_err() {
+            return None;
+        }
+    }
+}
+
+fn range_value(r: &astrograph_syntax::Range6) -> Value {
+    Value::from(vec![
+        Value::from(r.srow as i64),
+        Value::from(r.scol as i64),
+        Value::from(r.sbyte as i64),
+        Value::from(r.erow as i64),
+        Value::from(r.ecol as i64),
+        Value::from(r.ebyte as i64),
+    ])
+}
+
+/// Pedido `astrograph_textobject`: (buffer, changedtick, captura, linha, coluna,
+/// lookahead, lookbehind) -> `Range6` como lista, `nil` se nao ha objeto, ou
+/// `false` se o app nao sabe responder (o Lua cai no nvim-treesitter-textobjects).
+pub async fn textobject(estado: &Shared, args: &[Value]) -> Value {
+    let int = |i: usize| args.get(i).and_then(Value::as_i64).unwrap_or(-1);
+    let flag = |i: usize| args.get(i).and_then(Value::as_bool).unwrap_or(false);
+    let Some(cap) = args.get(2).and_then(Value::as_str).map(str::to_string) else { return Value::from(false) };
+    let (row, col) = (int(3).max(0) as usize, int(4).max(0) as usize);
+    let (ahead, behind) = (flag(5), flag(6));
+    let r = with_doc(estado, int(0), int(1), |d| {
+        d.has_textobject(&cap).then(|| d.textobject_at(&cap, row, col, ahead, behind))
+    })
+    .await;
+    match r {
+        Some(Some(Some(range))) => range_value(&range),
+        Some(Some(None)) => Value::Nil,
+        _ => Value::from(false),
+    }
+}
+
+/// Pedido `astrograph_textobject_ranges`: (buffer, changedtick, captura) -> todos
+/// os `Range6` da captura (o Lua aplica os filtros do mover/trocar), ou `false`.
+pub async fn textobject_ranges(estado: &Shared, args: &[Value]) -> Value {
+    let int = |i: usize| args.get(i).and_then(Value::as_i64).unwrap_or(-1);
+    let Some(cap) = args.get(2).and_then(Value::as_str).map(str::to_string) else { return Value::from(false) };
+    let r = with_doc(estado, int(0), int(1), |d| d.has_textobject(&cap).then(|| d.textobject_ranges(&cap))).await;
+    match r {
+        Some(Some(list)) => Value::from(list.iter().map(range_value).collect::<Vec<_>>()),
+        _ => Value::from(false),
     }
 }
 
@@ -398,14 +467,16 @@ async fn attach_buf(nvim: &Nvim, chan: i64, n: i64) -> Option<Buf> {
 /// trabalho em dobro) e, se ha consulta de indent, troca a `indentexpr` por um
 /// pedido a este canal. `b:astrograph_realce` avisa a config: o astrocore nao
 /// religa o treesitter nem a indentexpr dele neste buffer.
-const STOP_NATIVE: &str = "local b, chan, indent = ... ; if not vim.api.nvim_buf_is_valid(b) then return end; \
+const STOP_NATIVE: &str = "local b, chan, indent, textobj = ... ; if not vim.api.nvim_buf_is_valid(b) then return end; \
      vim.b[b].astrograph_realce = true; pcall(vim.treesitter.stop, b); vim.bo[b].syntax = ''; \
+     if textobj then vim.b[b].astrograph_textobjects = chan end; \
      if indent then vim.b[b].astrograph_indent = true; vim.bo[b].indentexpr = \
        ('rpcrequest(%d, \"astrograph_indent\", bufnr(), v:lnum, b:changedtick, shiftwidth(), &tabstop)'):format(chan) end";
 
 fn native_args(chan: i64, n: i64, l: &astrograph_syntax::Lang) -> Value {
     let indent = l.indents.is_some() && indent_enabled();
-    Value::from(vec![Value::from(n), Value::from(chan), Value::from(indent)])
+    let textobj = l.textobjects.is_some() && textobj_enabled();
+    Value::from(vec![Value::from(n), Value::from(chan), Value::from(indent), Value::from(textobj)])
 }
 
 /// Lote de extmarks das linhas `ranges`, montado com o lock e enviado sem ele.
@@ -430,6 +501,9 @@ fn paint_calls(estado: &Shared, ns: i64, buf: i64, ranges: &[Range<usize>]) -> V
                         (Value::from("end_col"), Value::from(s.end_col as i64)),
                         (Value::from("hl_group"), Value::from(s.group)),
                         (Value::from("priority"), Value::from(100)),
+                        // o texto pode ter mudado entre a copia e a pintura (edicao/undo em
+                        // rajada): sem isto uma coluna fora da linha derruba o lote inteiro
+                        (Value::from("strict"), Value::from(false)),
                     ]),
                 ],
             ));

@@ -93,7 +93,8 @@ lado com o nvim nativo:
     (`vim.filetype` 2,3 ms + `filetype.lua` 0,5 + `syntax` 0,5) de 115,6 ms.
     Igualar ~1000 tipos para ganhar 3 ms: adiado (regra do conselho). O Rust ja
     detecta por conta propria para escolher a gramatica.
-  - [ ] Tirar o nvim-treesitter: depende da S2 (o indent ainda e dele).
+  - [ ] Tirar o nvim-treesitter: indent e textobjects ja saem do app; falta o astrocore
+    nao depender dele (instalacao de parsers, `has_capture`).
 - [ ] **S2 indent e textobjects por tree-sitter** (substitui `indent/` e
   nvim-treesitter-textobjects), se couber no orcamento medido em S1.
   - [x] Indent: porte do `indent.lua` do nvim-treesitter (`astrograph-syntax`,
@@ -121,7 +122,26 @@ lado com o nvim nativo:
     Armadilha de medicao: headless, o nativo so reparseia a parte visivel
     (`parser:parse({w0, w$})`); com o cursor longe da edicao ele indenta com a
     arvore velha e parece rapido (~40 us).
-  - [ ] Textobjects.
+  - [x] Textobjects: porte do nvim-treesitter-textobjects (`src/textobjects.rs`,
+    mesmas consultas). Paridade (`cargo run --release --example textobj_e2e --`
+    lua, python, rust, bash): **13739/13750** (99,92%), contando `at_point` com
+    lookahead/lookbehind, mover (`]f`...) e trocar. As 11 diferencas sao todas o
+    `swap_next` no ultimo objeto do arquivo: o plugin troca com outro trecho, o
+    Rust nao faz nada (mantido; e o comportamento esperado).
+  - [x] Custo: o `textobject_at_point` nativo leva 3,3-10 ms; o Rust 43 us de
+    calculo e 0,25-1,3 ms por pedido com o rpcrequest (medido no app,
+    `textobj_app_e2e`). Cabe no orcamento da tecla.
+  - [x] No app: `astrograph_textobject` (objeto no cursor) e
+    `astrograph_textobject_ranges` (todos os trechos da captura) como
+    `rpcrequest`; `template/lua/astrograph/textobjects.lua` troca so as duas
+    leituras de arvore do plugin (`textobject_at_point`, `find_best_range`), entao
+    selecao, operador, `.`, saltos e a troca de texto seguem sendo do plugin.
+    `false` (copia atrasada, linguagem sem a captura) ou erro cai no plugin.
+    **Ligado por padrao no app** (`ASTROGRAPH_TEXTOBJ=nvim` volta ao nativo).
+    Ponta a ponta (`textobj_app_e2e`, config real): objetos 100% iguais e teclas
+    (`]f [f ]a ]k vaf vif daa >F`) 99,9% iguais, com e sem o app.
+  - [ ] Tirar o nvim-treesitter e o nvim-treesitter-textobjects: falta o astrocore
+    parar de pedir as consultas (`has_capture`) e o Rust expor as capturas.
 - [ ] **S3 diagnosticos e formatacao** (substitui none-ls): resultado entregue
   pela API `vim.diagnostic`, para os plugins que leem continuarem vendo.
 - [ ] **S4 cliente LSP em Rust** (substitui nvim-lspconfig, `vim.lsp` e Mason):

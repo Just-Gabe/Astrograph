@@ -25,11 +25,13 @@ H.eq(#pk, 2, "pacotes sem repetição (rust-analyzer + typescript-language-serve
 H.eq(pk[1], "rust-analyzer", "pacote do rust")
 
 -- ícone: só depois de SHOW_AFTER, e some quando libera
+vim.o.winborder = "rounded" -- o ícone não pode herdar borda
 P.SHOW_AFTER = 50
 local release = P.track "teste"
 H.eq(icon_wins(), 0, "ícone não aparece de imediato")
 H.ok(vim.wait(2000, function() return icon_wins() == 1 end, 20), "ícone aparece enquanto ocupado")
 local c = vim.api.nvim_win_get_config(vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).zindex == 250 end, vim.api.nvim_list_wins())[1])
+H.eq(c.border == nil or c.border == "none" or (type(c.border) == "table" and c.border[1] == ""), true, "sem borda")
 H.ok(c.col >= vim.o.columns - 4, "ícone no canto direito")
 H.ok(c.row >= vim.o.lines - 4, "ícone embaixo")
 H.eq(P.running()[1], "teste", "tarefa listada")

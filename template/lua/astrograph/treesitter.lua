@@ -104,8 +104,31 @@ function M.install_quiet(langs, cb)
   end
   task:await(function()
     M.quiet = M.quiet - 1
-    vim.schedule(function() cb(missing) end)
+    vim.schedule(function()
+      M.refresh(missing)
+      cb(missing)
+    end)
   end)
+end
+
+---Depois de instalar parsers por fora do AstroCore: atualiza o cache dele e liga
+---realce/indent nos buffers abertos dessas linguagens (sem isso só valeria depois
+---de reabrir o arquivo).
+---@param langs string[]
+function M.refresh(langs)
+  local ok, act = pcall(require, "astrocore.treesitter")
+  if not ok then return end
+  pcall(act.installed, true)
+  local want = {}
+  for _, l in ipairs(langs) do
+    want[l] = true
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) then
+      local lang = vim.treesitter.language.get_lang(vim.bo[buf].filetype)
+      if lang and want[lang] then pcall(act.enable, buf) end
+    end
+  end
 end
 
 ---Compila de forma síncrona os parsers que faltarem (usado pelo instalador).
