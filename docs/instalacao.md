@@ -65,14 +65,30 @@ ele fica no backup para você copiar o que quiser.
 
 ## Compilação do app (Rust)
 
-No Windows o instalador baixa o app e o agente do release mais novo. Sem
-release, ele prepara a máquina e compila: instala o **Visual Studio Build
+O instalador baixa o app, o agente e os serviços do release mais novo
+(Windows x64, Linux x64 e macOS arm64) e **confere o SHA256** de cada um contra o
+`SHA256SUMS.txt` do release; sem release, plataforma publicada ou hash válido, ele prepara a máquina e compila: instala o **Visual Studio Build
 Tools** (linker do Visual C++; ~2 GB, o Windows pede permissão de
 administrador) e o **Rust** pela rustup. A toolchain GNU (MinGW) não é usada
 porque o linker dela falha quando o caminho do perfil tem acento
-(`C:\Users\João`). No Linux/macOS não há executável publicado: o instalador
-instala o Rust (sem root) e compila. Se a compilação falhar, ele mostra o fim
+(`C:\Users\João`). No Linux/macOS o instalador instala o Rust (sem root) e
+compila. `ASTROGRAPH_SEM_BAIXAR=1` (Linux/macOS) força compilar. Se a compilação falhar, ele mostra o fim
 do log. `ASTROGRAPH_SEM_COMPILAR=1` pula essa etapa.
+
+## Só o app nativo, sem Neovim
+
+`ASTROGRAPH_SEM_NVIM=1` instala apenas o app em Rust com o motor nativo: não
+instala Neovim, ripgrep, fd nem plugins, não toca na config do Neovim e liga
+`[engine] native = true` no `astrograph-ui.toml` ao lado do executável. O caminho
+de volta é `ASTROGRAPH_ENGINE=nvim astrograph` (precisa de um Neovim 0.11+).
+
+```bash
+ASTROGRAPH_SEM_NVIM=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.sh)"
+```
+
+```powershell
+$env:ASTROGRAPH_SEM_NVIM = '1'; irm https://raw.githubusercontent.com/Just-Gabe/Astrograph/main/install.ps1 | iex
+```
 
 ## Instalação sem perguntas
 

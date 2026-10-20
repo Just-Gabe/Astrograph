@@ -60,6 +60,9 @@ if ($cfgItem) {
     $existing = $Config
   }
 }
+# ASTROGRAPH_SEM_NVIM=1: só o app nativo em Rust (motor próprio), sem Neovim nem plugins
+$semNvim = $env:ASTROGRAPH_SEM_NVIM -eq '1'
+if ($semNvim) { $existing = $null }
 if ($existing) {
   $oldInit = Join-Path $existing 'init.lua'
   $isOldAstrograph = (Test-Path $oldInit) -and ((Get-Content $oldInit -Raw) -match 'Astrograph')
@@ -118,6 +121,10 @@ $packages = @(
   @{ id = 'sharkdp.fd';                       cmd = 'fd';   why = 'busca de arquivos' },
   @{ id = 'BrechtSanders.WinLibs.POSIX.UCRT'; cmd = 'gcc';  why = 'parsers do Treesitter' }
 )
+if ($semNvim) {
+  Info 'ASTROGRAPH_SEM_NVIM=1: sem Neovim, ripgrep, fd nem gcc (as buscas do app nativo são Rust).'
+  $packages = @($packages | Where-Object { $_.cmd -eq 'git' })
+}
 Refresh-Path
 foreach ($pkg in $packages) {
   $have = Get-Command $pkg.cmd -ErrorAction SilentlyContinue
@@ -304,7 +311,9 @@ function Import-NvimConfig($src) {
 }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ($configMode -eq 'manter') {
+if ($semNvim) {
+  Info 'Sem Neovim: a config dele não foi tocada.'
+} elseif ($configMode -eq 'manter') {
   Warn "Config do Neovim mantida: o nvim continua abrindo a sua config, não a do Astrograph."
 } else {
   if ($existing) {
@@ -501,6 +510,8 @@ function Install-Binary($label, $exeName, $assetName, $crate, $builtName) {
 Install-Binary 'app Astrograph' 'astrograph.exe' 'astrograph-windows-x64.exe' 'astrograph-ui' 'astrograph-ui.exe'
 # ponte com os agentes (Claude Code, opencode...): usada por <Leader>Ae no editor
 Install-Binary 'agente nativo' 'astrograph-agent.exe' 'astrograph-agent-windows-x64.exe' 'astrograph-agent' 'astrograph-agent.exe'
+# projeto, git e atualização (o :Astrograph atualizar usa este)
+Install-Binary 'serviços' 'astrograph-servicos.exe' 'astrograph-servicos-windows-x64.exe' 'astrograph-servicos' 'astrograph-servicos.exe'
 if (-not (Test-Path $AppExe)) { Warn 'Sem o app, o Astrograph segue funcionando no terminal (nvim).' }
 
 if (Test-Path $AppExe) {
@@ -525,7 +536,12 @@ if (Test-Path $AppExe) {
 }
 
 # --- 6. Baixar plugins (Lazy) e ferramentas (Mason) ------------------------
-if ($configMode -eq 'manter') {
+if ($semNvim) {
+  # o app abre sempre no motor nativo (ASTROGRAPH_ENGINE=nvim ainda força o Neovim)
+  $toml = Join-Path $BinDir 'astrograph-ui.toml'
+  if (-not (Test-Path $toml)) { Set-Content -Path $toml -Value "[engine]`nnative = true" -Encoding ASCII }
+  Info "Motor nativo ligado em $toml; pulei plugins do Neovim."
+} elseif ($configMode -eq 'manter') {
   Info 'Config do Neovim mantida: pulei os plugins do Astrograph (rodariam na sua config).'
 } elseif (Get-Command nvim -ErrorAction SilentlyContinue) {
   Info 'Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)...'
@@ -786,4 +802,4 @@ if ($present) {
   Info 'No nvim: <Leader>Al abre o agente no terminal, <Leader>Ac abre o chat, :Astrograph agentes mostra o status.'
 }
 
-Info 'Pronto! Abra um terminal novo e rode: nvim'
+if ($semNvim) { Info 'Pronto! Abra um terminal novo e rode: astrograph' } else { Info 'Pronto! Abra um terminal novo e rode: nvim' }

@@ -65,6 +65,11 @@ if [ -L "$CONFIG" ]; then
 elif [ -d "$CONFIG" ] && [ -n "$(ls -A "$CONFIG" 2>/dev/null)" ]; then
   EXISTING="$CONFIG"
 fi
+if [ "${ASTROGRAPH_SEM_NVIM:-}" = "1" ]; then
+  # sem Neovim, a config dele não é tocada
+  EXISTING=""
+  CONFIG_MODE="manter"
+fi
 if [ -n "$EXISTING" ]; then
   CONFIG_MODE="$(printf '%s' "${ASTROGRAPH_CONFIG_EXISTENTE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
   case "$CONFIG_MODE" in
@@ -100,8 +105,14 @@ fi
 info "Sistema: $OS ($ARCH)"
 # só chama o gerenciador de pacotes (apt update, brew...) se faltar algo
 missing=""
-for b in git rg curl unzip cc; do command -v "$b" >/dev/null 2>&1 || missing="$missing $b"; done
-command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 || missing="$missing fd"
+for b in git rg curl unzip cc; do
+  # ripgrep e fd servem ao Neovim (as buscas do app nativo são Rust)
+  if [ "${ASTROGRAPH_SEM_NVIM:-}" = "1" ] && [ "$b" = rg ]; then continue; fi
+  command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
+done
+if [ "${ASTROGRAPH_SEM_NVIM:-}" != "1" ]; then
+  command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 || missing="$missing fd"
+fi
 if [ -z "$missing" ]; then
   info "Dependências já instaladas (git, ripgrep, fd, curl, unzip, compilador C)"
 elif [ "$OS" = "Darwin" ]; then
@@ -143,8 +154,12 @@ if ! command -v fd >/dev/null 2>&1 && command -v fdfind >/dev/null 2>&1; then
 fi
 
 # --- 2. Neovim 0.11+ -------------------------------------------------------
+# ASTROGRAPH_SEM_NVIM=1: só o app nativo em Rust (motor próprio), sem Neovim nem plugins.
 need_nvim=1
-if command -v nvim >/dev/null 2>&1; then
+if [ "${ASTROGRAPH_SEM_NVIM:-}" = "1" ]; then
+  need_nvim=0
+  info "ASTROGRAPH_SEM_NVIM=1: pulei o Neovim (motor nativo em Rust)."
+elif command -v nvim >/dev/null 2>&1; then
   ver="$(nvim --version 2>/dev/null | head -n1 | sed -E 's/^NVIM v//')"
   if [ "$(printf '%s\n' '0.11.0' "$ver" | sort -V | head -n1)" = "0.11.0" ]; then
     info "Neovim $ver encontrado (>= 0.11)"
@@ -309,8 +324,9 @@ else
 fi
 
 # --- 6. Agente nativo e app Astrograph (Rust) ------------------------------
-# Não há executável publicado para Linux/macOS: instala o Rust (rustup, sem
-# root) e compila do código. O editor procura o agente em ~/Astrograph/bin.
+# Com release publicado (Linux x64 / macOS arm64), baixa os executáveis e confere
+# o SHA256; senão instala o Rust (rustup, sem root) e compila do código.
+# O editor procura o agente em ~/Astrograph/bin.
 APP_BIN="$ROOT/bin"
 mkdir -p "$APP_BIN"
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo desconhecido)"
@@ -335,10 +351,52 @@ ensure_rust() {
   command -v cargo >/dev/null 2>&1 || return 1
   RUST_READY=1
 }
+# Release publicado: etiqueta e hashes (SHA256SUMS.txt). Vazio sem release ou sem plataforma publicada.
+PLATAFORMA=""
+case "$OS-$ARCH" in
+  Linux-x86_64 | Linux-amd64) PLATAFORMA="linux-x64" ;;
+  Darwin-arm64) PLATAFORMA="macos-arm64" ;;
+esac
+RELEASE_TAG=""
+RELEASE_SUMS=""
+if [ -n "$PLATAFORMA" ] && [ "${ASTROGRAPH_SEM_BAIXAR:-}" != "1" ]; then
+  RELEASE_TAG="$(curl -fsSL --max-time 15 https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest 2>/dev/null |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  if [ -n "$RELEASE_TAG" ]; then
+    RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/SHA256SUMS.txt" 2>/dev/null || true)"
+  fi
+fi
+sha256_de() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+# baixar_binario <asset> <destino> <arquivo da versão>: só instala com o SHA256 conferido
+baixar_binario() {
+  local asset="$1" dest="$2" stampf="$3" esperado tmp
+  [ -n "$RELEASE_TAG" ] || return 1
+  esperado="$(printf '%s\n' "$RELEASE_SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')"
+  if ! printf '%s' "$esperado" | grep -Eq '^[0-9a-fA-F]{64}$'; then return 1; fi
+  tmp="$(mktemp)"
+  if curl -fsSL --max-time 300 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/$asset" -o "$tmp" &&
+    [ "$(sha256_de "$tmp" | tr 'A-F' 'a-f')" = "$(printf '%s' "$esperado" | tr 'A-F' 'a-f')" ]; then
+    mv -f "$tmp" "$dest" && chmod +x "$dest" && printf '%s\n' "$RELEASE_TAG" >"$stampf"
+    return 0
+  fi
+  warn "$asset não confere com o SHA256 publicado (ou o download falhou): descartado."
+  rm -f "$tmp"
+  return 1
+}
 # build_binary <rótulo> <crate> <executável instalado>
 build_binary() {
   local label="$1" crate="$2" bin="$3"
   local stampf="$APP_BIN/$3.version" log="/tmp/astrograph-build-$2.log"
+  local asset="$crate-$PLATAFORMA"
+  if [ "$crate" = astrograph-ui ]; then asset="astrograph-$PLATAFORMA"; fi
+  if [ -n "$RELEASE_TAG" ] && [ -x "$APP_BIN/$bin" ] && [ "$(cat "$stampf" 2>/dev/null)" = "$RELEASE_TAG" ]; then
+    info "$label já está na versão $RELEASE_TAG"
+    return 0
+  fi
+  if baixar_binario "$asset" "$APP_BIN/$bin" "$stampf"; then
+    info "$label $RELEASE_TAG instalado (SHA256 conferido)"
+    return 0
+  fi
   if [ -x "$APP_BIN/$bin" ] && [ "$(cat "$stampf" 2>/dev/null)" = "src-$COMMIT" ]; then
     info "$label já compilado desta versão"
     return 0
@@ -371,7 +429,13 @@ else
 fi
 
 # --- 7. Baixar plugins (Lazy) e ferramentas (Mason) -----------------------
-if [ "$CONFIG_MODE" = "manter" ]; then
+if [ "${ASTROGRAPH_SEM_NVIM:-}" = "1" ]; then
+  # o app abre sempre no motor nativo (ASTROGRAPH_ENGINE=nvim ainda força o Neovim)
+  if [ ! -f "$APP_BIN/astrograph-ui.toml" ]; then
+    printf '[engine]\nnative = true\n' >"$APP_BIN/astrograph-ui.toml"
+  fi
+  info "Motor nativo ligado em $APP_BIN/astrograph-ui.toml; pulei plugins do Neovim."
+elif [ "$CONFIG_MODE" = "manter" ]; then
   info "Config do Neovim mantida: pulei os plugins do Astrograph (rodariam na sua config)."
 elif command -v nvim >/dev/null 2>&1; then
   info "Baixando plugins, ferramentas do Mason e compilando os realces de sintaxe (pode demorar alguns minutos)..."
@@ -643,4 +707,4 @@ if [ -n "$any_agent" ]; then
   info "No nvim: <Leader>Al abre o agente no terminal, <Leader>Ac abre o chat, :Astrograph agentes mostra o status."
 fi
 
-info "Pronto! Abra um terminal novo e rode: nvim"
+if [ "${ASTROGRAPH_SEM_NVIM:-}" = "1" ]; then info "Pronto! Abra um terminal novo e rode: astrograph"; else info "Pronto! Abra um terminal novo e rode: nvim"; fi
