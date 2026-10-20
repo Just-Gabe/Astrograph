@@ -39,6 +39,8 @@ pub struct PickerView {
     pub sel: usize,
     /// quantos itens existem no total (os mostrados são os melhores)
     pub total: usize,
+    /// ainda procurando em segundo plano
+    pub buscando: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -41,7 +41,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Comandos `:` do núcleo: faixas (`%`, `1,3`, `'<,'>`, `.+1`, `'a`), `:s` (grupos, `&`, `\\u \\U`, flags `g i I e`), `:d`, `:y`, `:j`, `:>` `:<`, `:g`/`:v`, `:normal` e `:N` | **98%** (196/200) |
 | Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **96%** (138/150; sobram blocos que cortam tab ou caractere largo) |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
-| Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
+| Buscador nativo em **segundo plano** (listar e buscar texto em threads com cancelamento e resultados parciais, 'buscando…' no cabeçalho; lista de arquivos em cache por raiz; letra a mais só procura entre os que já casaram; Enter antes da lista chegar espera e abre) (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
 | Tecla líder configurável (`[keys] leader` no `config.toml` da UI; padrão `<Espaço>`); as menções a ela mostram o nome da tecla escolhida | pronto |
 | Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
@@ -65,6 +65,9 @@ objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`
 motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 
 ## Divergências conhecidas
+
+- Git: o branch e o `HEAD` são lidos em thread; arquivos com mais de 5000 linhas têm os sinais da margem
+  calculados em segundo plano (os sinais antigos ficam até o cálculo terminar).
 
 - Terminal: um terminal por aba (ainda sem lista de vários), `<Espaço>Al` abre o primeiro agente instalado
   (sem escolher), links OSC 8 não são tratados.

@@ -2,7 +2,11 @@
 //! (respeitando `.gitignore`), texto em todos eles e a lista de recentes.
 //! Substitui o `fd`/`ripgrep` + picker do Neovim.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ignore::WalkBuilder;
@@ -28,6 +32,192 @@ pub fn listar(raiz: &Path) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// Mensagem de uma busca em segundo plano.
+#[derive(Debug)]
+pub enum Parcial<T> {
+    /// mais resultados (se for a lista de arquivos, ainda sem ordem)
+    Itens(Vec<T>),
+    /// a lista de arquivos terminou: a lista completa e ordenada, que substitui as parciais
+    Completa(Vec<T>),
+    /// a busca acabou (ou foi cancelada)
+    Fim,
+}
+
+/// Busca rodando em outra thread. Soltar (ou `cancelar`) pára a thread no próximo arquivo.
+pub struct Bg<T> {
+    rx: Receiver<Parcial<T>>,
+    cancel: Arc<AtomicBool>,
+    pub feita: bool,
+}
+
+impl<T> Bg<T> {
+    /// O que chegou desde a última chamada (não espera).
+    pub fn novidades(&mut self) -> Vec<Parcial<T>> {
+        let mut v = Vec::new();
+        while let Ok(m) = self.rx.try_recv() {
+            if matches!(m, Parcial::Fim) {
+                self.feita = true;
+            }
+            v.push(m);
+        }
+        v
+    }
+
+    pub fn cancelar(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+
+impl<T> Drop for Bg<T> {
+    fn drop(&mut self) {
+        self.cancelar();
+    }
+}
+
+/// Cache da lista de arquivos por raiz (a lista de ontem aparece já; a nova chega em seguida).
+static CACHE_LISTA: Mutex<Option<HashMap<PathBuf, (Instant, Vec<String>)>>> = Mutex::new(None);
+
+/// Lista guardada para `raiz` e há quanto tempo ela foi feita.
+pub fn lista_em_cache(raiz: &Path) -> Option<(Duration, Vec<String>)> {
+    CACHE_LISTA.lock().ok()?.as_ref()?.get(raiz).map(|(t, v)| (t.elapsed(), v.clone()))
+}
+
+fn guardar_lista(raiz: &Path, v: &[String]) {
+    if let Ok(mut c) = CACHE_LISTA.lock() {
+        c.get_or_insert_with(HashMap::new).insert(raiz.to_path_buf(), (Instant::now(), v.to_vec()));
+    }
+}
+
+/// Esquece a lista de `raiz` (arquivo criado/apagado/renomeado).
+pub fn esquecer_lista(raiz: &Path) {
+    if let Ok(mut c) = CACHE_LISTA.lock() {
+        if let Some(m) = c.as_mut() {
+            m.remove(raiz);
+        }
+    }
+}
+
+/// `listar` em outra thread: manda lotes enquanto anda pelo disco e, no fim, a lista ordenada
+/// (que também entra no cache). `notify` acorda a UI a cada novidade.
+pub fn listar_bg(raiz: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) -> Bg<String> {
+    let (tx, rx) = channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let mut lote = Vec::new();
+        for e in WalkBuilder::new(&raiz).hidden(true).git_ignore(true).git_global(false).follow_links(false).build().flatten() {
+            if c.load(Ordering::Acquire) {
+                let _ = tx.send(Parcial::Fim);
+                return;
+            }
+            if !e.file_type().is_some_and(|t| t.is_file()) {
+                continue;
+            }
+            if let Ok(rel) = e.path().strip_prefix(&raiz) {
+                let r = rel.to_string_lossy().replace('\\', "/");
+                lote.push(r.clone());
+                out.push(r);
+            }
+            if lote.len() >= 2000 {
+                let _ = tx.send(Parcial::Itens(std::mem::take(&mut lote)));
+                notify();
+            }
+            if out.len() >= MAX_ARQUIVOS {
+                break;
+            }
+        }
+        out.sort();
+        guardar_lista(&raiz, &out);
+        let _ = tx.send(Parcial::Completa(out));
+        let _ = tx.send(Parcial::Fim);
+        notify();
+    });
+    Bg { rx, cancel, feita: false }
+}
+
+/// `buscar_texto` em outra thread: manda os achados de cada arquivo assim que o lê. Uma nova tecla
+/// solta esta busca (e ela pára) e começa outra.
+pub fn buscar_texto_bg(raiz: PathBuf, padrao: String, limite: usize, notify: Arc<dyn Fn() + Send + Sync>) -> Bg<Achado> {
+    let (tx, rx) = channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    std::thread::spawn(move || {
+        let Some(re) = regex_de(&padrao) else {
+            let _ = tx.send(Parcial::Fim);
+            notify();
+            return;
+        };
+        let mut total = 0;
+        for e in WalkBuilder::new(&raiz).hidden(true).git_ignore(true).git_global(false).build().flatten() {
+            if c.load(Ordering::Acquire) || total >= limite {
+                break;
+            }
+            if !e.file_type().is_some_and(|t| t.is_file()) || e.metadata().is_ok_and(|m| m.len() > MAX_BYTES) {
+                continue;
+            }
+            let achados = achados_no_arquivo(&raiz, e.path(), &re, limite - total);
+            if !achados.is_empty() {
+                total += achados.len();
+                if tx.send(Parcial::Itens(achados)).is_err() {
+                    return;
+                }
+                notify();
+            }
+        }
+        let _ = tx.send(Parcial::Fim);
+        notify();
+    });
+    Bg { rx, cancel, feita: false }
+}
+
+fn regex_de(padrao: &str) -> Option<regex::Regex> {
+    if padrao.is_empty() {
+        return None;
+    }
+    let ic = !padrao.chars().any(|c| c.is_uppercase());
+    let ia = if ic { format!("(?i){padrao}") } else { padrao.to_string() };
+    regex::Regex::new(&ia).or_else(|_| regex::Regex::new(&format!("{}{}", if ic { "(?i)" } else { "" }, regex::escape(padrao)))).ok()
+}
+
+fn achados_no_arquivo(raiz: &Path, caminho: &Path, re: &regex::Regex, restam: usize) -> Vec<Achado> {
+    let Ok(bytes) = std::fs::read(caminho) else { return Vec::new() };
+    if bytes.iter().take(8192).any(|&b| b == 0) {
+        return Vec::new();
+    }
+    let texto = String::from_utf8_lossy(&bytes);
+    let rel = caminho.strip_prefix(raiz).unwrap_or(caminho).to_string_lossy().replace('\\', "/");
+    let mut out = Vec::new();
+    for (i, linha) in texto.lines().enumerate() {
+        if let Some(m) = re.find(linha) {
+            out.push(Achado { arquivo: rel.clone(), linha: i, texto: linha.trim().chars().take(160).collect(), col: linha[..m.start()].chars().count() });
+            if out.len() >= restam {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Como `fuzzy`, mas só olha os itens de `entre` (se dado) e devolve também todos os que casaram:
+/// quem digita mais uma letra reaproveita o conjunto da tecla anterior em vez de varrer tudo.
+pub fn fuzzy_sub(busca: &str, itens: &[String], entre: Option<&[usize]>, limite: usize) -> (Vec<Casou>, Vec<usize>) {
+    let q: Vec<char> = busca.chars().filter(|c| !c.is_whitespace()).collect();
+    if q.is_empty() {
+        let r: Vec<Casou> = itens.iter().enumerate().take(limite).map(|(item, _)| Casou { item, nota: 0, pos: Vec::new() }).collect();
+        return (r, (0..itens.len()).collect());
+    }
+    let candidatos: Box<dyn Iterator<Item = usize>> = match entre {
+        Some(e) => Box::new(e.iter().copied().filter(|i| *i < itens.len())),
+        None => Box::new(0..itens.len()),
+    };
+    let mut v: Vec<Casou> = candidatos.filter_map(|item| pontuar(&q, &itens[item]).map(|(nota, pos)| Casou { item, nota, pos })).collect();
+    let todos: Vec<usize> = v.iter().map(|c| c.item).collect();
+    v.sort_by(|a, b| b.nota.cmp(&a.nota).then(itens[a.item].len().cmp(&itens[b.item].len())).then(a.item.cmp(&b.item)));
+    v.truncate(limite);
+    (v, todos)
 }
 
 /// Resultado de `fuzzy`: índice do item, pontuação e posições (em caracteres) que casaram.
@@ -205,6 +395,79 @@ mod testes {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn espera<T>(bg: &mut Bg<T>) -> Vec<Parcial<T>> {
+        let mut tudo = Vec::new();
+        let fim = Instant::now() + Duration::from_secs(10);
+        while !bg.feita && Instant::now() < fim {
+            tudo.extend(bg.novidades());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        tudo.extend(bg.novidades());
+        tudo
+    }
+
+    #[test]
+    fn listar_em_segundo_plano_traz_a_lista_ordenada_e_enche_o_cache() {
+        let d = tmp("bg-listar");
+        std::fs::create_dir_all(d.join("a/b")).unwrap();
+        std::fs::write(d.join("z.txt"), "1").unwrap();
+        std::fs::write(d.join("a/b/c.rs"), "1").unwrap();
+        std::fs::write(d.join("a/m.rs"), "1").unwrap();
+        assert!(lista_em_cache(&d).is_none());
+        let mut bg = listar_bg(d.clone(), Arc::new(|| {}));
+        let msgs = espera(&mut bg);
+        let completa = msgs.iter().find_map(|m| if let Parcial::Completa(v) = m { Some(v.clone()) } else { None }).expect("lista completa");
+        assert_eq!(completa, listar(&d));
+        assert_eq!(completa, vec!["a/b/c.rs", "a/m.rs", "z.txt"]);
+        let (idade, em_cache) = lista_em_cache(&d).expect("guardada no cache");
+        assert_eq!(em_cache, completa);
+        assert!(idade < Duration::from_secs(5));
+        esquecer_lista(&d);
+        assert!(lista_em_cache(&d).is_none());
+    }
+
+    #[test]
+    fn buscar_texto_em_segundo_plano_manda_lotes_e_pode_ser_cancelada() {
+        let d = tmp("bg-texto");
+        for i in 0..40 {
+            std::fs::write(d.join(format!("f{i}.txt")), format!("nada\nachei agulha {i}\n")).unwrap();
+        }
+        let mut bg = buscar_texto_bg(d.clone(), "agulha".into(), 1000, Arc::new(|| {}));
+        let msgs = espera(&mut bg);
+        let achados: Vec<Achado> = msgs.into_iter().filter_map(|m| if let Parcial::Itens(v) = m { Some(v) } else { None }).flatten().collect();
+        assert_eq!(achados.len(), 40);
+        assert!(achados.iter().all(|a| a.linha == 1 && a.col == 6));
+        // o limite vale
+        let mut bg = buscar_texto_bg(d.clone(), "agulha".into(), 5, Arc::new(|| {}));
+        let n: usize = espera(&mut bg).into_iter().filter_map(|m| if let Parcial::Itens(v) = m { Some(v.len()) } else { None }).sum();
+        assert_eq!(n, 5);
+        // cancelada: a thread pára e a seguinte funciona normalmente
+        let bg = buscar_texto_bg(d.clone(), "agulha".into(), 1000, Arc::new(|| {}));
+        drop(bg);
+        let mut bg = buscar_texto_bg(d, "nada".into(), 1000, Arc::new(|| {}));
+        let n: usize = espera(&mut bg).into_iter().filter_map(|m| if let Parcial::Itens(v) = m { Some(v.len()) } else { None }).sum();
+        assert_eq!(n, 40);
+    }
+
+    #[test]
+    fn fuzzy_incremental_so_olha_os_que_ja_casaram_e_acha_o_mesmo() {
+        let itens: Vec<String> = ["src/main.rs", "src/native.rs", "src/nscene.rs", "docs/notes.md", "README.md", "src/term.rs"].map(String::from).to_vec();
+        let (top1, todos1) = fuzzy_sub("n", &itens, None, 10);
+        assert!(top1.len() >= 4 && todos1.len() == top1.len());
+        // mais uma letra: só entre os de antes, com o mesmo resultado da busca completa
+        let (top2, todos2) = fuzzy_sub("ns", &itens, Some(&todos1), 10);
+        let completa = fuzzy("ns", &itens, 10);
+        assert_eq!(top2, completa);
+        assert!(todos2.iter().all(|i| todos1.contains(i)), "subconjunto");
+        // sem busca: tudo, na ordem dada
+        let (vazia, todos) = fuzzy_sub("", &itens, None, 3);
+        assert_eq!(vazia.iter().map(|c| c.item).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(todos.len(), itens.len());
+        // índices velhos fora do alcance não derrubam
+        let (r, _) = fuzzy_sub("main", &itens, Some(&[0, 99]), 10);
+        assert_eq!(r.len(), 1);
     }
 
     #[test]

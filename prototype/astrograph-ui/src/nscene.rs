@@ -1640,11 +1640,16 @@ impl Scene {
         let cnt = format!("{}", pv.total);
         let cw = self.ui.measure(&cnt, 12.0 * s);
         c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw, mid + 12.0 * s * 0.36, &cnt, d::FAINT, p);
+        if pv.buscando {
+            let b = "buscando…";
+            let bw = self.ui.measure(b, 12.0 * s);
+            c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw - 14.0 * s - bw, mid + 12.0 * s * 0.36, b, d::ACCENT_SOFT, p * 0.9);
+        }
         c.rect((x + 14.0 * s) as i32, (y + head - 2.0 * s) as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::WHITE, 0.07 * p);
         // lista
         let top = y + head + 6.0 * s;
         if pv.items.is_empty() {
-            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::DIM, p);
+            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.buscando { "Buscando…" } else if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::DIM, p);
             return;
         }
         // seleção desliza entre as linhas
