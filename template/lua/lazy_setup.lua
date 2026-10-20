@@ -73,6 +73,9 @@ local function astrograph_local()
   if not dir or dir == "" then dir = vim.fs.joinpath(vim.fs.dirname(vim.fn.stdpath "data"), "astrograph-local") end
   if not uv.fs_stat(dir .. "/specs") then return end
   table.insert(specs, { dir = dir, name = "astrograph-local", lazy = false })
+  -- specs (ex.: importados de uma config antiga) podem dar `require` nos
+  -- módulos de `lua/` já na leitura, antes do lazy pôr a pasta no runtimepath
+  package.path = ("%s/lua/?.lua;%s/lua/?/init.lua;"):format(dir, dir) .. package.path
   for name, kind in vim.fs.dir(dir .. "/specs") do
     if kind == "file" and name:match "%.lua$" then
       local ok, spec = pcall(dofile, dir .. "/specs/" .. name)
