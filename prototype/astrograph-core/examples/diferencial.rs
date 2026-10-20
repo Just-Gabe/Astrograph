@@ -47,6 +47,7 @@ const CORPUS: &[&[&str]] = &[
     &["árvore é verde", "日本語 text", "x"],
     &["single line only"],
     &["", ""],
+    &["x = 10", "  y = -5 and 007", "0x1f 9", "a1b2 c-3", "no digits"],
     &["say \"hello world\" and 'x y' end", "f(a, (b), c) { x } [1, 2] <t>", "  \"q1\"  \"q2\" z"],
     &["if (x) {", "  foo(1, 2);", "  bar;", "}", "", "para two", "second line", "", "", "last para"],
     &["one  two   three", "  lead  word", "tail ", "", "a.b-c d_e"],
@@ -130,8 +131,72 @@ fn vocabulario_bloco() -> Vec<&'static str> {
     v
 }
 
+fn mov_basico() -> Vec<&'static str> {
+    vec!["w", "b", "e", "j", "k", "0", "$", "^", "gg", "G", "fo", "2w", "3j", "}", "{", "x", "u", ".", "p", "P", "yy", "dd"]
+}
+
+fn vocabulario_num() -> Vec<&'static str> {
+    let mut v = vec![
+        "<C-a>", "<C-x>", "5<C-a>", "10<C-x>", "3<C-a>", "w<C-a>", "$<C-a>", "j<C-a>", "fx<C-a>", "0<C-a>", "e<C-x>", "b<C-a>", "99<C-a>", "100<C-x>", "w5<C-a>", "wj<C-x>", "<C-a>.", "<C-x>.", "2<C-a>.",
+        "V<C-a>", "Vj<C-a>", "Vjj<C-x>", "vj<C-a>", "VG<C-a>", "Vjg<C-a>", "Vjjg<C-x>", "V2<C-a>", "Vj3<C-a>", "VGg<C-a>",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_caso() -> Vec<&'static str> {
+    let mut v = vec![
+        "guu", "gUU", "g~~", "guiw", "gUiw", "g~iw", "guw", "gUw", "g~w", "gU$", "gu0", "gUj", "g~j", "gUap", "gUU", "gUgU", "gugu", "g~g~", "3gUU", "gU2w", "2guu", "gUe", "gUb", "g~$", "gUG", "gUgg",
+        "gUf.", "guf.", "gUt.", "g~l", "gUh", "gU}", "gUi(", "guaw", "g~aw", "gUiW", "gUaW", "gUip", "viwU", "viwu", "vj~", "Vu", "VU", "V~", "veU", "gUl", "g~iw.",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_ponto_visual() -> Vec<&'static str> {
+    let mut v = vec![
+        "vlld", "viwd", "Vjd", "vjd", "v$d", "vey", "Vy", "viwcX<Esc>", "VcX<Esc>", "vjcX<Esc>", "vld", "Vd", "<C-v>jld", "<C-v>jd", "<C-v>lld", "viw>", "V>", "Vj>", "vjJ", "VJ", "VjJ", "viwr-", "Vr-", "vlr-", "v~", "viw~", "vjU", "viwu",
+        ".", "..", "2.", "j.", "w.", "u.", "u", "<C-r>", "3.",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_registros() -> Vec<&'static str> {
+    let mut v = vec![
+        "\"ayy", "\"ap", "\"Ayy", "\"aP", "\"_dd", "\"_x", "\"_dw", "\"add", "\"bdw", "\"bp", "\"ayw", "\"Ayw", "\"byiw", "\"Bdw", "\"0p", "\"0P", "\"1p", "\"2p", "\"3p", "\"1P", "\"-p", "\"-P", "\".p", "\"/p", "\"ayiw", "\"acwX<Esc>", "\"_cwX<Esc>",
+        "i<C-r>\"<Esc>", "i<C-r>a<Esc>", "i<C-r>0<Esc>", "i<C-r>-<Esc>", "i<C-r>1<Esc>", "a<C-r>\"<Esc>", "A<C-r>a<Esc>", "\"ayy\"bdd\"ap\"bp", "yyjdd\"0p", "dwjdw\"1p\"-p", "dddd\"1p\"2p", "/o<CR>\"/P", "ix<Esc>\".p",
+        "yiwviwp", "dwviw\"0p", "\"aviwy", "\"avjd", "\"avjy\"ap", "\"Ayy\"ap",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_marcas2() -> Vec<&'static str> {
+    let mut v = vec![
+        "'[", "']", "`[", "`]", "'.", "`.", "`^", "'^", "gi<Esc>", "g;", "g,", "<C-o>", "<C-i>", "d'[", "y']", "d`.", "'[d']", "`[v`]d", "ihi<Esc>`[", "yw`]", "yy'[", "yy']", "yj']", "dd'.", "x`.", "p`[", "p`]", "P`]", "ox<Esc>'[", "3G<C-o>", "G<C-o>", "gg<C-o>G<C-o><C-o>",
+        "3Gx2Gx1Gxg;g;", "2Gxjjxg;g;g,", "/o<CR><C-o>", "/o<CR>n<C-o><C-o>", "G<C-o><C-i>", "}<C-o>", "%<C-o>", "gg<C-o>", "3G''", "3G``", "``", "2G3G``",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_pct() -> Vec<&'static str> {
+    let mut v = vec!["d%", "y%", "c%X<Esc>", "%", "d%.", "2d%", "d2%", "df(", "d%p", "y%P", "v%d", "V%d", "dt)", "f(d%", "f{d%", "f[d%", "f<d%", "$d%", "0d%", "wd%", "fo%", "d%u", "c%X<Esc>.", "y%`]"];
+    v.extend(mov_basico());
+    v
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
     match nome {
+        "ca" => return vec!["<C-a>", "}", "j", "x", "u", "<C-x>", "w", "."],
+        "falha" => return vec!["fz", "fz", "x", "l", "dd", "w", "<C-a>", "j", "u", "tz", "Fz", "p", "3x", "yy"],
+        "num" => return vocabulario_num(),
+        "caso" => return vocabulario_caso(),
+        "ponto" => return vocabulario_ponto_visual(),
+        "reg" => return vocabulario_registros(),
+        "marc2" => return vocabulario_marcas2(),
+        "pct" => return vocabulario_pct(),
         "blk" => return vocabulario_bloco(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
@@ -182,7 +247,6 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
         vim.fn.writefile(lines, tmp)
         vim.cmd('silent edit! ' .. vim.fn.fnameescape(tmp))
         vim.api.nvim_win_set_cursor(0, { 1, 0 })
-        for _, r in ipairs({ 'a', 'b', 'c', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) do vim.fn.setreg(r, '') end
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), 'xt', false)
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nxt', false)
         local c = vim.api.nvim_win_get_cursor(0)

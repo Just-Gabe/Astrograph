@@ -13,6 +13,7 @@ use crate::textobj;
 
 mod bloco;
 mod ex;
+mod numero;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -36,6 +37,8 @@ struct VState {
 }
 
 enum VParse {
+    /// `"x`: registrador do próximo comando visual
+    Reg(char),
     Incomplete,
     Invalid,
     Done(VCmd),
@@ -55,6 +58,8 @@ enum VCmd {
     Put(bool, Option<usize>, bool),
     Swap,
     Kind(VKind),
+    /// `<C-a>`/`<C-x>` (`g<C-a>`/`g<C-x>` com `progressivo`) na seleção: sinal e contagem
+    Incr(i64, bool),
     Esc,
 }
 
@@ -156,6 +161,18 @@ pub struct Editor {
     dot: Vec<Key>,
     dot_count: Option<usize>,
     dot_recording: bool,
+    /// registrador do último comando repetível (`"Bdw` e depois `.`; `"1p` sobe para `"2p`...)
+    dot_reg: Option<char>,
+    /// último texto digitado na inserção (registrador `.`)
+    last_insert: String,
+    /// `<C-r>` apertado na inserção: a próxima tecla é o registrador
+    ins_reg_wait: bool,
+    /// registrador escolhido com `"x` no modo visual (vale até o fim do comando)
+    vreg: Option<char>,
+    /// cursor que o próximo passo de desfazer guarda (operador visual: o começo da seleção)
+    undo_cursor: Option<Pos>,
+    /// o `.` repete um operador visual: forma da seleção (tipo, linhas, colunas; `usize::MAX` = até o fim)
+    dot_visual: Option<(VKind, usize, usize)>,
     replaying: bool,
     ins: Insert,
     /// colunas de `shiftwidth`
@@ -225,6 +242,12 @@ impl Editor {
             dot: Vec::new(),
             dot_count: None,
             dot_recording: false,
+            dot_reg: None,
+            last_insert: String::new(),
+            ins_reg_wait: false,
+            vreg: None,
+            undo_cursor: None,
+            dot_visual: None,
             replaying: false,
             ins: Insert::default(),
             shiftwidth: 8,
@@ -361,7 +384,20 @@ impl Editor {
         if c == '"' {
             self.unnamed.as_ref()
         } else {
-            self.regs.get(&c)
+            self.regs.get(&c.to_ascii_lowercase())
+        }
+    }
+
+    /// Conteúdo de um registrador, incluindo os especiais: `"` sem nome, `a-z`/`A-Z`, `0-9`, `-`,
+    /// `.` (último texto inserido), `/` (última busca); `_` (buraco negro) e os desconhecidos são vazios.
+    fn reg_valor(&self, c: char) -> Option<Reg> {
+        let simples = |t: String| Reg { text: t, linewise: false, block: false, bwidth: 0 };
+        match c {
+            '_' => None,
+            '.' => (!self.last_insert.is_empty()).then(|| simples(self.last_insert.clone())),
+            '/' => self.last_search.as_ref().map(|(p, _)| simples(p.clone())),
+            '"' => self.unnamed.clone(),
+            c => self.regs.get(&c.to_ascii_lowercase()).cloned(),
         }
     }
 
@@ -558,9 +594,29 @@ impl Editor {
                         self.pending.clear();
                         self.failed = true;
                     }
-                    VParse::Done(c) => {
+                    VParse::Reg(r) => {
                         self.pending.clear();
+                        self.vreg = Some(r);
+                    }
+                    VParse::Done(c) => {
+                        let teclas = std::mem::take(&mut self.pending);
+                        // operadores que o `.` repete (não `y`): guarda a forma da seleção antes de executar
+                        let repete = match &c {
+                            VCmd::Op(op, _) => !matches!(op, 'y' | 'Y'),
+                            VCmd::Replace(_) | VCmd::Incr(..) => true,
+                            _ => false,
+                        };
+                        let forma = if repete { self.forma_visual() } else { None };
+                        self.failed = false;
                         self.visual_exec(c);
+                        self.vreg = None;
+                        if let (true, Some(f), false, false) = (repete, forma, self.replaying, self.failed) {
+                            self.dot = teclas;
+                            self.dot_count = None;
+                            self.dot_visual = Some(f);
+                            // `c`: o texto digitado a seguir entra no que o `.` repete
+                            self.dot_recording = self.mode == Mode::Insert;
+                        }
                     }
                 }
             }
@@ -626,8 +682,17 @@ impl Editor {
         i += 1;
         let done = |cmd: Cmd| Parse::Done(Parsed { reg, count, cmd, prefix, search: None });
         let done_s = |cmd: Cmd, search: Option<(String, bool)>| Parse::Done(Parsed { reg, count, cmd, prefix, search });
+        // `gu`, `gU`, `g~`, `g?`: operadores de caixa (o operador é a segunda tecla)
+        let caso = match (k, keys.get(i)) {
+            (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?')))) => Some(*o),
+            _ => None,
+        };
+        if caso.is_some() {
+            i += 1;
+        }
         match k {
-            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) => {
+            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) | Key::Char(op @ 'g') if caso.is_some() || op != 'g' => {
+                let op = caso.unwrap_or(op);
                 let mut count2: Option<usize> = None;
                 loop {
                     match keys.get(i) {
@@ -641,6 +706,8 @@ impl Editor {
                 match keys.get(i) {
                     None => Parse::Incomplete,
                     Some(Key::Char(c)) if *c == op => done(Cmd::Op { op, count2, target: Target::Line }),
+                    // `gugu`, `gUgU`, `g~g~`, `g?g?`: a linha, como `guu`
+                    Some(Key::Char('g')) if caso.is_some() && keys.get(i + 1) == Some(&Key::Char(op)) => done(Cmd::Op { op, count2, target: Target::Line }),
                     Some(Key::Char(ia @ ('i' | 'a'))) => match keys.get(i + 1) {
                         Some(Key::Char(o)) if "wWpP()[]{}<>bB\"'`".contains(*o) => {
                             done(Cmd::Op { op, count2, target: Target::Obj(*ia == 'a', *o) })
@@ -679,6 +746,8 @@ impl Editor {
                         None => Parse::Incomplete,
                     },
                     Key::Ctrl('v') => done(Cmd::Simple('\u{16}', None)),
+                    Key::Ctrl('a') => done(Cmd::Simple('\u{1}', None)),
+                    Key::Ctrl('x') => done(Cmd::Simple('\u{18}', None)),
                     Key::Ctrl('r') => done(Cmd::Simple('R', None)),
                     _ => Parse::Invalid,
                 },
@@ -724,7 +793,9 @@ impl Editor {
         if is_change && !self.replaying {
             self.dot = keys[p.prefix..].to_vec();
             self.dot_count = p.count;
+            self.dot_reg = p.reg;
             self.dot_recording = true;
+            self.dot_visual = None;
         }
         match p.cmd {
             Cmd::Motion(m) => {
@@ -768,7 +839,9 @@ impl Editor {
         if self.mode == Mode::Normal {
             self.dot_recording = false;
         }
-        if is_change && !self.replaying && self.failed {
+        // `<C-a>`/`<C-x>`/`p`/`P` guardam o `.` antes de falhar (sem número, registrador vazio): o `.` os repete
+        let guarda_dot = matches!(&p.cmd, Cmd::Simple('\u{1}' | '\u{18}' | 'p' | 'P', _));
+        if is_change && !self.replaying && self.failed && !guarda_dot {
             self.dot = prev_dot.0;
             self.dot_count = prev_dot.1;
         }
@@ -793,6 +866,8 @@ impl Editor {
             'p' => self.put(true, count1, reg),
             'P' => self.put(false, count1, reg),
             'u' => self.undo_step(count1),
+            '\u{1}' => self.incrementar(count1 as i64),
+            '\u{18}' => self.incrementar(-(count1 as i64)),
             'R' => self.redo_step(count1),
             '.' => self.dot_repeat(count),
             'J' => {
@@ -1121,7 +1196,10 @@ impl Editor {
                     return;
                 }
                 let r2 = (r1 + n - 1).min(self.last_row());
-                (Pos::new(r1, 0), Pos::new(r2, 0), Kind::Line)
+                // o Vim leva o cursor ao primeiro não-branco antes de operar: o começo do trecho é o menor
+                // entre ele e a posição de partida (com contagem > 1 o trecho ainda começa onde se estava)
+                let col = if n == 1 { self.cursor.col.min(self.buf.first_nonblank(r1)) } else { self.cursor.col };
+                (Pos::new(r1, col), Pos::new(r2, 0), Kind::Line)
             }
             Target::Obj(include, ch) => {
                 let n = count.unwrap_or(1);
@@ -1299,6 +1377,26 @@ impl Editor {
                     }
                 }
             }
+            'u' | 'U' | '~' | '?' => {
+                // região exclusiva vazia (`gUh` na coluna 0): o Vim ainda troca o caractere sob o cursor
+                let (kind, b) = if kind == Kind::Excl && a == b && a.col < self.buf.line_len(a.row) { (Kind::Incl, a) } else { (kind, b) };
+                let (ini, fim) = match kind {
+                    Kind::Line => (Pos::new(a.row, 0), Pos::new(b.row, self.buf.line_len(b.row))),
+                    Kind::Incl => (a, Pos::new(b.row, (b.col + 1).min(self.buf.line_len(b.row)))),
+                    Kind::Excl => (a, b),
+                };
+                self.checkpoint();
+                let antes = self.cursor;
+                let texto = self.buf.delete(ini, fim);
+                let novo: String = texto.chars().map(|c| mudar_caixa(op, c)).collect();
+                self.buf.insert(ini, &novo);
+                // o cursor vai para o começo do trecho; por linhas, `a` já traz a coluna que o Vim usa
+                // (o primeiro não-branco em `guu`, a do cursor em `guj`)
+                let _ = antes;
+                self.cursor = a;
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             '>' | '<' => {
                 self.checkpoint();
                 let (r1, r2) = (a.row, b.row);
@@ -1326,10 +1424,19 @@ impl Editor {
 
     fn store(&mut self, reg: Option<char>, text: String, linewise: bool, delete: bool) {
         let bw = std::mem::take(&mut self.store_bwidth);
-        let r = Reg { text, linewise, block: bw > 0, bwidth: bw };
+        let mut r = Reg { text, linewise, block: bw > 0, bwidth: bw };
         match reg {
+            // buraco negro: não guarda nada nem mexe no registrador sem nome
+            Some('_') => return,
             Some(c) if c != '"' => {
-                self.regs.insert(c.to_ascii_lowercase(), r.clone());
+                let nome = c.to_ascii_lowercase();
+                // maiúscula anexa ao que já existe (sem nome definido, é um registrador novo)
+                if c.is_ascii_uppercase() {
+                    if let Some(velho) = self.regs.get(&nome) {
+                        r = anexar_registro(velho, r);
+                    }
+                }
+                self.regs.insert(nome, r.clone());
             }
             _ => {
                 if delete {
@@ -1373,10 +1480,13 @@ impl Editor {
 
     fn put(&mut self, after: bool, count: usize, reg: Option<char>) {
         let r = match reg {
-            Some(c) if c != '"' => self.regs.get(&c).cloned(),
-            _ => self.unnamed.clone(),
+            Some(c) => self.reg_valor(c),
+            None => self.unnamed.clone(),
         };
-        let Some(r) = r else { return };
+        let Some(r) = r else {
+            self.failed = true;
+            return;
+        };
         self.put_reg(r, after, count);
     }
 
@@ -1385,8 +1495,12 @@ impl Editor {
     fn visual_put(&mut self, replace_reg: bool, count: usize, cursor_after: bool) {
         let Some(vs) = self.vis else { return };
         // registrador vazio: o Vim apaga a seleção mesmo assim e avisa que não há o que colar
-        let vazio = self.unnamed.is_none();
-        let r = self.unnamed.clone().unwrap_or(Reg { text: String::new(), linewise: false, block: false, bwidth: 0 });
+        let escolhido = match self.vreg {
+            Some(c) => self.reg_valor(c),
+            None => self.unnamed.clone(),
+        };
+        let vazio = escolhido.is_none();
+        let r = escolhido.unwrap_or(Reg { text: String::new(), linewise: false, block: false, bwidth: 0 });
         // `P` simples deixa o registrador; `p`, `gp` e `gP` o trocam pelo texto apagado
         let keep = !replace_reg && !cursor_after;
         let saved = keep.then(|| (self.regs.clone(), self.unnamed.clone()));
@@ -1607,9 +1721,19 @@ impl Editor {
         }
         let Some(&k) = keys.get(i) else { return VParse::Incomplete };
         match k {
+            Key::Char('"') if i == 0 => match keys.get(1) {
+                Some(Key::Char(r)) => VParse::Reg(*r),
+                Some(_) => VParse::Invalid,
+                None => VParse::Incomplete,
+            },
             Key::Esc | Key::Ctrl('c') => VParse::Done(VCmd::Esc),
             Key::Char('v') => VParse::Done(VCmd::Kind(VKind::Char)),
             Key::Char('V') => VParse::Done(VCmd::Kind(VKind::Line)),
+            Key::Ctrl(c @ ('a' | 'x')) => VParse::Done(VCmd::Incr(count.unwrap_or(1) as i64 * if c == 'a' { 1 } else { -1 }, false)),
+            Key::Char('g') if matches!(keys.get(i + 1), Some(Key::Ctrl('a' | 'x'))) => {
+                let Some(Key::Ctrl(c)) = keys.get(i + 1) else { unreachable!() };
+                VParse::Done(VCmd::Incr(count.unwrap_or(1) as i64 * if *c == 'a' { 1 } else { -1 }, true))
+            }
             Key::Ctrl('v') => VParse::Done(VCmd::Kind(VKind::Block)),
             Key::Char(c @ ('I' | 'A')) if self.vis.is_some_and(|v| v.kind == VKind::Block) => VParse::Done(VCmd::BlockIns(c == 'A')),
             Key::Char('O') if self.vis.is_some_and(|v| v.kind == VKind::Block) => VParse::Done(VCmd::SwapH),
@@ -1652,6 +1776,14 @@ impl Editor {
             return;
         };
         self.vmarks = Some((vs.anchor, self.cursor, vs.kind));
+        // o desfazer de um operador visual volta o cursor ao começo da seleção
+        if matches!(c, VCmd::Op(..) | VCmd::Replace(_) | VCmd::Incr(..)) {
+            let (a, b) = (vs.anchor, self.cursor);
+            self.undo_cursor = Some(match vs.kind {
+                VKind::Block => Pos::new(a.row.min(b.row), a.col.min(b.col)),
+                _ => a.min(b),
+            });
+        }
         match c {
             VCmd::Esc => self.visual_exit(),
             VCmd::Kind(k) => {
@@ -1698,6 +1830,7 @@ impl Editor {
             VCmd::Op(op, count) if vs.kind == VKind::Block && !matches!(op, 'J' | '<' | '>') => self.bloco_op(op, count),
             VCmd::Op(op, count) => self.visual_operate(op, count),
             VCmd::Put(replace, count, cursor_after) => self.visual_put(replace, count.unwrap_or(1), cursor_after),
+            VCmd::Incr(delta, prog) => self.visual_incrementar(delta, prog),
         }
     }
 
@@ -1809,7 +1942,7 @@ impl Editor {
         let lw_start = Pos::new(sel_start.row, if vs.anchor <= self.cursor { 0 } else { sel_start.col });
         let b_row = if vs.anchor <= self.cursor { self.cursor.row } else { vs.anchor.row };
         let rows = b_row - a.row + 1;
-        let reg = None;
+        let reg = self.vreg;
         // X, D, Y, C, S, R trabalham em linhas
         let (op, as_lines) = match op {
             'x' => ('d', linewise),
@@ -1949,7 +2082,38 @@ impl Editor {
         self.ins = Insert { cmd, count, typed: Vec::new(), ai_row };
     }
 
+    /// `<C-r>{reg}` na inserção: o texto do registrador entra como se fosse digitado (e é isso que o
+    /// `.` repete, não a tecla do registrador).
+    fn inserir_registrador(&mut self, c: char) {
+        let Some(r) = self.reg_valor(c) else {
+            self.failed = true;
+            return;
+        };
+        let mut texto = r.text.clone();
+        if r.linewise {
+            texto.push('\n');
+        }
+        for ch in texto.chars() {
+            let k = if ch == '\n' { Key::Enter } else { Key::Char(ch) };
+            self.ins.typed.push(k);
+            if self.dot_recording && !self.replaying {
+                self.dot.push(k);
+            }
+            self.insert_raw(k);
+        }
+    }
+
     fn insert_key(&mut self, k: Key) {
+        if std::mem::take(&mut self.ins_reg_wait) {
+            if let Key::Char(c) = k {
+                self.inserir_registrador(c);
+            }
+            return;
+        }
+        if k == Key::Ctrl('r') {
+            self.ins_reg_wait = true;
+            return;
+        }
         if self.dot_recording && !self.replaying && k != Key::Esc {
             self.dot.push(k);
         }
@@ -1959,6 +2123,22 @@ impl Editor {
         match k {
             Key::Esc => {
                 self.clear_autoindent();
+                // registrador `.`: o que foi digitado nesta inserção
+                let mut digitado = String::new();
+                for t in &self.ins.typed {
+                    match t {
+                        Key::Char(c) => digitado.push(*c),
+                        Key::Tab => digitado.push('\t'),
+                        Key::Enter => digitado.push('\n'),
+                        Key::Backspace => {
+                            digitado.pop();
+                        }
+                        _ => {}
+                    }
+                }
+                if !digitado.is_empty() {
+                    self.last_insert = digitado;
+                }
                 // repete o texto digitado (3ia<Esc>)
                 if self.ins.count > 1 {
                     let typed = self.ins.typed.clone();
@@ -2069,7 +2249,8 @@ impl Editor {
         if self.replaying && false {
             return;
         }
-        self.undo.push(Snap { rope: self.buf.rope.clone(), cursor: self.cursor, marks: self.marks.clone() });
+        let cursor = self.undo_cursor.take().unwrap_or(self.cursor);
+        self.undo.push(Snap { rope: self.buf.rope.clone(), cursor, marks: self.marks.clone() });
         self.redo.clear();
     }
 
@@ -2201,10 +2382,54 @@ impl Editor {
         }
     }
 
+    /// Forma da seleção visual atual (tipo, linhas, colunas) para o `.` repetir sobre outro trecho.
+    fn forma_visual(&self) -> Option<(VKind, usize, usize)> {
+        let vs = self.vis?;
+        let (a, end, _) = self.visual_range();
+        let ultima = if vs.kind != VKind::Line && end.col == 0 && end.row > a.row { end.row - 1 } else { end.row };
+        let linhas = ultima - a.row + 1;
+        Some(match vs.kind {
+            VKind::Line => (VKind::Line, linhas, 0),
+            VKind::Char => {
+                let cols = if linhas == 1 { end.col.saturating_sub(a.col) } else { end.col };
+                (VKind::Char, linhas, cols.max(1))
+            }
+            VKind::Block => {
+                let b = self.bloco()?;
+                (VKind::Block, linhas, if b.ate_o_fim { usize::MAX } else { b.r - b.l + 1 })
+            }
+        })
+    }
+
+    /// `.` depois de um operador visual: seleciona de novo, a partir do cursor, um trecho do mesmo
+    /// tamanho e refaz o operador.
+    fn dot_repeat_visual(&mut self, forma: (VKind, usize, usize)) {
+        let (kind, linhas, cols) = forma;
+        let ini = self.cursor;
+        let fim_row = (ini.row + linhas - 1).min(self.last_row());
+        let fim = match kind {
+            VKind::Line => Pos::new(fim_row, ini.col),
+            VKind::Char if linhas == 1 => Pos::new(ini.row, (ini.col + cols - 1).min(self.buf.line_len(ini.row).saturating_sub(1))),
+            VKind::Char => Pos::new(fim_row, cols.saturating_sub(1).min(self.buf.line_len(fim_row).saturating_sub(1))),
+            VKind::Block => Pos::new(fim_row, if cols == usize::MAX { ini.col } else { (ini.col + cols - 1).min(self.buf.line_len(fim_row).saturating_sub(1)) }),
+        };
+        self.vis = Some(VState { kind, anchor: ini });
+        self.mode = Mode::Visual;
+        self.cursor = fim;
+        self.curswant = if cols == usize::MAX { MAXWANT } else { self.want_here() };
+        let keys = self.dot.clone();
+        self.replaying = true;
+        self.feed(&keys);
+        self.replaying = false;
+    }
+
     fn dot_repeat(&mut self, count: Option<usize>) {
         if self.dot.is_empty() {
             self.failed = true;
             return;
+        }
+        if let Some(f) = self.dot_visual {
+            return self.dot_repeat_visual(f);
         }
         let keys = self.dot.clone();
         let n = count.or(self.dot_count);
@@ -2212,6 +2437,15 @@ impl Editor {
             self.dot_count = count;
         }
         let mut full: Vec<Key> = Vec::new();
+        if let Some(mut r) = self.dot_reg {
+            // `"1pu.u.`: cada repetição de um `p` com registrador numerado pega o seguinte (1 a 9)
+            if matches!(r, '1'..='8') && matches!(keys.last(), Some(Key::Char('p' | 'P'))) {
+                r = (r as u8 + 1) as char;
+                self.dot_reg = Some(r);
+            }
+            full.push(Key::Char('"'));
+            full.push(Key::Char(r));
+        }
         if let Some(n) = n {
             full.extend(n.to_string().chars().map(Key::Char));
         }
@@ -2288,6 +2522,41 @@ enum MParse {
     Incomplete,
     Invalid,
     Done(Mo, usize),
+}
+
+/// Muda a caixa de um caractere para `gu` (minúscula), `gU` (maiúscula), `g~` (inverte) e `g?` (rot13).
+/// `"Ayy`: junta o que já está no registrador com o texto novo. Dois trechos de caracteres se
+/// emendam; se um deles é por linhas o resultado é por linhas, com cada parte em suas linhas.
+fn anexar_registro(velho: &Reg, novo: Reg) -> Reg {
+    if !velho.linewise && !novo.linewise {
+        return Reg { text: format!("{}{}", velho.text, novo.text), linewise: false, block: false, bwidth: 0 };
+    }
+    Reg { text: format!("{}\n{}", velho.text, novo.text), linewise: true, block: false, bwidth: 0 }
+}
+
+fn mudar_caixa(op: char, c: char) -> char {
+    let um = |mut it: std::vec::IntoIter<char>| -> Option<char> {
+        let p = it.next()?;
+        it.next().is_none().then_some(p)
+    };
+    match op {
+        'u' => um(c.to_lowercase().collect::<Vec<_>>().into_iter()).unwrap_or(c),
+        'U' => um(c.to_uppercase().collect::<Vec<_>>().into_iter()).unwrap_or(c),
+        '~' => {
+            if c.is_lowercase() {
+                um(c.to_uppercase().collect::<Vec<_>>().into_iter()).unwrap_or(c)
+            } else if c.is_uppercase() {
+                um(c.to_lowercase().collect::<Vec<_>>().into_iter()).unwrap_or(c)
+            } else {
+                c
+            }
+        }
+        _ => match c {
+            'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
+            'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
+            _ => c,
+        },
+    }
 }
 
 fn parse_motion(keys: &[Key]) -> MParse {

@@ -10,7 +10,18 @@ fn strs(v: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn casos_do_nvim() {
-    let dados = include_str!("ouro.tsv");
+    let n = rodar(include_str!("ouro.tsv"));
+    assert!(n > 100, "poucos casos: {n}");
+}
+
+/// `<C-a>`/`<C-x>`, `gu`/`gU`/`g~`, `.` depois de operador visual e bloco que corta tab ou caractere largo.
+#[test]
+fn casos_do_nvim_extras() {
+    let n = rodar(include_str!("ouro_extras.tsv"));
+    assert!(n > 300, "poucos casos: {n}");
+}
+
+fn rodar(dados: &str) -> usize {
     let mut n = 0;
     for l in dados.lines().filter(|l| !l.is_empty()) {
         let c: Vec<&str> = l.split('\t').collect();
@@ -25,5 +36,5 @@ fn casos_do_nvim() {
         assert_eq!((ed.cursor.row, ed.cursor.col), (row, col), "cursor: {keys:?} em {lines:?}");
         n += 1;
     }
-    assert!(n > 100, "poucos casos: {n}");
+    n
 }
