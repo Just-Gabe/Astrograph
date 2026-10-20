@@ -1577,6 +1577,7 @@ fn main() {
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     let leader_key = cfg.keys.leader_char();
+    let format_on_save = cfg.lsp.format_on_save;
     // motor: ASTROGRAPH_ENGINE=native|nvim manda; sem ela vale `[engine] native` do config.toml
     let native_on = match std::env::var("ASTROGRAPH_ENGINE").as_deref() {
         Ok("native") => true,
@@ -1609,7 +1610,7 @@ fn main() {
         // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
         if native_on {
             let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
-            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, tx_native));
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, format_on_save, tx_native));
         } else {
             runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
         }

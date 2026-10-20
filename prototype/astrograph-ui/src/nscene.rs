@@ -918,6 +918,7 @@ impl Scene {
             Camada::Painel { foco } => {
                 self.paint_completion(c, vm, lay, (w, h, s));
                 self.paint_hover(c, vm, lay, (w, h, s));
+                self.paint_sig(c, vm, lay, (w, h, s));
                 if foco {
                     self.paint_pill(c, vm, now, (w, h, s));
                 }
@@ -975,6 +976,7 @@ impl Scene {
         if self.camada != Camada::Casca {
             self.paint_completion(c, _vm, lay, (w, h, s));
             self.paint_hover(c, _vm, lay, (w, h, s));
+            self.paint_sig(c, _vm, lay, (w, h, s));
         }
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
@@ -1214,6 +1216,50 @@ impl Scene {
                     break;
                 }
                 c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+                pen += a;
+            }
+        }
+    }
+
+    /// Assinatura da função em edição: um cartão pequeno acima da linha, com o parâmetro ativo em destaque.
+    fn paint_sig(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, _h, s): (f32, f32, f32)) {
+        let Some(sig) = vm.sig.as_ref() else { return };
+        let px = self.font_px * 0.92;
+        let chars: Vec<char> = sig.texto.chars().take(120).collect();
+        let larg: f32 = chars.iter().map(|ch| self.mono.advance(*ch, px)).sum();
+        let doc_larg: f32 = sig.doc.chars().take(120).map(|ch| self.ui.advance(ch, px * 0.9)).sum();
+        let cw = (larg.max(doc_larg) + 32.0 * s).clamp(160.0 * s, w - 24.0 * s);
+        let ch_h = if sig.doc.is_empty() { px * 1.5 + 20.0 * s } else { px * 3.0 + 22.0 * s };
+        let x = (self.cur_x.x).min(w - cw - 16.0 * s).max(self.side.x + 12.0 * s);
+        let linha_y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
+        // acima da linha (o completar fica abaixo)
+        let y = (linha_y - ch_h - 6.0 * s).max(lay.text_y);
+        c.shadow(x, y, cw, ch_h, 10.0 * s, 20.0 * s, 8.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch_h, 10.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch_h, 10.0 * s, 1.0, d::WHITE, 0.10);
+        let base = y + 10.0 * s + px * 1.05;
+        let mut pen = x + 16.0 * s;
+        for (i, ch) in chars.iter().enumerate() {
+            let a = self.mono.advance(*ch, px);
+            if pen + a > x + cw - 10.0 * s {
+                break;
+            }
+            let ativo = sig.ativo.is_some_and(|(ini, fim)| i >= ini && i < fim);
+            if ativo {
+                c.rrect(pen - 1.0, base - px * 1.0, a + 2.0, px * 1.35, 3.0 * s, d::ACCENT, 0.28);
+            }
+            c.glyph_at(&mut self.mono, px, pen, base, *ch, if ativo { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+            pen += a;
+        }
+        if !sig.doc.is_empty() {
+            let dpx = px * 0.9;
+            let mut pen = x + 16.0 * s;
+            for ch in sig.doc.chars().take(120) {
+                let a = self.ui.advance(ch, dpx);
+                if pen + a > x + cw - 10.0 * s {
+                    break;
+                }
+                c.glyph_at(&mut self.ui, dpx, pen, base + px * 1.45, ch, d::DIM, 1.0);
                 pen += a;
             }
         }
@@ -2122,6 +2168,32 @@ mod testes {
             volta = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
         }
         assert!(volta.iter().zip(&normal).filter(|(a, b)| a != b).count() < 200, "e volta ao normal");
+    }
+
+    #[test]
+    fn assinatura_aparece_acima_da_linha_com_o_parametro_ativo() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (700u32, 360u32);
+        let mut s = Session::new("fn main() {\n    let r = soma(1, \n}\n", Some("a.rs".into()));
+        let lay = sc.layout(w, h, 3);
+        s.resize(lay.cols, lay.rows.floor());
+        s.feed("jA");
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        let sem = quadro(&mut sc, &vm, w, h, t0);
+        vm.sig = Some(crate::nview::SigView { texto: "soma(a: i32, b: i32) -> i32".into(), ativo: Some((13, 19)), doc: "soma dois numeros".into() });
+        let mut com = sem.clone();
+        for i in 1..40 {
+            com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sem.iter().zip(&com).filter(|(a, b)| a != b).count() > 3_000, "o cartão apareceu");
+        if let Ok(caminho) = std::env::var("ASTROGRAPH_PNG") {
+            let mut ppm = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for p in &com {
+                ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+            }
+            std::fs::write(format!("{caminho}.ppm"), ppm).unwrap();
+        }
     }
 
     #[test]

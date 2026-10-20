@@ -47,7 +47,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
 | Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele; `<Espaço>Az` abre o **modo zen**: o agente em tela cheia, coluna centrada num cartão, com fade) | **funcionando** |
 | Git: branch na pílula e sinais de margem (nova/alterada/removida) comparando o buffer ao `HEAD`, ao vivo (`similar`; só lê o `HEAD` com o `git` instalado) | **funcionando** |
-| LSP nativo (cliente JSON-RPC próprio; servidores do PATH ou do Mason): diagnósticos, hover `K`, definição `gd`, completar (popup com filtro local; `Tab`/`<C-y>` aceita, `<C-n>`/`<C-p>` navegam); renomear ainda não | **funcionando** (verificado com o pyright real) |
+| LSP nativo (cliente JSON-RPC próprio; servidores do PATH ou do Mason): diagnósticos, hover `K`, definição `gd`, completar (popup com filtro local; `Tab`/`<C-y>` aceita, `<C-n>`/`<C-p>` navegam), **renomear** (`<Espaço>rn` / `:Rename`, em vários arquivos), **ações de código** (`<Espaço>ca`, lista), **formatar** (`<Espaço>lf` / `:Format`; `[lsp] format_on_save = true` formata ao `:w`), **assinatura** ao digitar `(` e `,`, **referências** (`gr`), tipo (`gy`), implementação (`<Espaço>li`), **símbolos** do arquivo (`<Espaço>ls`), **lista de diagnósticos** (`<Espaço>xx`) e `]d`/`[d` | **funcionando** (verificado com um servidor falso e o pyright real) |
 | Abas: uma sessão por aba (`:tabnew [arquivo]`, `gt`/`gT`, `:tabc[!]`, `:tabo`, `:q` fecha a aba), barra de abas clicável, servidor LSP compartilhado, explorador e terminal acompanham a aba ativa | **funcionando** |
 | Janelas divididas: `:split` `:vsplit` `:new` `:vnew` `:close` `:only` e `<C-w>` `s v n h j k l w W p c q o = _ \|`; clique foca o painel, a roda rola o painel sob o ponteiro, arrastar o divisor redimensiona. Painéis do mesmo arquivo compartilham o texto (edição, salvar e modificado acompanham); cada painel tem cena, rolagem e cursor próprios, e o focado leva a pílula | **funcionando** |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
@@ -65,6 +65,10 @@ objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`
 motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 
 ## Divergências conhecidas
+
+- LSP: o `didChange` manda o texto inteiro (sem sincronização incremental), a raiz do projeto vem do primeiro
+  arquivo de cada servidor, e snippets/`additionalTextEdits` do completar ainda não são aplicados. Renomear em
+  arquivos fechados grava direto no disco; criar/renomear/apagar arquivos pedidos pelo servidor são ignorados.
 
 - Janelas divididas: dois painéis do mesmo arquivo espelham o texto, mas cada um guarda o próprio
   histórico de desfazer (uma edição feita no outro painel entra como um passo; no Vim o histórico é um só).

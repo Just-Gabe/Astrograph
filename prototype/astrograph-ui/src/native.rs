@@ -19,7 +19,7 @@ use crate::busca;
 use crate::git;
 use crate::janelas::{Dir, Lado, Layout, PaneId};
 use crate::lsp::{self, Cliente};
-use crate::nview::{CompItem, CompView, GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
+use crate::nview::{SigView, CompItem, CompView, GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +65,8 @@ struct Pendente {
     id: i64,
     tipo: PedidoLsp,
     desde: std::time::Instant,
+    /// a resposta não interessa mais (a assinatura fechou antes de ela chegar)
+    descartar: bool,
 }
 
 /// Quanto esperar o servidor antes de gravar mesmo sem a formatação.
@@ -200,11 +202,13 @@ pub struct Session {
     /// trocas de texto do servidor (renomear, ações) que o espaço de trabalho aplica em todos os arquivos
     pub edicoes_pedido: Option<Vec<lsp::Edicao>>,
     /// assinatura da função em edição (aberta ao digitar `(` ou `,`)
-    sig: Option<lsp::Assinatura>,
+    sig: Option<(lsp::Assinatura, usize)>,
     /// pede ao servidor para formatar antes de gravar (`[lsp] format_on_save`)
     pub formatar_ao_salvar: bool,
     /// apertou <C-w> e espera a segunda tecla
     jan_espera: bool,
+    /// apertou `]` ou `[` e espera o `d` (diagnóstico seguinte/anterior)
+    colchete_espera: Option<char>,
     /// identifica o painel dentro da aba
     pub pane_id: PaneId,
     pub splits: Option<Box<Splits>>,
@@ -289,6 +293,7 @@ impl Session {
             sig: None,
             formatar_ao_salvar: false,
             jan_espera: false,
+            colchete_espera: None,
             pane_id: 0,
             splits: None,
             irmao: false,
@@ -512,6 +517,18 @@ impl Session {
             self.jan_espera = true;
             return;
         }
+        // `]d` / `[d`: o núcleo não tem esses prefixos; a sessão guarda o colchete e repassa se não vier `d`
+        if let Some(c) = self.colchete_espera.take() {
+            if k == Key::Char('d') {
+                return self.diag_pular(c == ']');
+            }
+            self.ed.feed(&[Key::Char(c)]);
+        } else if livre && matches!(k, Key::Char(']' | '[')) && self.picker.is_none() {
+            if let Key::Char(c) = k {
+                self.colchete_espera = Some(c);
+            }
+            return;
+        }
         if self.dash && livre {
             match k {
                 Key::Char('n') => {
@@ -689,13 +706,21 @@ impl Session {
     /// Assinatura da função: abre ao digitar `(` ou `,` e fecha ao digitar `)`, sair da inserção ou mudar de linha.
     fn sig_update(&mut self, k: Key) {
         if self.ed.mode() != Mode::Insert {
-            self.sig = None;
+            self.sig_fechar();
             return;
         }
         match k {
             Key::Char('(') | Key::Char(',') if self.lsp.is_some() => self.lsp_assinatura(),
-            Key::Char(')') | Key::Enter => self.sig = None,
+            Key::Char(')') | Key::Enter => self.sig_fechar(),
             _ => {}
+        }
+    }
+
+    /// Fecha a assinatura e descarta as respostas que ainda vêm a caminho.
+    fn sig_fechar(&mut self) {
+        self.sig = None;
+        for p in self.lsp_pend.iter_mut().filter(|p| p.tipo == PedidoLsp::Assinatura) {
+            p.descartar = true;
         }
     }
 
@@ -782,7 +807,7 @@ impl Session {
     }
 
     fn lsp_esperar(&mut self, id: i64, tipo: PedidoLsp) {
-        self.lsp_pend.push(Pendente { id, tipo, desde: std::time::Instant::now() });
+        self.lsp_pend.push(Pendente { id, tipo, desde: std::time::Instant::now(), descartar: false });
     }
 
     /// `<Líder>rn` / `:Rename nome`.
@@ -918,6 +943,7 @@ impl Session {
             let r = cl.lock().unwrap().resposta(p.id);
             let espera = p.desde.elapsed().as_millis();
             match r {
+                Some(_) if p.descartar => {}
                 Some(v) => self.lsp_resposta(p.tipo, v),
                 // formatar ao salvar: o servidor não respondeu a tempo, grava assim mesmo
                 None if matches!(p.tipo, PedidoLsp::Formatar { .. }) && espera > FORMATAR_ESPERA_MS => {
@@ -967,7 +993,7 @@ impl Session {
                     }
                 }
             }
-            PedidoLsp::Assinatura => self.sig = lsp::assinatura_de(&v),
+            PedidoLsp::Assinatura => self.sig = lsp::assinatura_de(&v).map(|a| (a, self.ed.cursor.row)),
             PedidoLsp::Referencias | PedidoLsp::Implementacao | PedidoLsp::TipoDaDefinicao => {
                 let locais = lsp::locais_de(&v);
                 let nome = match tipo {
@@ -1474,11 +1500,6 @@ impl Session {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_consulta(if k == Key::Char('r') { PedidoLsp::Referencias } else { PedidoLsp::TipoDaDefinicao });
         }
-        if livre && matches!(self.ed.showcmd().as_str(), "]" | "[") && k == Key::Char('d') {
-            let adiante = self.ed.showcmd() == "]";
-            self.ed.feed(&[Key::Esc]);
-            return self.diag_pular(adiante);
-        }
         self.ed.feed(&[k]);
         self.comp_update();
         self.sig_update(k);
@@ -1803,6 +1824,7 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
+            sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),
             completion: self.comp.as_ref().filter(|c| !c.shown.is_empty()).map(|c| {
                 let first = c.sel.saturating_sub(COMP_LINHAS - 1);
                 CompView {
@@ -1914,6 +1936,8 @@ pub struct Workspace {
     pool: LspPool,
     notify: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     leader: char,
+    /// formatar com o servidor ao gravar (`[lsp] format_on_save`)
+    formatar: bool,
     /// tamanho da área de texto (colunas, linhas)
     dims: (usize, f32),
     pub sair: bool,
@@ -1931,11 +1955,24 @@ impl Workspace {
         s.set_notify(notify.clone());
         s.modo_abas = true;
         s.lsp_attach();
-        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, dims: (80, 24.0), sair: false }
+        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, dims: (80, 24.0), sair: false }
     }
 
     fn atual(&mut self) -> &mut Session {
         &mut self.abas[self.ativa]
+    }
+
+    /// Liga ou desliga o formatar-ao-salvar em todas as sessões (e nas que vierem).
+    pub fn formatar_ao_salvar(&mut self, ligado: bool) {
+        self.formatar = ligado;
+        for a in self.abas.iter_mut() {
+            a.formatar_ao_salvar = ligado;
+            if let Some(sp) = a.splits.as_mut() {
+                for o in sp.outros.iter_mut() {
+                    o.formatar_ao_salvar = ligado;
+                }
+            }
+        }
     }
 
     fn nova_sessao(&self, arquivo: Option<&Path>) -> Session {
@@ -1945,6 +1982,7 @@ impl Workspace {
         };
         s.lsp_pool = self.pool.clone();
         s.set_leader(self.leader);
+        s.formatar_ao_salvar = self.formatar;
         if let Some(n) = &self.notify {
             s.set_notify(n.clone());
         }
@@ -2344,6 +2382,14 @@ impl Workspace {
 
     pub fn view_model(&mut self) -> ViewModel {
         let mut vm = self.abas[self.ativa].view_model();
+        // respostas do servidor chegam sozinhas (renomear, formatar e gravar, `:wq`...): resolve já
+        let s = &self.abas[self.ativa];
+        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() {
+            self.depois();
+            if !self.sair {
+                vm = self.abas[self.ativa].view_model();
+            }
+        }
         vm.tabs = self
             .abas
             .iter()
@@ -2372,6 +2418,7 @@ pub async fn native_task(
     proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
     file: Option<PathBuf>,
     leader: char,
+    formatar_ao_salvar: bool,
     tx: tokio::sync::mpsc::UnboundedSender<crate::UiCommand>,
 ) {
     use crate::UiCommand;
@@ -2379,6 +2426,7 @@ pub async fn native_task(
         let _ = tx.send(crate::UiCommand::TermOut);
     });
     let mut w = Workspace::new(file, leader, notify);
+    w.formatar_ao_salvar(formatar_ao_salvar);
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => w.feed(&k),
@@ -2408,6 +2456,11 @@ pub async fn native_task(
             return;
         }
         *shared.lock().unwrap() = Arc::new(w.view_model());
+        // `:wq` com formatação assíncrona termina aqui, quando o servidor responde
+        if w.sair {
+            let _ = proxy.send_event(crate::UserEvent::Quit);
+            return;
+        }
         let _ = proxy.send_event(crate::UserEvent::Redraw);
     }
 }
@@ -2789,6 +2842,168 @@ mod testes {
         vm.rope.to_string()
     }
 
+    /// Espaço de trabalho com o servidor falso (python) num arquivo `a.py` de texto `texto`.
+    /// Devolve `None` se não há python. A trava serializa o uso da variável de ambiente.
+    fn com_falso(nome: &str, texto: &str) -> Option<(std::sync::MutexGuard<'static, ()>, Workspace, PathBuf)> {
+        let py = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok())?;
+        let trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let d = projeto(nome);
+        let script = d.join("falso.py");
+        std::fs::write(&script, crate::lsp::testes::FALSO).unwrap();
+        std::env::set_var("ASTROGRAPH_LSP_CMD", format!("{py} {}", script.display()));
+        let arq = d.join("a.py");
+        std::fs::write(&arq, texto).unwrap();
+        let mut w = Workspace::new(Some(arq.clone()), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d;
+        // espera o servidor responder (o falso manda um diagnóstico ao abrir)
+        espera_ws(&mut w, |m| !m.diags.is_empty());
+        Some((trava, w, arq))
+    }
+
+    fn espera_ws(w: &mut Workspace, ok: impl Fn(&ViewModel) -> bool) -> ViewModel {
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        loop {
+            let m = w.view_model();
+            if ok(&m) || std::time::Instant::now() > fim {
+                return m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+
+    #[test]
+    fn lsp_renomear_aplica_a_troca_num_passo_de_desfazer() {
+        let Some((_t, mut w, _)) = com_falso("lsp-ren", "x = 1\n") else { return };
+        w.feed(":Rename novo<CR>");
+        let m = espera_ws(&mut w, |m| m.rope.to_string().starts_with("novo"));
+        assert_eq!(m.rope.to_string().trim_end(), "novo = 1");
+        assert!(m.modified);
+        w.feed("u");
+        assert_eq!(w.view_model().rope.to_string().trim_end(), "x = 1", "um desfazer volta o renomear");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn lsp_rn_abre_o_comando_com_a_palavra_sob_o_cursor() {
+        let Some((_t, mut w, _)) = com_falso("lsp-rn", "alvo = 1\n") else { return };
+        w.feed(" rn");
+        assert_eq!(w.view_model().cmd, Some((':', "Rename alvo".to_string())));
+        w.feed("<Esc>");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn lsp_acoes_de_codigo_abrem_lista_e_aplicam_a_escolhida() {
+        let Some((_t, mut w, _)) = com_falso("lsp-ca", "x = 1\n") else { return };
+        w.feed(" ca");
+        let m = espera_ws(&mut w, |m| m.picker.is_some());
+        let p = m.picker.expect("lista de ações");
+        assert_eq!(p.title, "Ações de código");
+        assert_eq!(p.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["Trocar x por y", "Rodar comando"]);
+        // Enter aplica a primeira (a edição troca `x` por `y`)
+        w.feed("<CR>");
+        let m = espera_ws(&mut w, |m| m.rope.to_string().starts_with('y'));
+        assert_eq!(m.rope.to_string().trim_end(), "y = 1");
+        assert!(m.picker.is_none());
+        // a segunda roda um comando: o servidor responde com `applyEdit` (z)
+        w.feed(" ca");
+        espera_ws(&mut w, |m| m.picker.is_some());
+        w.feed("<C-n><CR>");
+        let m = espera_ws(&mut w, |m| m.rope.to_string().starts_with('z'));
+        assert_eq!(m.rope.to_string().trim_end(), "z = 1", "applyEdit do servidor aplicado");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn lsp_formatar_comando_e_ao_salvar() {
+        let Some((_t, mut w, arq)) = com_falso("lsp-fmt", "x = 1\n") else { return };
+        // :Format troca o texto (o falso devolve `x = 2`) sem gravar
+        w.feed(":Format<CR>");
+        let m = espera_ws(&mut w, |m| m.rope.to_string().starts_with("x = 2"));
+        assert_eq!(m.rope.to_string().trim_end(), "x = 2");
+        assert_eq!(std::fs::read_to_string(&arq).unwrap(), "x = 1\n", "ainda não gravou");
+        w.feed("u");
+        // com formatar ao salvar, :w formata e grava só depois da resposta
+        w.formatar_ao_salvar(true);
+        w.feed(":w<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while std::fs::read_to_string(&arq).unwrap() != "x = 2\n" && std::time::Instant::now() < fim {
+            w.view_model();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(std::fs::read_to_string(&arq).unwrap(), "x = 2\n", "formatado e gravado");
+        assert!(!w.view_model().modified);
+        // :wq: grava formatado e sai
+        w.feed("ggix<Esc>:wq<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !w.sair && std::time::Instant::now() < fim {
+            w.view_model();
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert!(w.sair, ":wq sai depois de gravar");
+        // (o falso sempre troca os 5 primeiros caracteres por `x = 2`: "xx = 2" vira "x = 22")
+        assert_eq!(std::fs::read_to_string(&arq).unwrap(), "x = 22\n");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn lsp_assinatura_abre_ao_digitar_parenteses_e_fecha_com_o_fim() {
+        let Some((_t, mut w, _)) = com_falso("lsp-sig", "\n") else { return };
+        w.feed("isoma(1, ");
+        let m = espera_ws(&mut w, |m| m.sig.is_some());
+        let sig = m.sig.expect("assinatura");
+        assert_eq!(sig.texto, "soma(a: int, b: int)");
+        assert_eq!(sig.ativo, Some((13, 19)), "o segundo parâmetro");
+        assert_eq!(sig.doc, "soma dois numeros");
+        w.feed("2)");
+        assert!(w.view_model().sig.is_none(), "fecha ao digitar )");
+        w.feed("soma(");
+        espera_ws(&mut w, |m| m.sig.is_some());
+        w.feed("<Esc>");
+        assert!(w.view_model().sig.is_none(), "fecha ao sair da inserção");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn lsp_referencias_simbolos_e_diagnosticos_viram_listas() {
+        let Some((_t, mut w, arq)) = com_falso("lsp-lst", "x = 1         \ny = 2         \nz = 3         \nw = 4         \nq = 5         \n") else { return };
+        // gr: referências (a primeira no próprio arquivo, a segunda em /tmp/ref dois.py)
+        w.feed("gr");
+        let m = espera_ws(&mut w, |m| m.picker.is_some());
+        let p = m.picker.expect("referências");
+        assert_eq!(p.title, "Referências");
+        assert_eq!(p.items.len(), 2);
+        assert!(p.items[0].text.ends_with("a.py:1"), "{}", p.items[0].text);
+        assert_eq!(p.items[0].detail, "x = 1", "linha do buffer");
+        w.feed("<Esc>");
+        // símbolos: a hierarquia mostra o aninhamento
+        w.feed(" ls");
+        let m = espera_ws(&mut w, |m| m.picker.is_some());
+        let p = m.picker.expect("símbolos");
+        assert_eq!(p.title, "Símbolos");
+        assert_eq!(p.items.len(), 2);
+        assert!(p.items[0].text.contains("Foo") && p.items[1].text.starts_with("  ") && p.items[1].text.contains("bar"), "{:?}", p.items);
+        // Enter vai para a linha do símbolo (a 4ª, coluna 6)
+        w.feed("<CR>");
+        let m = w.view_model();
+        assert_eq!(m.cursor, (3, 6));
+        // lista de diagnósticos e ]d / [d
+        w.feed("gg0");
+        w.feed("]d");
+        assert_eq!(w.view_model().cursor, (0, 1), "próximo diagnóstico");
+        w.feed("[d");
+        assert_eq!(w.view_model().cursor, (0, 1), "dá a volta: só há um");
+        w.feed(" xx");
+        let m = w.view_model();
+        let p = m.picker.expect("diagnósticos");
+        assert_eq!(p.title, "Diagnósticos");
+        assert_eq!((p.items[0].text.as_str(), p.items[0].detail.as_str()), ("1:2 cuidado aqui", "aviso"));
+        w.feed("<Esc>");
+        let _ = arq;
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
     #[test]
     fn janelas_dividir_compartilha_o_buffer_e_foca_pelo_teclado() {
         let d = projeto("jan");
@@ -2913,9 +3128,9 @@ mod testes {
         s.resize(80, 20.0);
         s.feed(" ff<Esc>");
         assert!(modelo(&mut s).picker.is_none());
-        s.feed(" x");
-        // <Espaço> move uma coluna e `x` apaga o `b`: não é atalho, volta ao editor
-        assert_eq!(s.ed.lines()[0], "ac def");
+        s.feed(" hx");
+        // <Espaço> move uma coluna e `h` volta uma: não é atalho, volta ao editor; `x` apaga o `a`
+        assert_eq!(s.ed.lines()[0], "bc def");
     }
 
     #[test]

@@ -143,6 +143,8 @@ pub struct ViewModel {
     pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
+    /// assinatura da função em edição (`(` e `,` no modo de inserção)
+    pub sig: Option<SigView>,
     pub completion: Option<CompView>,
     /// abas abertas (a barra só aparece com duas ou mais) e a ativa
     pub tabs: Vec<TabInfo>,
@@ -154,6 +156,14 @@ pub struct ViewModel {
     pub layout: Option<crate::janelas::Layout>,
     pub pane: crate::janelas::PaneId,
     pub panes: Vec<PaneView>,
+}
+
+/// Assinatura da função: texto, trecho do parâmetro ativo (em caracteres) e a primeira linha da doc.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SigView {
+    pub texto: String,
+    pub ativo: Option<(usize, usize)>,
+    pub doc: String,
 }
 
 /// Um painel que não tem o foco.
@@ -193,6 +203,7 @@ impl ViewModel {
             git: None,
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
+            sig: None,
             completion: None,
             tabs: Vec::new(),
             tab_active: 0,

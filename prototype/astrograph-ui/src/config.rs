@@ -14,6 +14,15 @@ pub struct Config {
     pub keys: KeysCfg,
     pub clock: ClockCfg,
     pub engine: EngineCfg,
+    pub lsp: LspCfg,
+}
+
+/// Servidores de linguagem do motor nativo.
+#[derive(Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct LspCfg {
+    /// pede ao servidor para formatar o arquivo antes de gravar (`:w`)
+    pub format_on_save: bool,
 }
 
 /// Qual motor edita: o Neovim (padrão) ou o motor nativo em Rust.
@@ -114,6 +123,7 @@ impl Default for Config {
             keys: KeysCfg::default(),
             clock: ClockCfg::default(),
             engine: EngineCfg::default(),
+            lsp: LspCfg::default(),
         }
     }
 }
