@@ -21,6 +21,7 @@ mod design;
 mod native;
 mod lsp;
 mod agentes;
+mod atalhos;
 mod janelas;
 mod nscene;
 mod nview;

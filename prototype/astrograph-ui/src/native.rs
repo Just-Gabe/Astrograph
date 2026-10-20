@@ -41,6 +41,8 @@ enum Destino {
     /// trocar o agente / o modo do agente / retomar uma conversa do Claude Code
     Agente(&'static str),
     Modo(&'static str),
+    /// teclas a executar (já com a líder, se for o caso)
+    Atalho(String),
     Sessao { id: String, pasta: PathBuf },
 }
 
@@ -557,6 +559,7 @@ impl Session {
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
+                [Key::Char('f'), Key::Char('k')] => self.atalhos_lista(),
                 _ => {
                     // não é atalho: devolve as teclas ao editor
                     let all = std::mem::take(&mut self.leader);
@@ -1354,6 +1357,20 @@ impl Session {
         self.term.is_some()
     }
 
+    /// `<Líder>fk` / `:Atalhos`: todos os atalhos, pesquisáveis; Enter executa.
+    fn atalhos_lista(&mut self) {
+        let lider = tecla_nome(self.leader_key);
+        let itens = crate::atalhos::ATALHOS
+            .iter()
+            .map(|a| {
+                let mostra = if a.lider { format!("{lider}{}", a.teclas) } else { a.teclas.to_string() };
+                let executa = if a.lider { format!("{}{}", self.leader_key, a.teclas) } else { a.teclas.to_string() };
+                ListaItem { texto: a.desc.to_string(), detalhe: mostra, destino: Destino::Atalho(executa) }
+            })
+            .collect();
+        self.pick_lista("Atalhos", itens);
+    }
+
     /// `<Líder>Ag`: lista os agentes instalados (o atual marcado); escolher vale para o terminal e fica salvo.
     fn agente_escolher(&mut self) {
         let instalados: Vec<&'static crate::agentes::Agente> = crate::agentes::AGENTES.iter().filter(|a| self.agente_instalado(a.bin)).collect();
@@ -1938,6 +1955,7 @@ impl Session {
                     Destino::Acao(a) => self.aplicar_acao(a),
                     Destino::Agente(bin) => self.escolher_agente(bin),
                     Destino::Modo(id) => self.escolher_modo(id),
+                    Destino::Atalho(teclas) => self.feed(&teclas),
                     Destino::Sessao { id, pasta } => self.retomar_sessao(&id, &pasta),
                 }
                 return;
@@ -2261,6 +2279,7 @@ impl Session {
                 self.jan_pedido = Some(PedidoJanela::Dividir { dir, arquivo: (!arg.is_empty()).then(|| PathBuf::from(arg)), vazio });
             }
             "Rename" | "LspRename" => self.lsp_renomear(arg),
+            "Atalhos" | "Keys" => self.atalhos_lista(),
             "Format" | "LspFormat" => {
                 self.lsp_formatar(false, false);
             }
@@ -2468,6 +2487,7 @@ impl Session {
             bump: self.bump,
             dash: self.dash,
             diags: self.lsp_diags.clone(),
+            dica: if self.leader.is_empty() { Vec::new() } else { crate::atalhos::proximos(&self.leader[1..].iter().filter_map(|k| k.as_char()).collect::<String>()) },
             hover: self.hover_text.clone(),
             numero: self.numero,
             relativo: self.relativo,
@@ -3397,6 +3417,30 @@ mod testes {
         let antes = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{antes}", bin.display()));
         (bin, antes)
+    }
+
+    #[test]
+    fn menu_da_lider_e_lista_de_atalhos_executa_o_escolhido() {
+        let mut s = Session::new("abc\n", None);
+        s.resize(80, 20.0);
+        assert!(modelo(&mut s).dica.is_empty());
+        s.feed(" ");
+        assert!(modelo(&mut s).dica.iter().any(|(t, d)| t == "f" && d == "+Buscar"));
+        s.feed("f");
+        assert!(modelo(&mut s).dica.iter().any(|(t, d)| t == "k" && d.contains("atalhos")));
+        s.feed("<Esc>");
+        assert!(modelo(&mut s).dica.is_empty());
+        // <Líder>fk: lista pesquisável; Enter executa (aqui, abre o buscador de arquivos)
+        s.feed(" fk");
+        let p = modelo(&mut s).picker.expect("lista de atalhos");
+        assert_eq!(p.title, "Atalhos");
+        assert!(p.items.iter().any(|i| i.text == "Buscar arquivo" && i.detail == "<Espaço>ff"));
+        s.feed("Buscar arquivo<CR>");
+        assert!(modelo(&mut s).picker.is_some_and(|p| p.title == "Buscar arquivo"));
+        s.feed("<Esc>");
+        // :Atalhos faz o mesmo
+        s.feed(":Atalhos<CR>");
+        assert!(modelo(&mut s).picker.is_some_and(|p| p.title == "Atalhos"));
     }
 
     #[cfg(unix)]

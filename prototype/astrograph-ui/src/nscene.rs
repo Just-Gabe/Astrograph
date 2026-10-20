@@ -1006,6 +1006,7 @@ impl Scene {
             self.paint_hover(c, _vm, lay, (w, h, s));
             self.paint_sig(c, _vm, lay, (w, h, s));
         }
+        self.paint_dica(c, _vm, (w, h, s));
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
@@ -1245,6 +1246,44 @@ impl Scene {
                 }
                 c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::TEXT_STRONG } else { d::TEXT }, 1.0);
                 pen += a;
+            }
+        }
+    }
+
+    /// Menu da líder: enquanto você digita `<Espaço>...`, um cartão embaixo lista as próximas teclas.
+    fn paint_dica(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        if vm.dica.is_empty() {
+            return;
+        }
+        let px = self.font_px * 0.92;
+        let linha = px * 1.55;
+        let por_coluna = 8usize;
+        let colunas: Vec<&[(String, String)]> = vm.dica.chunks(por_coluna).collect();
+        let larg_col = vm.dica.iter().map(|(_, d)| d.chars().take(40).map(|ch| self.ui.advance(ch, px)).sum::<f32>()).fold(0.0, f32::max) + 48.0 * s;
+        let cw = (larg_col * colunas.len() as f32 + 28.0 * s).min(w - 32.0 * s);
+        let ch_h = por_coluna.min(vm.dica.len()) as f32 * linha + 24.0 * s;
+        let x = (w - cw) / 2.0;
+        let y = h - d::M.bottom * s - ch_h - 18.0 * s;
+        c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch_h, 12.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch_h, 12.0 * s, 1.0, d::WHITE, 0.10);
+        for (ci, col) in colunas.iter().enumerate() {
+            for (i, (tecla, desc)) in col.iter().enumerate() {
+                let base = y + 12.0 * s + linha * (i as f32 + 0.8);
+                let x0 = x + 14.0 * s + larg_col * ci as f32;
+                let mut pen = x0;
+                for ch in tecla.chars() {
+                    let a = self.ui.advance(ch, px);
+                    c.glyph_at(&mut self.ui, px, pen, base, ch, d::TEXT_STRONG, 1.0);
+                    pen += a;
+                }
+                pen = x0 + 22.0 * s;
+                let cor = if desc.starts_with('+') { d::TEXT_STRONG } else { d::TEXT };
+                for ch in desc.chars().take(40) {
+                    let a = self.ui.advance(ch, px);
+                    c.glyph_at(&mut self.ui, px, pen, base, ch, cor, 1.0);
+                    pen += a;
+                }
             }
         }
     }
@@ -2045,6 +2084,24 @@ mod testes {
                 }
             }
         }
+    }
+
+    #[test]
+    fn menu_da_lider_desenha_o_cartao_embaixo() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("abc\n", None);
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        let sem = quadro(&mut sc, &vm, 800, 600, t0);
+        s.feed(" ");
+        let vm = s.view_model();
+        assert!(!vm.dica.is_empty());
+        let com = quadro(&mut sc, &vm, 800, 600, t0);
+        let metade = 800 * 300;
+        let mudou = sem[metade..].iter().zip(&com[metade..]).filter(|(a, b)| a != b).count();
+        assert!(mudou > 2000, "o cartão do menu aparece na metade de baixo ({mudou})");
     }
 
     #[test]
