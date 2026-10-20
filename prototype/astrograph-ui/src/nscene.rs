@@ -77,6 +77,9 @@ pub struct Scene {
     toast_cache: Option<(String, ToastKind)>,
     toast_id: u64,
     toast_at: Instant,
+    flash_id: u64,
+    flash_at: Option<Instant>,
+    flash_range: Option<((usize, usize), (usize, usize))>,
     mode: ModeKind,
     mode_from: u32,
     mode_to: u32,
@@ -126,6 +129,9 @@ impl Scene {
             toast_cache: None,
             toast_id: 0,
             toast_at: now,
+            flash_id: 0,
+            flash_at: None,
+            flash_range: None,
             mode: ModeKind::Normal,
             mode_from: d::ACCENT,
             mode_to: d::ACCENT,
@@ -279,6 +285,16 @@ impl Scene {
                 self.toast_at = now;
             }
         }
+        // clarão de cópia: só para cópias novas (o primeiro quadro adota o contador sem piscar)
+        if let Some((a, b, id)) = vm.flash {
+            if id != self.flash_id {
+                if !self.first {
+                    self.flash_range = Some((a, b));
+                    self.flash_at = Some(now);
+                }
+                self.flash_id = id;
+            }
+        }
         // pílula: largura-alvo
         let label_w = self.ui_semi.measure(&self.mode_label, 12.5 * s);
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
@@ -349,7 +365,8 @@ impl Scene {
             let d = Duration::from_millis(920u64.saturating_sub(now.saturating_duration_since(self.scrolled_at).as_millis() as u64).max(10));
             wake = Some(wake.map_or(d, |w| w.min(d)));
         }
-        Frame { animating: springs || chases || mode_anim, wake }
+        let flash = self.flash_at.is_some();
+        Frame { animating: springs || chases || mode_anim || flash, wake }
     }
 
     // ------------------------------------------------------------------
@@ -373,6 +390,19 @@ impl Scene {
         if self.sel.v > 0.01 {
             if let Some((kind, lo, hi)) = self.last_sel {
                 self.paint_selection(c, vm, lay, kind, lo, hi, top_px, self.sel.v);
+            }
+        }
+
+        // clarão de cópia: o trecho acende e some em ~350 ms
+        if let (Some(t0), Some((a, b))) = (self.flash_at, self.flash_range) {
+            let k = now.saturating_duration_since(t0).as_secs_f32() / 0.35;
+            if k < 1.0 {
+                let alpha = 0.55 * (1.0 - crate::anim::ease_out_cubic(k));
+                let kind = if a.1 == 0 && b.0 > a.0 && b.1 >= vm.line(b.0).chars().count() { VKind::Line } else { VKind::Char };
+                let hi = if kind == VKind::Char && b.1 > 0 { (b.0, b.1 - 1) } else { b };
+                self.paint_flash(c, vm, lay, kind, a, hi, top_px, alpha);
+            } else {
+                self.flash_at = None;
             }
         }
 
@@ -440,6 +470,27 @@ impl Scene {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn paint_flash(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, kind: VKind, lo: (usize, usize), hi: (usize, usize), top_px: f32, alpha: f32) {
+        let s = self.scale;
+        for row in lo.0..=hi.0.min(vm.lines.saturating_sub(1)) {
+            let y = lay.text_y + row as f32 * lay.line_h - top_px;
+            let line = vm.line(row);
+            let len = line.chars().count();
+            let (a, b) = match kind {
+                VKind::Line => (0, vcol_start(&line, len) + 1),
+                VKind::Char => {
+                    let a = if row == lo.0 { vcol_start(&line, lo.1.min(len)) } else { 0 };
+                    let b = if row == hi.0 { vcol_cursor(&line, hi.1.min(len.saturating_sub(1))) + 1 } else { vcol_start(&line, len) + 1 };
+                    (a, b)
+                }
+            };
+            let (a, b) = (a.saturating_sub(vm.left), b.saturating_sub(vm.left));
+            let x = lay.text_x + a as f32 * lay.char_w;
+            let wpx = (b.saturating_sub(a) as f32 * lay.char_w).max(lay.char_w * 0.6);
+            c.rrect(x - 1.0 * s, y + 1.0, wpx + 2.0 * s, lay.line_h - 2.0, 4.0 * s, d::ORANGE, alpha);
+        }
+    }
+
     fn paint_selection(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, kind: VKind, lo: (usize, usize), hi: (usize, usize), top_px: f32, alpha: f32) {
         let s = self.scale;
         for row in lo.0..=hi.0.min(vm.lines.saturating_sub(1)) {
@@ -714,6 +765,28 @@ mod testes {
         let vm = s.view_model();
         let (row, vcol) = sc.hit_test(lay.text_x + lay.char_w * 1.5, lay.text_y + lay.line_h * 1.5, 640, 400, &vm);
         assert_eq!((row, vcol), (1, 1));
+    }
+
+    #[test]
+    fn copiar_acende_o_trecho_e_apaga() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("alpha beta\ngamma\n", None);
+        let lay = sc.layout(640, 400, 2);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        let antes = quadro(&mut sc, &vm, 640, 400, t0);
+        s.feed("yw");
+        let vm = s.view_model();
+        assert!(vm.flash.is_some());
+        let a = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16));
+        let dif = |x: &[u32], y: &[u32]| x.iter().zip(y).filter(|(p, q)| p != q).count();
+        assert!(dif(&antes, &a) > 50, "o trecho copiado acende");
+        let mut fim = a.clone();
+        for i in 2..40 {
+            fim = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(dif(&a, &fim) > 50 && sc.flash_at.is_none(), "e apaga sozinho");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

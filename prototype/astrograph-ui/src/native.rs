@@ -320,7 +320,10 @@ impl Session {
             cmd,
             toast: self.toast.clone(),
             showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
-            flash: None,
+            flash: (self.ed.last_yank.0 > 0).then(|| {
+                let (id, a, b, _) = self.ed.last_yank;
+                ((a.row, a.col), (b.row, b.col), id)
+            }),
         }
     }
 }
