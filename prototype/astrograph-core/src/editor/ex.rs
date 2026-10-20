@@ -1,0 +1,522 @@
+//! Comandos `:` do núcleo: endereços de linha, `:s` (substituir), `:d`, `:y`, `:j`,
+//! `:>`, `:<`, `:g`/`:v` e `:normal`. O que não é daqui (`:w`, `:q`, `:e`...) volta
+//! para quem hospeda o editor (`take_host_cmd`).
+
+use super::*;
+
+/// Endereços de uma linha de comando: `(inicial, final)` (base 0) e se algum foi dado.
+struct Faixa {
+    a: usize,
+    b: usize,
+    dado: bool,
+}
+
+impl Editor {
+    pub fn cmdline(&self) -> Option<&str> {
+        self.cmdline.as_deref()
+    }
+
+    /// Comando que o editor não entende (`w`, `q`, `e`...): quem hospeda executa.
+    pub fn take_host_cmd(&mut self) -> Option<String> {
+        self.host_cmd.take()
+    }
+
+    /// Digitação na linha de comando. `true` se a tecla foi consumida.
+    pub(super) fn cmdline_key(&mut self, k: Key) -> bool {
+        let Some(cl) = self.cmdline.as_mut() else { return false };
+        match k {
+            Key::Esc | Key::Ctrl('c') => self.cmdline = None,
+            Key::Enter => {
+                let linha = self.cmdline.take().unwrap_or_default();
+                self.run_cmdline(&linha);
+            }
+            Key::Backspace => {
+                if cl.pop().is_none() {
+                    self.cmdline = None;
+                }
+            }
+            Key::Char(c) => cl.push(c),
+            Key::Tab => cl.push('\t'),
+            _ => {}
+        }
+        true
+    }
+
+    /// `:` no modo normal ou visual abre a linha de comando.
+    pub(super) fn cmdline_open(&mut self) {
+        if self.mode == Mode::Visual {
+            if let Some(vs) = self.vis {
+                self.vmarks = Some((vs.anchor, self.cursor, vs.kind));
+            }
+            self.visual_exit();
+            self.cmdline = Some("'<,'>".into());
+        } else {
+            self.cmdline = Some(String::new());
+        }
+    }
+
+    /// Lê um endereço (`12`, `.`, `$`, `'a`, `+3`...) a partir de `i`.
+    fn endereco(&self, s: &[char], i: &mut usize) -> Option<Option<usize>> {
+        let n = self.buf.line_count();
+        let mut base: Option<i64> = None;
+        match s.get(*i) {
+            Some(c) if c.is_ascii_digit() => {
+                let mut v = 0i64;
+                while let Some(d) = s.get(*i).and_then(|c| c.to_digit(10)) {
+                    v = v * 10 + d as i64;
+                    *i += 1;
+                }
+                base = Some(v - 1);
+            }
+            Some('.') => {
+                *i += 1;
+                base = Some(self.cursor.row as i64);
+            }
+            Some('$') => {
+                *i += 1;
+                base = Some(n as i64 - 1);
+            }
+            Some('\'') => {
+                let m = *s.get(*i + 1)?;
+                *i += 2;
+                match self.mark_pos(m) {
+                    Some(p) => base = Some(p.row as i64),
+                    None => return None,
+                }
+            }
+            _ => {}
+        }
+        let mut deslocou = false;
+        while let Some(&c) = s.get(*i) {
+            if c != '+' && c != '-' {
+                break;
+            }
+            *i += 1;
+            let mut v = 0i64;
+            let mut tem = false;
+            while let Some(d) = s.get(*i).and_then(|c| c.to_digit(10)) {
+                v = v * 10 + d as i64;
+                *i += 1;
+                tem = true;
+            }
+            let v = if tem { v } else { 1 };
+            let b = base.unwrap_or(self.cursor.row as i64);
+            base = Some(if c == '+' { b + v } else { b - v });
+            deslocou = true;
+        }
+        let _ = deslocou;
+        // fora do arquivo: E16 Invalid range (o endereço `0` vale a primeira linha)
+        match base {
+            Some(b) if b >= 0 && (b as usize) < n => Some(Some(b as usize)),
+            Some(-1) if s.get(0).is_some() && !deslocou => Some(Some(0)),
+            Some(_) => None,
+            None => Some(None),
+        }
+    }
+
+    /// Faixa de linhas no começo do comando; devolve também onde o nome do comando começa.
+    fn faixa(&self, s: &[char]) -> Option<(Faixa, usize)> {
+        let mut i = 0;
+        while s.get(i) == Some(&' ') || s.get(i) == Some(&':') {
+            i += 1;
+        }
+        let n = self.buf.line_count();
+        if s.get(i) == Some(&'%') {
+            return Some((Faixa { a: 0, b: n - 1, dado: true }, i + 1));
+        }
+        let mut dados: Vec<usize> = Vec::new();
+        loop {
+            match self.endereco(s, &mut i)? {
+                Some(v) => dados.push(v),
+                None => {
+                    // `,` sem endereço antes: usa a linha atual
+                    if s.get(i) == Some(&',') {
+                        dados.push(self.cursor.row);
+                    }
+                }
+            }
+            if s.get(i) == Some(&',') || s.get(i) == Some(&';') {
+                i += 1;
+                if s.get(i).is_none_or(|c| c.is_alphabetic()) && dados.len() == 1 {
+                    dados.push(self.cursor.row);
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        let dado = !dados.is_empty();
+        let (a, b) = match dados.len() {
+            0 => (self.cursor.row, self.cursor.row),
+            1 => (dados[0], dados[0]),
+            _ => (dados[dados.len() - 2], dados[dados.len() - 1]),
+        };
+        // faixa invertida: o Vim pergunta; aqui troca
+        let (a, b) = if a > b { (b, a) } else { (a, b) };
+        Some((Faixa { a, b, dado }, i))
+    }
+
+    fn run_cmdline(&mut self, linha: &str) {
+        let s: Vec<char> = linha.chars().collect();
+        let Some((faixa, mut i)) = self.faixa(&s) else {
+            self.failed = true;
+            return;
+        };
+        while s.get(i) == Some(&' ') {
+            i += 1;
+        }
+        let nome_ini = i;
+        while s.get(i).is_some_and(|c| c.is_ascii_alphabetic()) {
+            i += 1;
+        }
+        let mut nome: String = s[nome_ini..i].iter().collect();
+        // `s/x/y/`, `g/x/d`, `>`, `<`: o nome é uma letra seguida do delimitador
+        if nome.is_empty() {
+            if let Some(&c) = s.get(i) {
+                if c == '>' || c == '<' {
+                    nome = c.to_string();
+                    i += 1;
+                }
+            }
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype") {
+            // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
+            let primeiro = nome.chars().next().unwrap();
+            if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {
+                // `sub`, `substitute`, `global`, `vglobal`: nomes completos
+                if !matches!(nome.as_str(), "sub" | "substitute" | "global" | "vglobal") {
+                    i = nome_ini + 1;
+                    nome = primeiro.to_string();
+                }
+            }
+        }
+        let resto: String = s[i.min(s.len())..].iter().collect();
+        let resto_t = resto.trim_start().to_string();
+        match nome.as_str() {
+            "" => {
+                // só endereço: vai para a linha
+                if faixa.dado {
+                    // 'nostartofline': o cursor mantém a coluna desejada
+                    self.cursor = Pos::new(faixa.b, self.col_for_want(faixa.b));
+                    self.fix_cursor();
+                }
+            }
+            "s" | "sub" | "substitute" => {
+                self.substituir(faixa.a, faixa.b, &resto);
+            }
+            "d" | "delete" => self.ex_apagar(faixa.a, faixa.b),
+            "y" | "yank" => {
+                let texto = (faixa.a..=faixa.b).map(|r| self.buf.line(r)).collect::<Vec<_>>().join("\n");
+                self.store(None, texto, true, false);
+            }
+            "j" | "join" => {
+                let b = if faixa.a == faixa.b { (faixa.b + 1).min(self.last_row()) } else { faixa.b };
+                if b > faixa.a {
+                    self.cursor = Pos::new(faixa.a, 0);
+                    self.join(b - faixa.a + 1);
+                    let r = self.cursor.row;
+                    self.cursor = Pos::new(r, self.buf.first_nonblank(r));
+                    self.fix_cursor();
+                    self.curswant = self.want_here();
+                }
+            }
+            ">" | "<" => {
+                let n = 1 + resto.chars().take_while(|c| *c == nome.chars().next().unwrap()).count();
+                self.checkpoint();
+                for r in faixa.a..=faixa.b {
+                    for _ in 0..n {
+                        self.shift_line(r, nome == ">");
+                    }
+                }
+ self.cursor = Pos::new(faixa.b, self.buf.first_nonblank(faixa.b));
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            "normal" | "norm" => {
+                let teclas = resto.strip_prefix(' ').unwrap_or(&resto).to_string();
+                self.ex_normal(faixa.a, faixa.b, &teclas, faixa.dado);
+            }
+            "g" | "global" | "v" | "vglobal" => {
+                let inverso = nome.starts_with('v') || resto.starts_with('!');
+                let r = resto.strip_prefix('!').unwrap_or(&resto).to_string();
+                let (a, b) = if faixa.dado { (faixa.a, faixa.b) } else { (0, self.last_row()) };
+                self.global(a, b, &r, inverso);
+            }
+            _ => self.host_cmd = Some(linha.to_string()),
+        }
+        let _ = resto_t;
+    }
+
+    fn ex_apagar(&mut self, a: usize, b: usize) {
+        let (ca, cb) = (Pos::new(a, 0), Pos::new(b, 0));
+        self.cursor = ca;
+        self.apply_operator('d', ca, cb, Kind::Line, None);
+        let r = self.cursor.row.min(self.last_row());
+        self.cursor = Pos::new(r, self.buf.first_nonblank(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    fn ex_normal(&mut self, a: usize, b: usize, teclas: &str, com_faixa: bool) {
+        let n0 = self.buf.line_count();
+        let u0 = self.undo.len();
+        let mut row = a;
+        let mut fim = b;
+        loop {
+            if row > fim.min(self.last_row()) {
+                break;
+            }
+            if com_faixa || row != a {
+                self.cursor = Pos::new(row, 0);
+                self.fix_cursor();
+            }
+            let antes = self.buf.line_count();
+            let em_macro = std::mem::replace(&mut self.in_macro, true);
+            self.feed_str(teclas);
+            // um comando que ficou pela metade ou em inserção é encerrado (como o :normal do Vim)
+            if self.mode != Mode::Normal || !self.pending.is_empty() {
+                self.key_raw(Key::Esc);
+                self.pending.clear();
+            }
+            self.in_macro = em_macro;
+            let depois = self.buf.line_count() as i64 - antes as i64;
+            fim = (fim as i64 + depois).max(0) as usize;
+            row += 1;
+        }
+        let _ = n0;
+        // o :normal inteiro é um passo só no desfazer
+        if self.undo.len() > u0 + 1 {
+            self.undo.truncate(u0 + 1);
+        }
+    }
+
+    /// `:g/padrão/comando` e `:v/padrão/comando`.
+    fn global(&mut self, a: usize, b: usize, resto: &str, inverso: bool) {
+        let chars: Vec<char> = resto.chars().collect();
+        let Some(&delim) = chars.first() else {
+            self.failed = true;
+            return;
+        };
+        let (pat, fim) = partir(&chars, 1, delim);
+        let cmd: String = chars[fim.min(chars.len())..].iter().collect();
+        let cmd = if cmd.trim().is_empty() { "p".to_string() } else { cmd };
+        let pat = if pat.is_empty() { self.last_search.as_ref().map(|(p, _)| p.clone()).unwrap_or_default() } else { pat };
+        let Some(re) = search::compile(&pat) else {
+            self.failed = true;
+            return;
+        };
+        self.last_search = Some((pat, self.last_search.as_ref().map_or(true, |(_, f)| *f)));
+        let mut marcadas: Vec<usize> = (a..=b.min(self.last_row())).filter(|&r| re.is_match(&self.buf.line(r)) != inverso).collect();
+        if marcadas.is_empty() {
+            self.failed = true;
+            return;
+        }
+        self.checkpoint();
+        let u0 = self.undo.len();
+        let mut k = 0;
+        while k < marcadas.len() {
+            let r = marcadas[k];
+            if r > self.last_row() {
+                break;
+            }
+            let antes = self.buf.line_count() as i64;
+            self.cursor = Pos::new(r, 0);
+            self.fix_cursor();
+            let sem_registro_de_undo = self.undo.len();
+            let c = cmd.clone();
+            if c.trim() == "p" || c.trim() == "print" {
+                // só posiciona o cursor
+            } else {
+                self.run_cmdline(&format!(":{}", c.trim_start()));
+            }
+            let _ = sem_registro_de_undo;
+            let delta = self.buf.line_count() as i64 - antes;
+            if delta != 0 {
+                for m in marcadas.iter_mut().skip(k + 1) {
+                    *m = (*m as i64 + delta).max(0) as usize;
+                }
+            }
+            k += 1;
+        }
+        // o comando inteiro é um passo só no desfazer
+        self.undo.truncate(u0.max(1));
+        let _ = &mut marcadas;
+    }
+
+    /// `:[faixa]s/padrão/substituição/flags`.
+    fn substituir(&mut self, a: usize, b: usize, resto: &str) {
+        let chars: Vec<char> = resto.chars().collect();
+        let Some(&delim) = chars.first() else {
+            self.failed = true;
+            return;
+        };
+        if delim.is_alphanumeric() || delim == ' ' || delim == '\\' || delim == '"' || delim == '|' {
+            self.failed = true;
+            return;
+        }
+        let (pat, i1) = partir(&chars, 1, delim);
+        let (rep, i2) = partir(&chars, i1, delim);
+        let flags: String = chars[i2.min(chars.len())..].iter().collect();
+        let (mut global, mut ic, mut cs, mut quieto) = (false, false, false, false);
+        for f in flags.trim().chars() {
+            match f {
+                'g' => global = true,
+                'i' => ic = true,
+                'I' => cs = true,
+                'e' => quieto = true,
+                'c' | 'n' | 'p' | '#' | 'l' | '&' | 'r' | ' ' => {}
+                _ => {
+                    self.failed = true;
+                    return;
+                }
+            }
+        }
+        let pat = if pat.is_empty() { self.last_search.as_ref().map(|(p, _)| p.clone()).unwrap_or_default() } else { pat };
+        if pat.is_empty() {
+            self.failed = true;
+            return;
+        }
+        let (padrao, ic_vim) = search::vim_to_regex(&pat);
+        let prefixo = if (ic || ic_vim) && !cs { "(?i)" } else { "" };
+        let Ok(re) = regex::Regex::new(&format!("{prefixo}{padrao}")) else {
+            self.failed = true;
+            return;
+        };
+        self.last_search = Some((pat, self.last_search.as_ref().map_or(true, |(_, f)| *f)));
+        let a = a.min(self.last_row());
+        let b = b.min(self.last_row());
+        let mut row = a;
+        let mut fim = b;
+        let mut ultimo: Option<usize> = None;
+        let mut mudou = false;
+        while row <= fim {
+            let linha = self.buf.line(row);
+            let mut novo = String::new();
+            let mut pos = 0usize;
+            let mut achou = false;
+            for caps in re.captures_iter(&linha) {
+                let m = caps.get(0).unwrap();
+                achou = true;
+                novo.push_str(&linha[pos..m.start()]);
+                novo.push_str(&expandir(&rep, &caps));
+                pos = m.end();
+                if !global {
+                    break;
+                }
+            }
+            if !achou {
+                row += 1;
+                continue;
+            }
+            novo.push_str(&linha[pos..]);
+            if !mudou {
+                self.checkpoint();
+                mudou = true;
+            }
+            let linhas: Vec<&str> = novo.split('\n').collect();
+            let len = self.buf.line_len(row);
+            self.buf.delete(Pos::new(row, 0), Pos::new(row, len));
+            self.buf.insert(Pos::new(row, 0), linhas[0]);
+            for (k, l) in linhas.iter().enumerate().skip(1) {
+                self.buf.insert_line(row + k, l);
+            }
+            let extra = linhas.len() - 1;
+            fim += extra;
+            ultimo = Some(row + extra);
+            row += extra + 1;
+        }
+        match ultimo {
+            Some(r) => {
+                self.cursor = Pos::new(r, self.buf.first_nonblank(r));
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            None => {
+                if !quieto {
+                    self.failed = true;
+                }
+            }
+        }
+    }
+}
+
+/// Parte `texto` no próximo delimitador sem barra; `\<delim>` vira o próprio delimitador.
+fn partir(c: &[char], inicio: usize, delim: char) -> (String, usize) {
+    let mut out = String::new();
+    let mut i = inicio;
+    while i < c.len() {
+        if c[i] == '\\' && i + 1 < c.len() {
+            if c[i + 1] == delim && delim != '\\' {
+                out.push(delim);
+            } else {
+                out.push('\\');
+                out.push(c[i + 1]);
+            }
+            i += 2;
+            continue;
+        }
+        if c[i] == delim {
+            return (out, i + 1);
+        }
+        out.push(c[i]);
+        i += 1;
+    }
+    (out, i)
+}
+
+/// Texto da substituição: `&`, `\0`..`\9`, `\n`, `\r`, `\t`, `\u \U \l \L \e \E`.
+fn expandir(rep: &str, caps: &regex::Captures) -> String {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Caixa {
+        Nada,
+        Alta,
+        Baixa,
+    }
+    let (mut fixo, mut uma) = (Caixa::Nada, Caixa::Nada);
+    let mut out = String::new();
+    let mut poe = |s: &str, fixo: Caixa, uma: &mut Caixa, out: &mut String| {
+        for ch in s.chars() {
+            let m = if *uma != Caixa::Nada { *uma } else { fixo };
+            *uma = Caixa::Nada;
+            match m {
+                Caixa::Alta => out.extend(ch.to_uppercase()),
+                Caixa::Baixa => out.extend(ch.to_lowercase()),
+                Caixa::Nada => out.push(ch),
+            }
+        }
+    };
+    let c: Vec<char> = rep.chars().collect();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '&' => {
+                let t = caps.get(0).map_or("", |m| m.as_str());
+                poe(t, fixo, &mut uma, &mut out);
+            }
+            '\\' if i + 1 < c.len() => {
+                i += 1;
+                match c[i] {
+                    d @ '0'..='9' => {
+                        let t = caps.get(d.to_digit(10).unwrap() as usize).map_or("", |m| m.as_str());
+                        poe(t, fixo, &mut uma, &mut out);
+                    }
+                    'n' => out.push('\0'),
+                    'r' => out.push('\n'),
+                    't' => out.push('\t'),
+                    'u' => uma = Caixa::Alta,
+                    'l' => uma = Caixa::Baixa,
+                    'U' => fixo = Caixa::Alta,
+                    'L' => fixo = Caixa::Baixa,
+                    'e' | 'E' => {
+                        fixo = Caixa::Nada;
+                        uma = Caixa::Nada;
+                    }
+                    '&' => poe("&", fixo, &mut uma, &mut out),
+                    outro => poe(&outro.to_string(), fixo, &mut uma, &mut out),
+                }
+            }
+            outro => poe(&outro.to_string(), fixo, &mut uma, &mut out),
+        }
+        i += 1;
+    }
+    out
+}

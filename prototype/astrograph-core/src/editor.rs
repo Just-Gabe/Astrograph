@@ -11,6 +11,8 @@ use crate::motion;
 use crate::search;
 use crate::textobj;
 
+mod ex;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -181,6 +183,10 @@ pub struct Editor {
     marks_back: Option<HashMap<char, Pos>>,
     /// onde o último `p` terminou: (por linhas?, posição logo depois do texto) — para `gp`
     put_end: Option<(bool, Pos)>,
+    /// linha de comando (`:`) em edição
+    cmdline: Option<String>,
+    /// comando `:` que o editor não conhece (para quem hospeda)
+    host_cmd: Option<String>,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -223,6 +229,8 @@ impl Editor {
             vmarks: None,
             marks_back: None,
             put_end: None,
+            cmdline: None,
+            host_cmd: None,
         }
     }
 
@@ -315,7 +323,7 @@ impl Editor {
 
     /// Entrada digitada: aqui o `q` liga/desliga a gravação e as teclas são gravadas.
     fn feed_one(&mut self, k: Key) {
-        if self.mode == Mode::Normal && self.pending.is_empty() {
+        if self.mode == Mode::Normal && self.pending.is_empty() && self.cmdline.is_none() {
             if self.q_wait {
                 self.q_wait = false;
                 match k {
@@ -476,6 +484,13 @@ impl Editor {
     }
 
     fn key_raw(&mut self, k: Key) {
+        if self.cmdline_key(k) {
+            return;
+        }
+        if k == Key::Char(':') && self.pending.is_empty() && self.mode != Mode::Insert {
+            self.cmdline_open();
+            return;
+        }
         match self.mode {
             Mode::Insert => self.insert_key(k),
             Mode::Visual => {

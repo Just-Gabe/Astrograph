@@ -101,8 +101,20 @@ fn vocabulario_vp() -> Vec<&'static str> {
     ]
 }
 
+fn vocabulario_ex() -> Vec<&'static str> {
+    vec![
+        ":s/o/0/<CR>", ":s/o/0/g<CR>", ":%s/e/E/g<CR>", ":%s/\\<t/T/<CR>", ":2,3s/a/b/<CR>", ":%s/\\(o\\)\\(n\\)/\\2\\1/<CR>", ":%s/o/&&/g<CR>", ":%s/x//<CR>", ":%s/\\s\\+$//e<CR>",
+        ":s/\\w\\+/\\u&/<CR>", ":%s/a/\\U&/g<CR>", ":s/ /\\r/g<CR>", ":%s/e/-/gi<CR>", ":s#o#0#<CR>", ":s/\\//x/<CR>", ":.,+1s/o/O/g<CR>", ":'a,$s/e/3/<CR>", ":%s/\\v(\\w)(\\w)/\\2\\1/g<CR>",
+        ":d<CR>", ":2d<CR>", ":1,2d<CR>", ":%d<CR>", ":$d<CR>", ":.,$d<CR>", ":2,3y<CR>", ":y<CR>", ":j<CR>", ":1,3j<CR>", ":><CR>", ":2,3><CR>", ":2,3<<CR>", ":>><CR>",
+        ":g/o/d<CR>", ":v/o/d<CR>", ":g/e/s/e/E/<CR>", ":g/a/normal Ax<CR>", ":g!/o/d<CR>", ":2,4g/e/d<CR>", ":g/o/normal dd<CR>", ":%normal Ax<CR>", ":2,3normal I-<CR>", ":normal 2dw<CR>",
+        ":2<CR>", ":$<CR>", ":1<CR>", ":.+1<CR>", ":'a<CR>",
+        "ma", "mb", "jma", "G", "gg", "j", "w", "$", "0", "p", "P", "u", ".", "yy", "dd", "x", "<C-r>", "3j", "wma",
+    ]
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
     match nome {
+        "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),
         "vp" => return vocabulario_vp(),

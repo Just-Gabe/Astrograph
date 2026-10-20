@@ -51,7 +51,6 @@ pub struct Session {
     rows: f32,
     lang: Option<&'static Lang>,
     doc: Option<(Document, u64)>,
-    cmdline: Option<String>,
     toast: Option<(u64, String, ToastKind)>,
     toast_id: u64,
     seq: u64,
@@ -108,7 +107,6 @@ impl Session {
             rows: 24.0,
             lang,
             doc: None,
-            cmdline: None,
             dash: false,
             picker: None,
             tree: None,
@@ -241,7 +239,7 @@ impl Session {
             }
             return;
         }
-        if self.cmdline.is_some() || self.ed.has_pending() {
+        if self.ed.cmdline().is_some() || self.ed.has_pending() {
             return;
         }
         let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
@@ -280,7 +278,7 @@ impl Session {
             self.pick_key(k);
             return;
         }
-        let livre = self.cmdline.is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
+        let livre = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
         // <Espaço> é o líder: `ff` arquivos, `fw` texto, `fo` recentes
         if livre && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
@@ -324,7 +322,7 @@ impl Session {
             self.tree_key(k);
             return;
         }
-        let livre = self.cmdline.is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
+        let livre = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
         if self.dash && livre {
             match k {
                 Key::Char('n') => {
@@ -759,7 +757,7 @@ impl Session {
     fn key_inner(&mut self, k: Key) {
         // qualquer tecla fecha o hover aberto
         self.hover_text = None;
-        let livre = self.cmdline.is_none() && self.ed.mode() == Mode::Normal;
+        let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
         }
@@ -767,32 +765,11 @@ impl Session {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_definition();
         }
-        if let Some(cmd) = self.cmdline.as_mut() {
-            match k {
-                Key::Esc | Key::Ctrl('c') => self.cmdline = None,
-                Key::Enter => {
-                    let c = self.cmdline.take().unwrap_or_default();
-                    self.exec_ex(&c);
-                }
-                Key::Backspace => {
-                    if cmd.pop().is_none() {
-                        self.cmdline = None;
-                    }
-                }
-                Key::Char(c) => cmd.push(c),
-                Key::Tab => cmd.push('\t'),
-                _ => {}
-            }
-            return;
-        }
-        if k == Key::Char(':') && !self.ed.has_pending() && self.ed.mode() != Mode::Insert {
-            if self.ed.mode() == Mode::Visual {
-                self.ed.feed(&[Key::Esc]);
-            }
-            self.cmdline = Some(String::new());
-            return;
-        }
         self.ed.feed(&[k]);
+        // `:s`, `:d`, `:g`... o núcleo resolve; `:w`, `:q`, `:e`... voltam para cá
+        if let Some(linha) = self.ed.take_host_cmd() {
+            self.exec_ex(&linha);
+        }
         if self.ed.beeped() && self.ed.mode() == Mode::Normal {
             // o Vim apita; aqui só ignoramos (sem aviso na tela)
         }
@@ -835,7 +812,8 @@ impl Session {
     // ------------------------------------------------------------------
 
     fn exec_ex(&mut self, line: &str) {
-        let line = line.trim();
+        // o núcleo já aplicou a faixa (`1,3`, `%`, `'<,'>`): aqui só interessa o nome do comando
+        let line = line.trim().trim_start_matches(|c: char| c.is_ascii_digit() || ",.$%'<>+-; :".contains(c)).trim();
         let (name, arg) = match line.split_once(char::is_whitespace) {
             Some((n, a)) => (n, a.trim()),
             None => (line, ""),
@@ -998,7 +976,7 @@ impl Session {
         let signs = self.git_signs();
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
-        } else if self.cmdline.is_some() {
+        } else if self.ed.cmdline().is_some() {
             ModeKind::Command
         } else if search.is_some() {
             ModeKind::Search
@@ -1013,9 +991,9 @@ impl Session {
             }
         };
         let cmd = self
-            .cmdline
-            .as_ref()
-            .map(|c| (':', c.clone()))
+            .ed
+            .cmdline()
+            .map(|c| (':', c.to_string()))
             .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
         ViewModel {
             seq: self.seq,
@@ -1385,6 +1363,28 @@ mod testes {
         }
         assert_eq!(modelo(&mut s).name, "alvo x.rs");
         std::env::remove_var("ASTROGRAPH_LSP_CMD");
+    }
+
+    #[test]
+    fn substituir_apagar_e_global_pela_linha_de_comando() {
+        let mut s = Session::new("foo bar\nbaz foo\nqux\n", None);
+        s.resize(40, 6.0);
+        s.feed(":%s/foo/X/g<CR>");
+        assert_eq!(s.ed.lines(), vec!["X bar", "baz X", "qux"]);
+        // a linha de comando aparece enquanto digita e some no Enter
+        s.feed(":2d");
+        assert_eq!(modelo(&mut s).cmd, Some((':', "2d".to_string())));
+        s.feed("<CR>");
+        assert!(modelo(&mut s).cmd.is_none());
+        assert_eq!(s.ed.lines(), vec!["X bar", "qux"]);
+        s.feed(":g/q/s/q/Q/<CR>");
+        assert_eq!(s.ed.lines(), vec!["X bar", "Qux"]);
+        // seleção visual vira a faixa '<,'>
+        s.feed("Vj:s/$/!/<CR>");
+        assert_eq!(s.ed.lines(), vec!["X bar!", "Qux!"]);
+        // desfazer volta tudo de um comando só
+        s.feed("u");
+        assert_eq!(s.ed.lines(), vec!["X bar", "Qux"]);
     }
 
     #[test]
