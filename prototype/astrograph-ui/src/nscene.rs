@@ -77,6 +77,8 @@ pub struct Scene {
     toast_cache: Option<(String, ToastKind)>,
     toast_id: u64,
     toast_at: Instant,
+    hit_id: u64,
+    hit_fade: Chase,
     flash_id: u64,
     flash_at: Option<Instant>,
     flash_range: Option<((usize, usize), (usize, usize))>,
@@ -129,6 +131,8 @@ impl Scene {
             toast_cache: None,
             toast_id: 0,
             toast_at: now,
+            hit_id: 0,
+            hit_fade: Chase::new(0.0, 14.0),
             flash_id: 0,
             flash_at: None,
             flash_range: None,
@@ -203,7 +207,7 @@ impl Scene {
         for sp in [&mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
-        for ch in [&mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast] {
+        for ch in [&mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
             ch.step(dt);
         }
         // avisos: somem sozinhos
@@ -295,6 +299,14 @@ impl Scene {
                 self.flash_id = id;
             }
         }
+        // realce da busca: padrão novo reinicia o fade; sem padrão some
+        if vm.hits_id != self.hit_id {
+            self.hit_id = vm.hits_id;
+            if vm.hits_id != 0 && !self.first {
+                self.hit_fade.v = 0.0;
+            }
+        }
+        self.hit_fade.target = if vm.hits_id != 0 { 1.0 } else { 0.0 };
         // pílula: largura-alvo
         let label_w = self.ui_semi.measure(&self.mode_label, 12.5 * s);
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
@@ -350,7 +362,7 @@ impl Scene {
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
         let springs = [&self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
-        let chases = [&self.sel, &self.bar, &self.cmd, &self.toast].iter().any(|c| !c.settled());
+        let chases = [&self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
         let (_, blink_wake) = self.blink(now);
@@ -384,6 +396,24 @@ impl Scene {
         let hl_y = lay.text_y + self.hl_y.x - top_px;
         if vm.mode != ModeKind::Visual && vm.mode != ModeKind::VisualLine {
             c.rrect(10.0 * s, hl_y, w - 20.0 * s, lay.line_h, 8.0 * s, d::WHITE, 0.045);
+        }
+
+        // ocorrências da busca (a atual mais forte)
+        if self.hit_fade.v > 0.01 {
+            let k = self.hit_fade.v;
+            for &(row, a, b) in &vm.hits {
+                let y = lay.text_y + row as f32 * lay.line_h - top_px;
+                if y + lay.line_h < 0.0 || y > h {
+                    continue;
+                }
+                let line = vm.line(row);
+                let (va, vb) = (vcol_start(&line, a).saturating_sub(vm.left), vcol_start(&line, b).saturating_sub(vm.left));
+                let x = lay.text_x + va as f32 * lay.char_w;
+                let wpx = vb.saturating_sub(va) as f32 * lay.char_w;
+                let current = vm.cursor == (row, a);
+                let (col, al) = if current { (d::ORANGE, 0.55) } else { (d::ORANGE, 0.24) };
+                c.rrect(x - 1.0 * s, y + 2.0, wpx + 2.0 * s, lay.line_h - 4.0, 4.0 * s, col, al * k);
+            }
         }
 
         // seleção
@@ -787,6 +817,30 @@ mod testes {
             fim = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
         }
         assert!(dif(&a, &fim) > 50 && sc.flash_at.is_none(), "e apaga sozinho");
+    }
+
+    #[test]
+    fn busca_realca_ocorrencias_com_fade() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("foo bar foo\nbaz foo\n", None);
+        let lay = sc.layout(640, 400, 2);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        let antes = quadro(&mut sc, &vm, 640, 400, t0);
+        s.feed("/foo<CR>");
+        let vm = s.view_model();
+        assert_eq!(vm.hits.len(), 3);
+        assert!(vm.hits_id != 0);
+        let mut fim = antes.clone();
+        for i in 1..30 {
+            fim = quadro(&mut sc, &vm, 640, 400, t0 + Duration::from_millis(16 * i));
+        }
+        let dif = antes.iter().zip(&fim).filter(|(p, q)| p != q).count();
+        assert!(dif > 200, "ocorrências acesas");
+        s.feed(":noh<CR>");
+        let vm = s.view_model();
+        assert!(vm.hits.is_empty() && vm.hits_id == 0);
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

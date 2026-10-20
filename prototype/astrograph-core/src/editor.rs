@@ -203,6 +203,11 @@ impl Editor {
         self.mode
     }
 
+    /// Padrão da última busca (`/`, `?`, `*`, `#`).
+    pub fn last_pattern(&self) -> Option<&str> {
+        self.last_search.as_ref().map(|(p, _)| p.as_str())
+    }
+
     /// Texto do que está sendo digitado: `/padrão` ou `?padrão` durante uma busca.
     pub fn search_line(&self) -> Option<String> {
         let k = &self.pending;
