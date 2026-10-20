@@ -131,6 +131,8 @@ pub struct Canvas<'a> {
     pub buf: &'a mut [u32],
     pub w: i32,
     pub h: i32,
+    /// pixels entre o início de uma linha e o da seguinte (maior que `w` numa sub-vista)
+    pub stride: i32,
     /// área onde se pode pintar (x0, y0, x1, y1), exclusivo no fim
     pub clip: (i32, i32, i32, i32),
 }
@@ -149,7 +151,18 @@ fn sdf_rrect(cx: f32, cy: f32, mx: f32, my: f32, hw: f32, hh: f32, r: f32) -> f3
 
 impl<'a> Canvas<'a> {
     pub fn new(buf: &'a mut [u32], w: u32, h: u32) -> Self {
-        Canvas { buf, w: w as i32, h: h as i32, clip: (0, 0, w as i32, h as i32) }
+        Canvas { buf, w: w as i32, h: h as i32, stride: w as i32, clip: (0, 0, w as i32, h as i32) }
+    }
+
+    /// Sub-vista: o retângulo (`x`, `y`, `w`, `h`) deste canvas como um canvas próprio, com
+    /// coordenadas locais. Tudo o que for pintado fica dentro do retângulo.
+    pub fn sub(&mut self, x: i32, y: i32, w: i32, h: i32) -> Canvas<'_> {
+        let (x0, y0) = (x.clamp(0, self.w), y.clamp(0, self.h));
+        let (w, h) = (w.min(self.w - x0).max(0), h.min(self.h - y0).max(0));
+        let ini = (y0 * self.stride + x0) as usize;
+        let len = if w == 0 || h == 0 { 0 } else { ((h - 1) * self.stride + w) as usize };
+        let stride = self.stride;
+        Canvas { buf: &mut self.buf[ini..ini + len], w, h, stride, clip: (0, 0, w, h) }
     }
 
     pub fn set_clip(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
@@ -161,7 +174,11 @@ impl<'a> Canvas<'a> {
     }
 
     pub fn clear(&mut self, color: u32) {
-        self.buf.fill(color & 0x00ff_ffff);
+        let cor = color & 0x00ff_ffff;
+        for y in 0..self.h {
+            let ini = (y * self.stride) as usize;
+            self.buf[ini..ini + self.w as usize].fill(cor);
+        }
     }
 
     #[inline]
@@ -169,7 +186,7 @@ impl<'a> Canvas<'a> {
         if x < self.clip.0 || y < self.clip.1 || x >= self.clip.2 || y >= self.clip.3 {
             return;
         }
-        let i = (y * self.w + x) as usize;
+        let i = (y * self.stride + x) as usize;
         self.buf[i] = blend(self.buf[i], color, a);
     }
 
@@ -178,7 +195,7 @@ impl<'a> Canvas<'a> {
         let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
         let (x0, y0, x1, y1) = (x.max(self.clip.0), y.max(self.clip.1), (x + w).min(self.clip.2), (y + h).min(self.clip.3));
         for py in y0..y1 {
-            let row = (py * self.w) as usize;
+            let row = (py * self.stride) as usize;
             for px in x0..x1 {
                 let i = row + px as usize;
                 self.buf[i] = blend(self.buf[i], color, a);
@@ -263,7 +280,7 @@ impl<'a> Canvas<'a> {
         for py in y0..y1 {
             let t = (py - y) as f32 / h.max(1) as f32;
             let a = ((a_top + (a_bottom - a_top) * t).clamp(0.0, 1.0) * 255.0).round() as u32;
-            let row = (py * self.w) as usize;
+            let row = (py * self.stride) as usize;
             for px in x0..x1 {
                 let i = row + px as usize;
                 self.buf[i] = blend(self.buf[i], color, a);
@@ -315,7 +332,7 @@ impl<'a> Canvas<'a> {
         let a8 = (alpha.clamp(0.0, 1.0) * 255.0) as u32;
         for py in ya..yb {
             let row = ((py - gy) as u32 * g.w) as usize;
-            let dst = (py * self.w) as usize;
+            let dst = (py * self.stride) as usize;
             for px in xa..xb {
                 let c = g.cov[row + (px - gx) as usize];
                 if c == 0 {
@@ -335,6 +352,30 @@ mod testes {
 
     fn canvas(w: u32, h: u32) -> Vec<u32> {
         vec![0x0020_2020; (w * h) as usize]
+    }
+
+    #[test]
+    fn sub_vista_pinta_so_dentro_do_retangulo_com_coordenadas_locais() {
+        let (w, h) = (20u32, 10u32);
+        let mut b = canvas(w, h);
+        let mut c = Canvas::new(&mut b, w, h);
+        c.clear(0x0000_0000);
+        {
+            let mut sv = c.sub(5, 2, 8, 4);
+            assert_eq!((sv.w, sv.h), (8, 4));
+            sv.clear(0x0000_00ff);
+            // fora da sub-vista (x=9 > 8) é cortado; (0,0) local é (5,2) global
+            sv.rect(-3, -3, 40, 40, 0x00ff_0000, 1.0);
+            sv.rect(0, 0, 1, 1, 0x0000_ff00, 1.0);
+        }
+        let px = |x: usize, y: usize| b[y * w as usize + x] & 0x00ff_ffff;
+        assert_eq!(px(5, 2), 0x0000_ff00, "origem local");
+        assert_eq!(px(6, 2), 0x00ff_0000);
+        assert_eq!(px(12, 5), 0x00ff_0000, "último pixel da sub-vista");
+        assert_eq!(px(13, 5), 0, "fora à direita");
+        assert_eq!(px(4, 2), 0, "fora à esquerda");
+        assert_eq!(px(5, 6), 0, "fora abaixo");
+        assert_eq!(px(5, 1), 0, "fora acima");
     }
 
     #[test]

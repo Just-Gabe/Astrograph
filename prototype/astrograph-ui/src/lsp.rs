@@ -72,7 +72,22 @@ pub struct Cliente {
     /// mensagens que esperam o `initialize` terminar
     fila: Arc<Mutex<Vec<Value>>>,
     pronto: Arc<AtomicBool>,
-    pub versao: i64,
+    /// por arquivo: quantos painéis o têm aberto, a versão enviada e o hash do último texto
+    docs: HashMap<PathBuf, Doc>,
+}
+
+#[derive(Default)]
+struct Doc {
+    abertos: usize,
+    versao: i64,
+    hash: u64,
+}
+
+fn hash_texto(t: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    t.hash(&mut h);
+    h.finish()
 }
 
 /// `(programa, argumentos, languageId)` para a extensão do arquivo.
@@ -225,7 +240,7 @@ impl Cliente {
                 }
             });
         }
-        let c = Cliente { nome: prog.rsplit(['/', '\\']).next().unwrap_or(prog).to_string(), child, stdin, next: AtomicI64::new(1), kinds, estado, fila, pronto, versao: 0 };
+        let c = Cliente { nome: prog.rsplit(['/', '\\']).next().unwrap_or(prog).to_string(), child, stdin, next: AtomicI64::new(1), kinds, estado, fila, pronto, docs: HashMap::new() };
         let init = json!({
             "processId": std::process::id(),
             "rootUri": uri(raiz),
@@ -265,17 +280,45 @@ impl Cliente {
         }
     }
 
+    /// Abre o arquivo no servidor. Dois painéis com o mesmo arquivo abrem uma vez só (contagem).
     pub fn abrir(&mut self, arquivo: &Path, linguagem: &str, texto: &str) {
-        self.versao = 1;
-        self.notificacao("textDocument/didOpen", json!({"textDocument": {"uri": uri(arquivo), "languageId": linguagem, "version": self.versao, "text": texto}}));
+        let d = self.docs.entry(arquivo.to_path_buf()).or_default();
+        d.abertos += 1;
+        if d.abertos > 1 {
+            return;
+        }
+        d.versao = 1;
+        d.hash = hash_texto(texto);
+        let versao = d.versao;
+        self.notificacao("textDocument/didOpen", json!({"textDocument": {"uri": uri(arquivo), "languageId": linguagem, "version": versao, "text": texto}}));
     }
 
+    /// Texto novo; igual ao último enviado (o outro painel já mandou) não manda nada.
     pub fn mudou(&mut self, arquivo: &Path, texto: &str) {
-        self.versao += 1;
-        self.notificacao("textDocument/didChange", json!({"textDocument": {"uri": uri(arquivo), "version": self.versao}, "contentChanges": [{"text": texto}]}));
+        let h = hash_texto(texto);
+        let Some(d) = self.docs.get_mut(arquivo) else { return };
+        if d.hash == h {
+            return;
+        }
+        d.hash = h;
+        d.versao += 1;
+        let versao = d.versao;
+        self.notificacao("textDocument/didChange", json!({"textDocument": {"uri": uri(arquivo), "version": versao}, "contentChanges": [{"text": texto}]}));
     }
 
+    /// Versão do arquivo no servidor (0 = não aberto).
+    pub fn versao(&self, arquivo: &Path) -> i64 {
+        self.docs.get(arquivo).map_or(0, |d| d.versao)
+    }
+
+    /// Fecha só quando o último painel que o tinha aberto fecha.
     pub fn fechar(&mut self, arquivo: &Path) {
+        let Some(d) = self.docs.get_mut(arquivo) else { return };
+        d.abertos = d.abertos.saturating_sub(1);
+        if d.abertos > 0 {
+            return;
+        }
+        self.docs.remove(arquivo);
         self.notificacao("textDocument/didClose", json!({"textDocument": {"uri": uri(arquivo)}}));
     }
 
@@ -534,7 +577,17 @@ while True:
         assert_eq!(sem_snippet("a\\$b"), "a$b");
         // mudar o texto reenvia (o falso sempre devolve o mesmo aviso)
         c.mudou(&arq, "x = 2\n");
-        assert_eq!(c.versao, 2);
+        assert_eq!(c.versao(&arq), 2);
+        // mesmo texto de novo (o outro painel já mandou): sem versão nova
+        c.mudou(&arq, "x = 2\n");
+        assert_eq!(c.versao(&arq), 2);
+        // dois painéis: abre uma vez, fecha quando o último sai
+        c.abrir(&arq, "python", "x = 2\n");
+        assert_eq!(c.versao(&arq), 2, "a segunda abertura não reinicia");
+        c.fechar(&arq);
+        assert_eq!(c.versao(&arq), 2, "ainda tem um painel");
+        c.fechar(&arq);
+        assert_eq!(c.versao(&arq), 0);
         c.encerrar();
     }
 

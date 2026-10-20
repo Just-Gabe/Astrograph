@@ -150,6 +150,17 @@ pub struct ViewModel {
     /// muda ao trocar de arquivo/aba: a cena zera as animações
     pub doc_id: u64,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
+    /// janelas divididas: o layout da aba, o painel focado (este modelo) e os outros painéis
+    pub layout: Option<crate::janelas::Layout>,
+    pub pane: crate::janelas::PaneId,
+    pub panes: Vec<PaneView>,
+}
+
+/// Um painel que não tem o foco.
+#[derive(Clone)]
+pub struct PaneView {
+    pub id: crate::janelas::PaneId,
+    pub vm: Box<ViewModel>,
 }
 
 impl ViewModel {
@@ -187,6 +198,9 @@ impl ViewModel {
             tab_active: 0,
             doc_id: 0,
             flash: None,
+            layout: None,
+            pane: 0,
+            panes: Vec::new(),
         }
     }
 
