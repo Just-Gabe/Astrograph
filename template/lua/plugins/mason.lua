@@ -21,13 +21,9 @@ return {
         -- install any other package
         "tree-sitter-cli",
 
-        -- Snacks picker CLI dependencies.
-        -- Mason ships native binaries for Windows/Linux/macOS, so these make
-        -- the find/grep pickers work on any OS without a manual install:
-        --   `fd`       -> <Leader>ff / <Leader>fF / <Leader>fs (find files)
-        --   `ripgrep`  -> <Leader>fw / <Leader>fW (live grep) and grep-based sources
-        "fd",
-        "ripgrep",
+        -- `fd` e `ripgrep` (pickers <Leader>ff/<Leader>fw) NAO ficam aqui: nao existem
+        -- no registro do Mason ("Cannot find package"). Quem instala sao o install.ps1 /
+        -- install.sh (winget/brew/apt...); o :checkhealth avisa se faltarem.
       }
 
       -- Only keep entries that actually exist in the active Mason registry.
