@@ -80,4 +80,39 @@ P.project(plain, true)
 H.eq(#P.state.langs, 0, "home sem detecção")
 H.eq(P.state.git, nil, "home sem git")
 H.ok(P.report():find("Preparo em segundo plano", 1, true) ~= nil, "relatório")
+-- no app: quem desenha é o renderer; o Lua só avisa e não roda o git
+local sent = {}
+local real_notify = vim.rpcnotify
+vim.rpcnotify = function(ch, ...) sent[#sent + 1] = { ch, ... } end
+vim.g.astrograph_gui = "astrograph-ui"
+vim.g.astrograph_app_chan = 9
+P.SHOW_AFTER = 20
+local rel = P.track "parsers"
+vim.wait(150, function() return false end, 10)
+H.eq(icon_wins(), 0, "no app o Lua não abre o ícone")
+H.eq(sent[1][2], "astrograph_busy", "avisa o app")
+H.eq(sent[1][3], "parsers", "nome")
+H.eq(sent[1][4], true, "ligado")
+local rel2 = P.track "parsers" -- 2ª tarefa do mesmo nome: um aviso só
+H.eq(#sent, 1, "não repete o aviso")
+rel()
+H.eq(#sent, 1, "ainda tem uma do mesmo nome")
+rel2()
+H.eq(sent[2][4], false, "desligado quando a última acaba")
+local repo2 = H.workdir { ["a.txt"] = "x" }
+vim.system({ "git", "-C", repo2, "init", "-q" }):wait()
+P.state.git = nil
+P.project(repo2, true)
+vim.wait(300, function() return false end, 20)
+H.eq(P.state.git, nil, "no app o git é do app, não do Lua")
+vim.g.astrograph_preparo = vim.json.encode { pasta = repo2, linguagens = { "rust" }, git_instalado = true, git = { ramo = "main", head = "abc1234", alteracoes = 2, refs = 3 } }
+local rep = P.report()
+H.ok(rep:find("(app)", 1, true) ~= nil and rep:find("main @ abc1234", 1, true) ~= nil, "relatório lê o estado do app: " .. rep)
+-- sem o canal (ou com ASTROGRAPH_SERVICOS=nvim) volta ao ícone do Lua
+vim.g.astrograph_app_chan = nil
+P.SHOW_AFTER = 50
+local rel3 = P.track "volta"
+H.ok(vim.wait(2000, function() return icon_wins() == 1 end, 20), "sem app, o ícone do Lua")
+rel3()
+vim.rpcnotify = real_notify
 H.done()

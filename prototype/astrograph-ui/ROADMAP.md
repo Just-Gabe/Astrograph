@@ -142,6 +142,25 @@ lado com o nvim nativo:
     (`]f [f ]a ]k vaf vif daa >F`) 99,9% iguais, com e sem o app.
   - [ ] Tirar o nvim-treesitter e o nvim-treesitter-textobjects: falta o astrocore
     parar de pedir as consultas (`has_capture`) e o Rust expor as capturas.
+- [x] **S2.5 servicos em Rust** (`prototype/astrograph-servicos`, biblioteca +
+  executavel `astrograph-servicos`): deteccao do projeto, resumo do git (so
+  leitura), build dos executaveis e a **atualizacao transacional** (guarda o que
+  e do usuario, fast-forward, plugins, recompila so o que mudou, confere a config
+  e desfaz se nao subir). 13 testes com repositorios git de verdade (CI em
+  Windows e Linux). Verificado contra o GitHub real: clone antigo (0df1989) ->
+  4405c4c, plugins sincronizados, `nvim` verificando e agente + app recompilados
+  em 2 min. O Lua (`update.lua`, `prepare.lua`) virou o espelho do terminal: o
+  editor chama o executavel quando ele existe e so cai no Lua sem ele
+  (`ASTROGRAPH_ATUALIZAR=lua` forca o Lua).
+  - [x] **Orquestrador no app** (`astrograph-ui/src/servicos.rs`): ao abrir e a
+    cada `DirChanged` o app detecta o projeto e le o git (so leitura) e publica o
+    resultado em `g:astrograph_preparo`; compila os executaveis que faltam; um
+    unico indicador de "trabalhando" (anel de 8 pontos no canto inferior direito,
+    desenhado pelo renderer, so depois de 0,4 s, sem depender de fonte). O Lua so
+    cuida do que precisa de plugins do Neovim (parsers, Mason) e avisa o app por
+    `astrograph_busy`. Verificado no app de verdade (Xvfb): canal, JSON do
+    preparo e o anel na tela. `ASTROGRAPH_SERVICOS=nvim` volta ao Lua. As fontes
+    agora tambem sao procuradas nas pastas de Linux/macOS.
 - [ ] **S3 diagnosticos e formatacao** (substitui none-ls): resultado entregue
   pela API `vim.diagnostic`, para os plugins que leem continuarem vendo.
 - [ ] **S4 cliente LSP em Rust** (substitui nvim-lspconfig, `vim.lsp` e Mason):

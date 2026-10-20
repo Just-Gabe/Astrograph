@@ -163,6 +163,10 @@ pub struct Renderer {
     anim_ms: u64,
     anim: Option<CursorAnim>,
     last_cursor: Option<PxRect>,
+    /// Indicador de trabalho em segundo plano (quadro da animacao) e a linha em
+    /// que foi pintado, para repintar a linha quando ele muda ou some.
+    spinner: Option<usize>,
+    spinner_row: Option<usize>,
     last_size: (u32, u32),
     last_layout: Option<Layout>,
     invalid: bool,
@@ -208,6 +212,8 @@ impl Renderer {
             anim_ms,
             anim: None,
             last_cursor: None,
+            spinner: None,
+            spinner_row: None,
             last_size: (0, 0),
             last_layout: None,
             invalid: true,
@@ -304,6 +310,12 @@ impl Renderer {
     /// Maior deslocamento de rolagem ativo, em pixels (testes de fumaca).
     pub fn scroll_offset(&self) -> f32 {
         self.scrolls.iter().map(|a| a.offset.abs()).fold(0.0, f32::max)
+    }
+
+    /// Liga (`Some(quadro)`) ou desliga o indicador de carregamento do canto
+    /// inferior direito.
+    pub fn set_spinner(&mut self, frame: Option<usize>) {
+        self.spinner = frame;
     }
 
     /// Duracao da rolagem suave (0 desliga).
@@ -655,6 +667,12 @@ impl Renderer {
                     *slot = true;
                 }
             }
+            let spin_row = rows.saturating_sub(3);
+            for r in [self.spinner_row, self.spinner.map(|_| spin_row)].into_iter().flatten() {
+                if let Some(slot) = self.paint.get_mut(r) {
+                    *slot = true;
+                }
+            }
             for rect in [self.last_cursor, cursor_rect].into_iter().flatten() {
                 let top = (rect.y - lay.oy as i32).max(0) as u32 / ch;
                 let bot = ((rect.y + rect.h as i32 - 1 - lay.oy as i32).max(0) as u32) / ch;
@@ -680,6 +698,13 @@ impl Renderer {
         self.scrolls = anims;
         if !self.floats.is_empty() {
             self.draw_shadows(buffer, win_w, win_h, &lay, rows, full);
+        }
+
+        self.spinner_row = None;
+        if let Some(frame) = self.spinner {
+            let row = rows.saturating_sub(3);
+            self.draw_spinner(buffer, win_w, win_h, grid, &lay, row, frame);
+            self.spinner_row = Some(row);
         }
 
         if let Some(rect) = cursor_rect {
@@ -711,6 +736,37 @@ impl Renderer {
             .into_iter()
             .filter_map(|(y, h)| (y < win_h).then(|| (y, h.min(win_h - y))))
             .collect()
+    }
+
+    /// Anel de 8 pontos girando, na penultima coluna e acima da linha de status.
+    /// Pontos quadrados, sem depender de fonte: o mais novo e o mais forte e os
+    /// outros esmaecem para a cor de fundo.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_spinner(&self, buffer: &mut [u32], win_w: u32, win_h: u32, grid: &Grid, lay: &Layout, row: usize, frame: usize) {
+        let (cw, ch) = (self.cell_w as i32, self.cell_h as i32);
+        let col = lay.cols.saturating_sub(2) as i32;
+        let (cx, cy) = (
+            lay.ox as i32 + col * cw + cw / 2,
+            lay.oy as i32 + row as i32 * ch + ch / 2,
+        );
+        let radius = (ch as f32 * 0.26).max(3.0);
+        let dot = ((ch / 9).max(2)) as i32;
+        let (fg, bg) = (grid.default_fg, grid.default_bg);
+        for i in 0..8usize {
+            let age = (frame + 8 - i) % 8; // 0 = ponto da frente
+            let strength = 255 - (age as u32 * 28).min(220);
+            let color = mix(fg, bg, strength * 7 / 10 + 40);
+            let ang = i as f32 * std::f32::consts::TAU / 8.0;
+            let (dx, dy) = ((ang.cos() * radius).round() as i32, (ang.sin() * radius).round() as i32);
+            let (x0, y0) = (cx + dx - dot / 2, cy + dy - dot / 2);
+            for y in y0.max(0)..(y0 + dot).min(win_h as i32) {
+                for x in x0.max(0)..(x0 + dot).min(win_w as i32) {
+                    if let Some(px) = buffer.get_mut((y as u32 * win_w + x as u32) as usize) {
+                        *px = color;
+                    }
+                }
+            }
+        }
     }
 
     fn paint_row(&mut self, buffer: &mut [u32], win_w: u32, win_h: u32, grid: &Grid, lay: &Layout, r: usize) {
@@ -1370,9 +1426,25 @@ fn fill_rect(buffer: &mut [u32], win_w: u32, win_h: u32, x0: u32, y0: u32, w: u3
 }
 
 fn font_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![PathBuf::from("C:\\Windows\\Fonts")];
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+    let mut dirs = Vec::new();
+    if cfg!(windows) {
+        dirs.push(PathBuf::from("C:\\Windows\\Fonts"));
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+        }
+        return dirs;
+    }
+    // Linux e macOS: onde o instalador poe a Nerd Font (por usuario) e as do sistema
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".local/share"))) {
+        dirs.push(data.join("fonts"));
+    }
+    if let Some(h) = &home {
+        dirs.push(h.join("Library/Fonts"));
+        dirs.push(h.join(".fonts"));
+    }
+    for d in ["/Library/Fonts", "/System/Library/Fonts", "/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/truetype"] {
+        dirs.push(PathBuf::from(d));
     }
     dirs
 }
@@ -1520,6 +1592,38 @@ mod tests {
         let under = paint(&mut on, 3);
         assert_eq!(cells(&under, 2, 4), cells(&plain, 2, 4), "-> sob o cursor");
         assert_ne!(cells(&under, 7, 9), cells(&plain, 7, 9), "!= longe do cursor continua ligadura");
+    }
+
+    #[test]
+    fn indicador_aparece_gira_e_some_sem_sujar_o_resto() {
+        let Some(mut r) = renderer(false) else { return };
+        let (cols, rows) = (40usize, 10usize);
+        let mut grid = Grid::new(cols, rows);
+        let (w, h) = (r.cell_w * cols as u32, r.cell_h * rows as u32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        let mut pintar = |r: &mut Renderer, buf: &mut Vec<u32>, grid: &mut Grid, full: bool| {
+            r.render(buf, w, h, grid, 0.0, true, Instant::now(), full);
+        };
+        pintar(&mut r, &mut buf, &mut grid, true);
+        let limpo = buf.clone();
+        // ligado: so a regiao do canto inferior direito (acima da linha de status) muda
+        r.set_spinner(Some(0));
+        pintar(&mut r, &mut buf, &mut grid, false);
+        let diff: Vec<usize> = (0..buf.len()).filter(|&i| buf[i] != limpo[i]).collect();
+        assert!(!diff.is_empty(), "o indicador desenha pixels");
+        let (x, y): (Vec<u32>, Vec<u32>) = diff.iter().map(|&i| (i as u32 % w, i as u32 / w)).unzip();
+        let linha = (rows - 3) as u32;
+        assert!(y.iter().all(|&y| y / r.cell_h == linha), "so na linha rows-3");
+        assert!(x.iter().all(|&x| x / r.cell_w == (cols - 2) as u32), "so na penultima coluna");
+        // girando: outro quadro, outros pixels
+        let quadro0 = buf.clone();
+        r.set_spinner(Some(3));
+        pintar(&mut r, &mut buf, &mut grid, false);
+        assert_ne!(buf, quadro0, "o ponto da frente anda");
+        // desligado: a linha volta a ser a de antes
+        r.set_spinner(None);
+        pintar(&mut r, &mut buf, &mut grid, false);
+        assert_eq!(buf, limpo, "some sem deixar rastro");
     }
 
     #[test]

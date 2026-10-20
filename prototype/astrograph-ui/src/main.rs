@@ -12,6 +12,7 @@ mod config;
 mod grid;
 mod realce;
 mod render;
+mod servicos;
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -87,7 +88,19 @@ struct UiHandler {
 impl Handler for UiHandler {
     type Writer = Compat<ChildStdin>;
 
-    async fn handle_notify(&self, name: String, args: Vec<Value>, _nvim: Neovim<Self::Writer>) {
+    async fn handle_notify(&self, name: String, args: Vec<Value>, nvim: Neovim<Self::Writer>) {
+        match name.as_str() {
+            "astrograph_busy" => return servicos::ocupado_pelo_lua(&args),
+            "astrograph_dir" => {
+                if servicos::ligado() {
+                    if let Some(p) = args.first().and_then(Value::as_str) {
+                        tokio::spawn(servicos::preparar(nvim, std::path::PathBuf::from(p)));
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
         if let Some(tx) = &self.realce {
             if let Some(ev) = realce::parse_notify(&name, &args) {
                 let _ = tx.send(ev);
@@ -299,6 +312,21 @@ async fn nvim_task(
 
     if let Some(rx) = realce_rx {
         tokio::spawn(realce::run(nvim.clone(), estado, rx));
+    }
+    {
+        // servicos do app: o Lua so avisa quando esta ocupado (astrograph_busy)
+        let n = nvim.clone();
+        tokio::spawn(async move {
+            servicos::ligar(&n).await;
+            if servicos::ligado() {
+                if let Some(p) = servicos::pasta_atual(&n).await {
+                    servicos::preparar(n.clone(), p).await;
+                }
+                // depois da abertura, sem disputar CPU com o inicio do editor
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                servicos::compilar_nativos().await;
+            }
+        });
     }
 
     let mut queued = pending.into_iter();
@@ -651,6 +679,7 @@ impl App {
             // cursor solto no canto enquanto o conteudo nao chega
             let alpha = if grid.generation < 2 { 0.0 } else { alpha };
             self.drawn_alpha = alpha;
+            renderer.set_spinner(servicos::quadro(now));
             renderer.render(&mut buffer, w, h, &mut grid, alpha, self.focused, now, full)
         };
         if !spans.is_empty() {
@@ -671,6 +700,11 @@ impl App {
             self.render_partial += elapsed;
         }
         self.anim_next = renderer.animating(now).then(|| now + ANIM_FRAME);
+        // trabalho em segundo plano: o anel gira no ritmo dele, sem forcar 140 quadros por segundo
+        if !servicos::em_andamento().is_empty() {
+            let t = now + Duration::from_millis(servicos::PASSO_MS as u64);
+            self.anim_next = Some(self.anim_next.map_or(t, |a| a.min(t)));
+        }
         let offset = renderer.scroll_offset();
         if offset > 0.0 {
             self.scroll_frames += 1;
@@ -1188,6 +1222,12 @@ fn main() {
         .build()
         .expect("event loop");
     let proxy = event_loop.create_proxy();
+    {
+        let acordar = proxy.clone();
+        servicos::iniciar(move || {
+            let _ = acordar.send_event(UserEvent::Redraw);
+        });
+    }
 
     let front_for_nvim = Arc::clone(&grid);
     std::thread::spawn(move || {

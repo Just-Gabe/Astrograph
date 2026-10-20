@@ -1,6 +1,6 @@
 # Compila o app Astrograph (UI em Rust) no Windows e publica no GitHub Releases.
 # O instalador (install.ps1) baixa `astrograph-windows-x64.exe` e o agente nativo
-# `astrograph-agent-windows-x64.exe` do release mais novo.
+# `astrograph-agent-windows-x64.exe` e `astrograph-servicos-windows-x64.exe` do release mais novo.
 #
 # Publicar: crie uma tag `v*` (ex.: git tag v0.1.0 && git push origin v0.1.0)
 # ou rode o workflow manualmente informando a tag.
@@ -32,6 +32,7 @@ jobs:
           workspaces: |
             prototype/astrograph-ui
             prototype/astrograph-agent
+            prototype/astrograph-servicos
       - name: Testes
         run: cargo test --release
       - name: Compilar
@@ -42,13 +43,20 @@ jobs:
       - name: Compilar o agente
         working-directory: prototype/astrograph-agent
         run: cargo build --release
+      - name: Testes dos serviços
+        working-directory: prototype/astrograph-servicos
+        run: cargo test --release
+      - name: Compilar os serviços
+        working-directory: prototype/astrograph-servicos
+        run: cargo build --release
       - name: Preparar os executáveis
         shell: pwsh
         run: |
           Copy-Item target/release/astrograph-ui.exe astrograph-windows-x64.exe
           Copy-Item ../astrograph-agent/target/release/astrograph-agent.exe astrograph-agent-windows-x64.exe
+          Copy-Item ../astrograph-servicos/target/release/astrograph-servicos.exe astrograph-servicos-windows-x64.exe
           # o install.ps1 confere cada download contra este arquivo
-          Get-FileHash astrograph-windows-x64.exe, astrograph-agent-windows-x64.exe -Algorithm SHA256 |
+          Get-FileHash astrograph-windows-x64.exe, astrograph-agent-windows-x64.exe, astrograph-servicos-windows-x64.exe -Algorithm SHA256 |
             ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
             Set-Content -Encoding ascii SHA256SUMS.txt
       - name: Publicar
@@ -59,5 +67,6 @@ jobs:
           files: |
             prototype/astrograph-ui/astrograph-windows-x64.exe
             prototype/astrograph-ui/astrograph-agent-windows-x64.exe
+            prototype/astrograph-ui/astrograph-servicos-windows-x64.exe
             prototype/astrograph-ui/SHA256SUMS.txt
           fail_on_unmatched_files: true

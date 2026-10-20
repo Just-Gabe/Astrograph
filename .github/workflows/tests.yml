@@ -52,3 +52,24 @@ jobs:
           workspaces: prototype/astrograph-syntax
       - name: Testes do realce
         run: cargo test
+
+  # servicos em Rust (projeto, git, build nativo e atualizacao transacional),
+  # com repositorios git de verdade; nos dois sistemas porque o instalador
+  # atualiza nos dois
+  rust-servicos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: prototype/astrograph-servicos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-servicos
+      - name: Testes dos serviços
+        run: cargo test
