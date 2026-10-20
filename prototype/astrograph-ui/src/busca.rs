@@ -378,6 +378,40 @@ pub fn buscar_texto(raiz: &Path, padrao: &str, limite: usize, tempo: Duration) -
     out
 }
 
+/// Pasta do estado do usuário (recentes, posição do cursor).
+fn dir_estado() -> Option<PathBuf> {
+    arquivo_recentes().and_then(|f| f.parent().map(Path::to_path_buf))
+}
+
+fn chave_caminho(caminho: &Path) -> String {
+    let abs = std::fs::canonicalize(caminho).unwrap_or_else(|_| caminho.to_path_buf());
+    abs.to_string_lossy().trim_start_matches(r"\\?\").to_string()
+}
+
+/// Guarda onde o cursor estava em `caminho` (os últimos 300 arquivos).
+pub fn guardar_cursor(caminho: &Path, linha: usize, col: usize) {
+    let Some(d) = dir_estado() else { return };
+    let f = d.join("cursores.tsv");
+    let chave = chave_caminho(caminho);
+    let mut v = vec![format!("{chave}\t{linha}\t{col}")];
+    if let Ok(t) = std::fs::read_to_string(&f) {
+        v.extend(t.lines().filter(|l| l.split('\t').next().is_some_and(|c| c != chave)).map(str::to_string));
+    }
+    v.truncate(300);
+    let _ = std::fs::create_dir_all(&d);
+    let _ = std::fs::write(f, v.join("\n"));
+}
+
+/// Onde o cursor estava na última vez que `caminho` foi fechado.
+pub fn cursor_guardado(caminho: &Path) -> Option<(usize, usize)> {
+    let t = std::fs::read_to_string(dir_estado()?.join("cursores.tsv")).ok()?;
+    let chave = chave_caminho(caminho);
+    t.lines().find_map(|l| {
+        let mut p = l.split('\t');
+        (p.next()? == chave).then(|| Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?)))?
+    })
+}
+
 /// Onde a lista de recentes fica: `$ASTROGRAPH_STATE`, `%LOCALAPPDATA%`, `$XDG_STATE_HOME` ou `~/.local/state`.
 fn arquivo_recentes() -> Option<PathBuf> {
     let base = std::env::var_os("ASTROGRAPH_STATE")

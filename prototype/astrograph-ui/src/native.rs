@@ -410,12 +410,27 @@ impl Session {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
         s.aplicar_editorconfig(path);
+        if let Some((r, c)) = busca::cursor_guardado(path).filter(|_| path.is_file()) {
+            s.ed.set_cursor(r.min(s.ed.buf.line_count().saturating_sub(1)), c);
+        }
         s.git_load();
         s.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if !path.exists() {
             s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
         s
+    }
+
+    /// Fecha o app guardando onde o cursor estava no arquivo.
+    fn sair(&mut self) {
+        self.guardar_cursor();
+        self.quit = true;
+    }
+
+    fn guardar_cursor(&self) {
+        if let Some(p) = self.path.as_ref().filter(|p| p.is_file()) {
+            busca::guardar_cursor(p, self.ed.cursor.row, self.ed.cursor.col);
+        }
     }
 
     /// Recuo e limpeza ao gravar do `.editorconfig` que vale para o arquivo.
@@ -1080,7 +1095,7 @@ impl Session {
                         self.gravar("");
                         self.git_load();
                         if sair && !self.modified() {
-                            self.quit = true;
+                            self.sair();
                         }
                     }
                 }
@@ -1118,7 +1133,7 @@ impl Session {
                     self.gravar("");
                     self.git_load();
                     if sair && !self.modified() {
-                        self.quit = true;
+                        self.sair();
                     }
                 }
             }
@@ -2138,6 +2153,7 @@ impl Session {
             self.say("Alterações não salvas. Salve com :w antes de abrir outro arquivo.".into(), ToastKind::Error);
             return;
         }
+        self.guardar_cursor();
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
         let pool = self.lsp_pool.clone();
@@ -2409,7 +2425,7 @@ impl Session {
                 if self.modified() && !bang && !self.irmao {
                     self.say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
                 } else {
-                    self.quit = true;
+                    self.sair();
                 }
             }
             "wq" | "x" | "xit" | "exit" => self.write_sair(arg, true),
@@ -2460,7 +2476,7 @@ impl Session {
         }
         self.gravar(arg);
         if sair && !self.modified() {
-            self.quit = true;
+            self.sair();
         }
     }
 
@@ -3566,6 +3582,20 @@ mod testes {
         s.feed(":w<CR>");
         let gravado = std::fs::read_to_string(&arq).unwrap();
         assert_eq!(gravado, "fn a() {\n   x\n}\n", "sem espaço no fim das linhas e com a quebra final");
+    }
+
+    #[test]
+    fn reabrir_um_arquivo_volta_para_onde_o_cursor_estava() {
+        let d = projeto("cursor");
+        let arq = d.join("src/volta.rs");
+        std::fs::write(&arq, "um\ndois\ntres\nquatro\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        s.feed("3Gl");
+        s.feed(":q<CR>");
+        assert!(s.quit);
+        let s2 = Session::open(&arq);
+        assert_eq!((s2.ed.cursor.row, s2.ed.cursor.col), (2, 1));
     }
 
     #[test]
