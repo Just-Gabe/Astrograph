@@ -8,11 +8,42 @@ use ropey::Rope;
 use crate::buffer::{Buffer, Pos};
 use crate::keys::Key;
 use crate::motion;
+use crate::textobj;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VKind {
+    Char,
+    Line,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VState {
+    kind: VKind,
+    anchor: Pos,
+}
+
+enum VParse {
+    Incomplete,
+    Invalid,
+    Done(VCmd),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VCmd {
+    Motion(Mo, Option<usize>),
+    Op(char, Option<usize>),
+    Obj(bool, char, Option<usize>),
+    Replace(char),
+    Swap,
+    Kind(VKind),
+    Esc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +77,8 @@ struct Mo {
 enum Target {
     Line,
     Motion(Mo),
+    /// objeto de texto: (inclui os delimitadores, caractere)
+    Obj(bool, char),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +145,10 @@ pub struct Editor {
     failed: bool,
     /// todas as linhas foram apagadas (buffer "vazio" do Vim): `dd` não faz mais nada
     emptied: bool,
+    /// seleção do modo visual
+    vis: Option<VState>,
+    /// o operador em curso vem do modo visual (sem a regra de `d` multilinha → linhas)
+    visual_op: bool,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -138,6 +175,8 @@ impl Editor {
             ops_change: false,
             failed: false,
             emptied: false,
+            vis: None,
+            visual_op: false,
         }
     }
 
@@ -184,6 +223,24 @@ impl Editor {
     fn key(&mut self, k: Key) {
         match self.mode {
             Mode::Insert => self.insert_key(k),
+            Mode::Visual => {
+                if k == Key::Esc && !self.pending.is_empty() {
+                    self.pending.clear();
+                    return;
+                }
+                self.pending.push(k);
+                match self.vparse(&self.pending.clone()) {
+                    VParse::Incomplete => {}
+                    VParse::Invalid => {
+                        self.pending.clear();
+                        self.failed = true;
+                    }
+                    VParse::Done(c) => {
+                        self.pending.clear();
+                        self.visual_exec(c);
+                    }
+                }
+            }
             Mode::Normal => {
                 if k == Key::Esc && !self.pending.is_empty() {
                     self.pending.clear();
@@ -249,6 +306,13 @@ impl Editor {
                 match keys.get(i) {
                     None => Parse::Incomplete,
                     Some(Key::Char(c)) if *c == op => done(Cmd::Op { op, count2, target: Target::Line }),
+                    Some(Key::Char(ia @ ('i' | 'a'))) => match keys.get(i + 1) {
+                        Some(Key::Char(o)) if "wWpP()[]{}<>bB\"'`".contains(*o) => {
+                            done(Cmd::Op { op, count2, target: Target::Obj(*ia == 'a', *o) })
+                        }
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
                     Some(_) => match parse_motion(&keys[i..]) {
                         MParse::Incomplete => Parse::Incomplete,
                         MParse::Invalid => Parse::Invalid,
@@ -263,6 +327,7 @@ impl Editor {
                     Key::Char(c @ ('x' | 'X' | 'D' | 'C' | 's' | 'S' | 'Y' | 'p' | 'P' | 'u' | 'J' | 'i' | 'a' | 'I' | 'A' | 'o' | 'O' | '~' | '.')) => {
                         done(Cmd::Simple(c, None))
                     }
+                    Key::Char(c @ ('v' | 'V')) => done(Cmd::Simple(c, None)),
                     Key::Char('r') => match keys.get(i) {
                         Some(Key::Char(c)) => done(Cmd::Simple('r', Some(*c))),
                         Some(_) => Parse::Invalid,
@@ -284,7 +349,7 @@ impl Editor {
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
             Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y'),
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V'),
         };
         // `failed` de comandos anteriores não pode contaminar este
         let failed_before = std::mem::take(&mut self.failed);
@@ -354,10 +419,16 @@ impl Editor {
             'u' => self.undo_step(count1),
             'R' => self.redo_step(count1),
             '.' => self.dot_repeat(count),
-            'J' => self.join(count1.max(2)),
+            'J' => {
+                self.join(count1.max(2));
+            }
             'r' => self.replace_chars(arg.unwrap(), count1),
             '~' => self.toggle_case(count1),
             'i' | 'a' | 'I' | 'A' | 'o' | 'O' => self.start_insert(c, count1),
+            'v' | 'V' => {
+                self.vis = Some(VState { kind: if c == 'v' { VKind::Char } else { VKind::Line }, anchor: self.cursor });
+                self.mode = Mode::Visual;
+            }
             _ => {}
         }
     }
@@ -372,12 +443,20 @@ impl Editor {
 
     fn col_for_want(&self, row: usize) -> usize {
         let len = self.buf.line_len(row);
+        let visual = self.mode == Mode::Visual;
         if len == 0 {
             0
         } else if self.curswant == MAXWANT {
-            len - 1
+            if visual { len } else { len - 1 }
         } else {
-            motion::col_for_vcol(&self.buf.line(row), self.curswant).min(len - 1)
+            let line = self.buf.line(row);
+            let total = motion::vcol_start(&line, len);
+            // além do fim da linha: no visual cai no NUL (inclui a quebra), senão no último caractere
+            if visual && self.curswant >= total {
+                len
+            } else {
+                motion::col_for_vcol(&line, self.curswant).min(len - 1)
+            }
         }
     }
 
@@ -425,6 +504,12 @@ impl Editor {
                         return ex(cur);
                     }
                     ex(Pos::new(cur.row, (cur.col + c1).min(len)))
+                } else if self.mode == Mode::Visual {
+                    // no visual `l` anda até a quebra de linha
+                    if cur.col >= len {
+                        return None;
+                    }
+                    ex(Pos::new(cur.row, (cur.col + c1).min(len)))
                 } else {
                     if cur.col + 1 >= len {
                         return None;
@@ -456,7 +541,8 @@ impl Editor {
                     return None;
                 }
                 let l = b.line_len(row);
-                inc(Pos::new(row, if op_pending { l.saturating_sub(1).max(0) } else { l.saturating_sub(1) }))
+                let col = if self.mode == Mode::Visual { l } else { l.saturating_sub(1) };
+                inc(Pos::new(row, col))
             }
             '_' => {
                 let row = (cur.row + c1 - 1).min(self.last_row());
@@ -569,6 +655,47 @@ impl Editor {
                 let r2 = (r1 + n - 1).min(self.last_row());
                 (Pos::new(r1, 0), Pos::new(r2, 0), Kind::Line)
             }
+            Target::Obj(include, ch) => {
+                let n = count.unwrap_or(1);
+                let obj = match ch {
+                    'w' | 'W' => match textobj::current_word(&self.buf, self.cursor, n, include, ch == 'W') {
+                        Ok(o) => Some(o),
+                        Err(p) => {
+                            // falhou, mas o Vim deixa o cursor onde chegou
+                            self.cursor = p;
+                            self.fix_cursor();
+                            self.curswant = self.want_here();
+                            None
+                        }
+                    },
+                    'p' | 'P' => textobj::current_par(&self.buf, self.cursor, n, include),
+                    '(' | ')' | 'b' => textobj::current_block(&self.buf, self.cursor, n, include, '('),
+                    '[' | ']' => textobj::current_block(&self.buf, self.cursor, n, include, '['),
+                    '{' | '}' | 'B' => textobj::current_block(&self.buf, self.cursor, n, include, '{'),
+                    '<' | '>' => textobj::current_block(&self.buf, self.cursor, n, include, '<'),
+                    q => textobj::current_quote(&self.buf, self.cursor, n, include, q),
+                };
+                let Some(o) = obj else {
+                    self.ops_change = false;
+                    self.failed = true;
+                    return;
+                };
+                let mut kind = if o.linewise { Kind::Line } else if o.inclusive { Kind::Incl } else { Kind::Excl };
+                let (mut s, mut e) = (o.start, o.end);
+                if kind == Kind::Excl && e.col == 0 && e.row > s.row {
+                    e = Pos::new(e.row - 1, self.buf.line_len(e.row - 1));
+                    kind = if s.col <= self.buf.first_nonblank(s.row) { Kind::Line } else { Kind::Excl };
+                }
+                if e < s {
+                    std::mem::swap(&mut s, &mut e);
+                }
+                // `yip`/`yap`: o cursor vai para o começo do objeto (coluna 0)
+                if kind == Kind::Line && op == 'y' {
+                    self.cursor = Pos::new(self.cursor.row, 0);
+                    self.curswant = 0;
+                }
+                (s, e, kind)
+            }
             Target::Motion(m) => {
                 let Some(r) = self.motion(m, count, true) else {
                     self.ops_change = false;
@@ -641,7 +768,7 @@ impl Editor {
                 }
                 // `d` charwise em várias linhas, começando no recuo e acabando no fim da
                 // linha, vira por linhas (regra do op_delete)
-                if op == 'd' && kind != Kind::Line && b.row > a.row {
+                if op == 'd' && kind != Kind::Line && b.row > a.row && !self.visual_op {
                     let line_b: Vec<char> = self.buf.line(b.row).chars().collect();
                     let after = if kind == Kind::Incl { b.col + 1 } else { b.col };
                     let rest_blank = line_b.iter().skip(after).all(|c| *c == ' ' || *c == '\t');
@@ -806,46 +933,68 @@ impl Editor {
         }
     }
 
-    fn join(&mut self, count: usize) {
+    /// `J`, igual ao `do_join` do Vim: o espaço depende do fim de CADA linha original.
+    fn join(&mut self, count: usize) -> bool {
         let row = self.cursor.row;
         let mut count = count;
         if row + count - 1 > self.last_row() {
             // na última linha com 1 ou 2 o Vim apita; com mais, junta o que houver
             if count <= 2 {
                 self.failed = true;
-                return;
+                return false;
             }
             count = self.last_row() - row + 1;
         }
         self.checkpoint();
-        let mut col = 0;
-        for _ in 1..count {
-            let cur = self.buf.line(row);
-            let next = self.buf.line(row + 1);
-            let trimmed: String = next.trim_start_matches([' ', '\t']).to_string();
-            let cur_len = cur.chars().count();
-            let ends_ws = cur.ends_with(' ') || cur.ends_with('\t');
-            // sem espaço se a linha já acaba em branco, a próxima é vazia ou começa com ")"
-            let add_space = !trimmed.is_empty() && !trimmed.starts_with(')') && !cur.is_empty() && !ends_ws;
-            // o cursor fica onde a junção aconteceu (no espaço inserido, ou no último branco)
-            col = if add_space {
-                cur_len
-            } else if ends_ws && !trimmed.is_empty() {
-                cur_len - 1
-            } else if trimmed.is_empty() {
-                cur_len.saturating_sub(1)
-            } else {
-                cur_len
-            };
-            let joined = format!("{cur}{}{trimmed}", if add_space { " " } else { "" });
-            let len = self.buf.line_len(row);
-            self.buf.delete(Pos::new(row, 0), Pos::new(row, len));
-            self.buf.insert(Pos::new(row, 0), &joined);
-            self.buf.delete_lines(row + 1, row + 1);
+        let mut out = String::new();
+        let mut sum = 0usize; // comprimento acumulado (para a regra "sum != 0")
+        let (mut e1, mut e2): (Option<char>, Option<char>);
+        let mut last_size = 0usize;
+        let mut last_spaces = 0usize;
+        e1 = None;
+        e2 = None;
+        for t in 0..count {
+            let line = self.buf.line(row + t);
+            let mut curr: String = line.clone();
+            let mut spaces = 0usize;
+            if t > 0 {
+                curr = line.trim_start_matches([' ', '\t']).to_string();
+                if !curr.is_empty() && !curr.starts_with(')') && sum != 0 && e1 != Some('\t') {
+                    // não põe espaço se a linha anterior já acaba em espaço
+                    if e1 == Some(' ') {
+                        e1 = e2;
+                    } else {
+                        spaces += 1;
+                    }
+                }
+            }
+            let size = curr.chars().count();
+            sum += size + spaces;
+            out.push_str(&" ".repeat(spaces));
+            out.push_str(&curr);
+            last_size = size;
+            last_spaces = spaces;
+            e1 = None;
+            e2 = None;
+            if size > 0 {
+                let chars: Vec<char> = curr.chars().collect();
+                e1 = chars.last().copied();
+                if size > 1 {
+                    e2 = Some(chars[size - 2]);
+                }
+            }
+        }
+        let col = sum - last_size - last_spaces;
+        let len = self.buf.line_len(row);
+        self.buf.delete(Pos::new(row, 0), Pos::new(row, len));
+        self.buf.insert(Pos::new(row, 0), &out);
+        if count > 1 {
+            self.buf.delete_lines(row + 1, row + count - 1);
         }
         self.cursor = Pos::new(row, col);
         self.fix_cursor();
         self.curswant = self.want_here();
+        true
     }
 
     fn replace_chars(&mut self, ch: char, count: usize) {
@@ -877,6 +1026,305 @@ impl Editor {
         let flipped: String = text.chars().map(|c| if c.is_lowercase() { c.to_uppercase().next().unwrap_or(c) } else if c.is_uppercase() { c.to_lowercase().next().unwrap_or(c) } else { c }).collect();
         self.buf.insert(a, &flipped);
         self.cursor = Pos::new(a.row, a.col + n);
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    // ------------------------------------------------------------------
+    // modo visual
+    // ------------------------------------------------------------------
+
+    fn vparse(&self, keys: &[Key]) -> VParse {
+        let mut i = 0;
+        let mut count: Option<usize> = None;
+        while let Some(Key::Char(d)) = keys.get(i) {
+            if d.is_ascii_digit() && (*d != '0' || count.is_some()) {
+                count = Some(count.unwrap_or(0) * 10 + d.to_digit(10).unwrap() as usize);
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        let Some(&k) = keys.get(i) else { return VParse::Incomplete };
+        match k {
+            Key::Esc | Key::Ctrl('c') => VParse::Done(VCmd::Esc),
+            Key::Char('v') => VParse::Done(VCmd::Kind(VKind::Char)),
+            Key::Char('V') => VParse::Done(VCmd::Kind(VKind::Line)),
+            Key::Char('o' | 'O') => VParse::Done(VCmd::Swap),
+            Key::Char(op @ ('d' | 'x' | 'X' | 'D' | 'y' | 'Y' | 'c' | 's' | 'S' | 'C' | 'R' | '<' | '>' | '~' | 'u' | 'U' | 'J')) => VParse::Done(VCmd::Op(op, count)),
+            Key::Delete => VParse::Invalid,
+            Key::Char('r') => match keys.get(i + 1) {
+                Some(Key::Char(c)) => VParse::Done(VCmd::Replace(*c)),
+                Some(_) => VParse::Invalid,
+                None => VParse::Incomplete,
+            },
+            Key::Char(ia @ ('i' | 'a')) => match keys.get(i + 1) {
+                Some(Key::Char(o)) if "wWpP()[]{}<>bB\"'`".contains(*o) => VParse::Done(VCmd::Obj(ia == 'a', *o, count)),
+                Some(_) => VParse::Invalid,
+                None => VParse::Incomplete,
+            },
+            _ => match parse_motion(&keys[i..]) {
+                MParse::Done(m, _) => VParse::Done(VCmd::Motion(m, count)),
+                MParse::Incomplete => VParse::Incomplete,
+                MParse::Invalid => VParse::Invalid,
+            },
+        }
+    }
+
+    fn visual_exit(&mut self) {
+        self.vis = None;
+        self.mode = Mode::Normal;
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    fn visual_exec(&mut self, c: VCmd) {
+        let Some(vs) = self.vis else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        match c {
+            VCmd::Esc => self.visual_exit(),
+            VCmd::Kind(k) => {
+                if vs.kind == k {
+                    self.visual_exit();
+                } else {
+                    self.vis = Some(VState { kind: k, ..vs });
+                }
+            }
+            VCmd::Swap => {
+                let a = self.cursor;
+                self.cursor = vs.anchor;
+                self.vis = Some(VState { anchor: a, ..vs });
+                self.curswant = self.want_here();
+            }
+            VCmd::Motion(m, count) => match self.motion(m, count, false) {
+                Some(r) => {
+                    self.cursor = r.pos;
+                    self.fix_cursor();
+                    if !r.vertical {
+                        self.curswant = if m.c == '$' && !m.g { MAXWANT } else { self.want_here() };
+                    }
+                    if r.fail {
+                        self.failed = true;
+                    }
+                }
+                None => {
+                    if m.c == '$' && !m.g {
+                        self.curswant = MAXWANT;
+                    }
+                    self.failed = true;
+                }
+            },
+            VCmd::Obj(include, ch, count) => self.visual_object(include, ch, count.unwrap_or(1)),
+            VCmd::Replace(ch) => self.visual_replace(ch),
+            VCmd::Op(op, count) => self.visual_operate(op, count),
+        }
+    }
+
+    fn visual_object(&mut self, include: bool, ch: char, n: usize) {
+        let Some(vs) = self.vis else { return };
+        let obj = match ch {
+            'w' | 'W' => textobj::current_word(&self.buf, self.cursor, n, include, ch == 'W').ok(),
+            'p' | 'P' => textobj::current_par(&self.buf, self.cursor, n, include),
+            '(' | ')' | 'b' => textobj::current_block(&self.buf, self.cursor, n, include, '('),
+            '[' | ']' => textobj::current_block(&self.buf, self.cursor, n, include, '['),
+            '{' | '}' | 'B' => textobj::current_block(&self.buf, self.cursor, n, include, '{'),
+            '<' | '>' => textobj::current_block(&self.buf, self.cursor, n, include, '<'),
+            q => textobj::current_quote(&self.buf, self.cursor, n, include, q),
+        };
+        // ip/ap no visual: pode estender a seleção em vez de recomeçar (current_par do Vim)
+        if matches!(ch, 'p' | 'P') {
+            if let Some(o) = obj {
+                let top = o.start.row;
+                let extend = top != vs.anchor.row || (vs.kind == VKind::Line && top == self.cursor.row);
+                if extend {
+                    let back = top < vs.anchor.row;
+                    let mut row = top;
+                    let last = self.last_row();
+                    let white = |r: usize| self.buf.line(r).chars().all(|c| c == ' ' || c == '\t');
+                    for _ in 0..n {
+                        if row == if back { 0 } else { last } {
+                            self.failed = true;
+                            break;
+                        }
+                        let mut prev: Option<bool> = None;
+                        for _t in 0..2 {
+                            row = if back { row - 1 } else { row + 1 };
+                            let sw = white(row);
+                            if prev == Some(sw) {
+                                row = if back { row + 1 } else { row - 1 };
+                                break;
+                            }
+                            loop {
+                                if row == if back { 0 } else { last } {
+                                    break;
+                                }
+                                let nxt = if back { row - 1 } else { row + 1 };
+                                if sw != white(nxt) {
+                                    break;
+                                }
+                                row = nxt;
+                            }
+                            if !include || row == if back { 0 } else { last } {
+                                break;
+                            }
+                            prev = Some(sw);
+                        }
+                    }
+                    self.vis = Some(VState { kind: VKind::Line, ..vs });
+                    self.cursor = Pos::new(row, 0);
+                    self.fix_cursor();
+                    self.curswant = self.want_here();
+                    return;
+                }
+            }
+        }
+        let Some(o) = obj else {
+            self.failed = true;
+            return;
+        };
+        if o.linewise {
+            self.vis = Some(VState { kind: VKind::Line, anchor: Pos::new(o.start.row, 0) });
+            self.cursor = Pos::new(o.end.row, 0);
+        } else {
+            // se não for inclusivo o último caractere é o anterior ao fim
+            let mut end = o.end;
+            if !o.inclusive && o.end > o.start {
+                if end.col > 0 {
+                    end.col -= 1;
+                } else if end.row > 0 {
+                    // fim exclusivo na coluna 0: a seleção termina na quebra da linha de cima
+                    end = Pos::new(end.row - 1, self.buf.line_len(end.row - 1));
+                }
+            }
+            self.vis = Some(VState { kind: if vs.kind == VKind::Line { VKind::Char } else { vs.kind }, anchor: o.start });
+            self.cursor = end;
+        }
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    /// Limites da seleção: (início, fim exclusivo, linhas inteiras?).
+    fn visual_range(&self) -> (Pos, Pos, bool) {
+        let vs = self.vis.unwrap();
+        let (a, b) = if vs.anchor <= self.cursor { (vs.anchor, self.cursor) } else { (self.cursor, vs.anchor) };
+        if vs.kind == VKind::Line {
+            return (Pos::new(a.row, 0), Pos::new(b.row, 0), true);
+        }
+        let len = self.buf.line_len(b.row);
+        let on_nl = b.col >= len;
+        let end = if on_nl {
+            if b.row < self.last_row() { Pos::new(b.row + 1, 0) } else { Pos::new(b.row, len) }
+        } else {
+            Pos::new(b.row, b.col + 1)
+        };
+        (a, end, false)
+    }
+
+    fn visual_operate(&mut self, op: char, count: Option<usize>) {
+        let (a, end, linewise) = self.visual_range();
+        let vs = self.vis.unwrap();
+        let sel_start = if vs.anchor <= self.cursor { vs.anchor } else { self.cursor };
+        // por linhas: se o começo é a ponta fixa a coluna vira 0; se é o cursor, fica a do cursor
+        let lw_start = Pos::new(sel_start.row, if vs.anchor <= self.cursor { 0 } else { sel_start.col });
+        let b_row = if vs.anchor <= self.cursor { self.cursor.row } else { vs.anchor.row };
+        let rows = b_row - a.row + 1;
+        let reg = None;
+        // X, D, Y, C, S, R trabalham em linhas
+        let (op, as_lines) = match op {
+            'x' => ('d', linewise),
+            'X' | 'D' => ('d', true),
+            'Y' => ('y', true),
+            'C' | 'S' | 'R' => ('c', true),
+            's' => ('c', linewise),
+            o => (o, linewise),
+        };
+        self.visual_op = true;
+        match op {
+            'd' | 'y' | 'c' => {
+                let (s, e, kind) = if as_lines {
+                    let last = if linewise { end.row } else { a.row + rows - 1 };
+                    (Pos::new(a.row, 0), Pos::new(last.min(self.last_row()), 0), Kind::Line)
+                } else {
+                    (a, end, Kind::Excl)
+                };
+                let cur_before = self.cursor;
+                self.mode = Mode::Normal;
+                self.vis = None;
+                let _ = cur_before;
+                if kind == Kind::Line && op == 'y' {
+                    self.cursor = lw_start;
+                }
+                self.apply_operator(op, s, e, kind, reg);
+            }
+            '>' | '<' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                self.checkpoint();
+                for _ in 0..count.unwrap_or(1) {
+                    for r in a.row..a.row + rows {
+                        self.shift_line(r, op == '>');
+                    }
+                }
+                self.cursor = Pos::new(a.row, self.col_for_want(a.row));
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            '~' | 'u' | 'U' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                self.checkpoint();
+                let (s, e) = if linewise { (Pos::new(a.row, 0), Pos::new(a.row + rows - 1, self.buf.line_len(a.row + rows - 1))) } else { (a, end) };
+                let text = self.buf.delete(s, e);
+                let f: String = text
+                    .chars()
+                    .map(|c| match op {
+                        'u' => c.to_lowercase().next().unwrap_or(c),
+                        'U' => c.to_uppercase().next().unwrap_or(c),
+                        _ => {
+                            if c.is_lowercase() {
+                                c.to_uppercase().next().unwrap_or(c)
+                            } else if c.is_uppercase() {
+                                c.to_lowercase().next().unwrap_or(c)
+                            } else {
+                                c
+                            }
+                        }
+                    })
+                    .collect();
+                self.buf.insert(s, &f);
+                self.cursor = if linewise { lw_start } else { sel_start };
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            'J' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                self.cursor = if linewise { lw_start } else { sel_start };
+                self.fix_cursor();
+                let c = self.cursor;
+                self.cursor = Pos::new(a.row, 0);
+                if !self.join(rows.max(2)) {
+                    // não juntou (última linha): o cursor fica no começo da seleção
+                    self.cursor = c;
+                }
+            }
+            _ => {}
+        }
+        self.visual_op = false;
+    }
+
+    fn visual_replace(&mut self, ch: char) {
+        let (a, end, linewise) = self.visual_range();
+        self.vis = None;
+        self.mode = Mode::Normal;
+        self.checkpoint();
+        let (s, e) = if linewise { (Pos::new(a.row, 0), Pos::new(end.row, self.buf.line_len(end.row))) } else { (a, end) };
+        let text = self.buf.delete(s, e);
+        let f: String = text.chars().map(|c| if c == '\n' { c } else { ch }).collect();
+        self.buf.insert(s, &f);
+        self.cursor = s;
         self.fix_cursor();
         self.curswant = self.want_here();
     }
@@ -1134,9 +1582,12 @@ impl Editor {
     /// No modo normal o cursor fica sobre um caractere (ou na coluna 0 de linha vazia).
     fn fix_cursor(&mut self) {
         self.cursor.row = self.cursor.row.min(self.last_row());
-        if self.mode == Mode::Normal {
-            let len = self.buf.line_len(self.cursor.row);
-            self.cursor.col = self.cursor.col.min(len.saturating_sub(1));
+        let len = self.buf.line_len(self.cursor.row);
+        match self.mode {
+            Mode::Normal => self.cursor.col = self.cursor.col.min(len.saturating_sub(1)),
+            // no visual o cursor pode ficar sobre a quebra de linha (col == len)
+            Mode::Visual => self.cursor.col = self.cursor.col.min(len),
+            Mode::Insert => {}
         }
     }
 }

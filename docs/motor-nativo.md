@@ -32,7 +32,9 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Registradores (`"`, `0`, `1-9`, `-`, nomeados), `p P` com contagem | idêntico |
 | Inserção (`i a I A o O`, contagem, `<CR>`, `<BS>`, autoindent, smarttab), `J r ~` | idêntico |
 | Desfazer/refazer (`u`, `<C-r>`), repetir (`.` com contagem) | 99,8% (sobra o cursor após `u` em casos raros) |
-| Visual (`v V <C-v>`), objetos de texto, busca (`/ ? n N * #`), marcas, macros (`q @`), comandos `:` | próximo |
+| Objetos de texto `iw aw iW aW ip ap i( a( ib i[ i{ iB i< i\" i' i\``, com contagem | **99,9%** (2500 casos) |
+| Visual `v` e `V` (movimentos, objetos, `d y c x X D Y C s S < > ~ u U J r o`), com as regras do Vim (cursor sobre a quebra de linha, `ip` que estende) | 99,2% (2500 casos) |
+| Visual em bloco (`<C-v>`), `p` no visual, busca (`/ ? n N * #`), marcas, macros (`q @`), comandos `:` | próximo |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Janelas/abas, explorador, busca de arquivos (ripgrep/fd como crates), git, LSP, completar, agentes | roadmap (S3, S4...) |
 | Camada de tela do app lendo o motor (em vez do Neovim) | próximo marco |

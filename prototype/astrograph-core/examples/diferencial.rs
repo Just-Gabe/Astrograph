@@ -47,9 +47,35 @@ const CORPUS: &[&[&str]] = &[
     &["árvore é verde", "日本語 text", "x"],
     &["single line only"],
     &["", ""],
+    &["say \"hello world\" and 'x y' end", "f(a, (b), c) { x } [1, 2] <t>", "  \"q1\"  \"q2\" z"],
+    &["if (x) {", "  foo(1, 2);", "  bar;", "}", "", "para two", "second line", "", "", "last para"],
+    &["one  two   three", "  lead  word", "tail ", "", "a.b-c d_e"],
 ];
 
+fn vocabulario_visual() -> Vec<&'static str> {
+    let starts = ["v", "V"];
+    let motions = [
+        "", "l", "j", "k", "w", "e", "b", "$", "0", "^", "iw", "aw", "ip", "ap", "i(", "a(", "i\"", "a\"", "}", "gg", "G", "fo", "2w", "3j", "2l", "jj", "jw", "wwe", "$j", "j$", "ob", "jol", "i{", "a{", "iW",
+    ];
+    let ops = ["d", "y", "cX<Esc>", "x", "X", "D", "Y", "C-<Esc>", "sX<Esc>", "S-<Esc>", ">", "<", "~", "u", "U", "J", "rz", "<Esc>", "2>"];
+    let mut out: Vec<&'static str> = Vec::new();
+    for s in starts {
+        for m in motions {
+            for o in ops {
+                out.push(Box::leak(format!("{s}{m}{o}").into_boxed_str()));
+            }
+        }
+    }
+    for m in ["w", "j", "$", "fo", "e", "b", "k", "0", "}", "jj", "2w", "l", "x", "dd", "p"] {
+        out.push(m);
+    }
+    out
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
+    if nome == "vis" {
+        return vocabulario_visual();
+    }
     let mov = vec![
         "h", "j", "k", "l", "w", "W", "b", "B", "e", "E", "0", "^", "$", "_", "gg", "G", "ge", "gE", "fo", "fe", "Fo", "to", "te", "To", ";", ",", "%", "{", "}", "+", "-",
         "2w", "3w", "2b", "2e", "3l", "2j", "2k", "3h", "2fo", "2$", "2G", "3G", "2}", "2{", "2ge",
@@ -64,9 +90,15 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
         "ihi<Esc>", "ahi<Esc>", "Ihi<Esc>", "Ahi<Esc>", "ohi<Esc>", "Ohi<Esc>", "3ix<Esc>", "2ay<Esc>", "ia<CR>b<Esc>", "ox<BS><BS>y<Esc>", "A<CR><Esc>", "o<Esc>", "O<Esc>", "ia<BS><Esc>",
         "i<CR>x<Esc>", "A  z<Esc>",
     ];
+    let obj = vec![
+        "diw", "daw", "diW", "daW", "ciwX<Esc>", "cawX<Esc>", "yiw", "yaw", "d2aw", "d3iw", "d2iw", "dip", "dap", "cipX<Esc>", "yip", "yap", "d2ap", "d2ip", "di(", "da(", "ci(X<Esc>",
+        "dib", "dab", "d2i(", "d2a(", "di[", "da[", "di{", "da{", "diB", "daB", "ci{X<Esc>", "d2i{", "di\"", "da\"", "ci\"X<Esc>", "di'", "da'", "yi\"", "ya\"", "d2i\"", "d2a\"", "di<", "da<",
+        "w", "e", "$", "0", "f(", "fo", "f\"", "j", "jj", "2w", "3j", "b", "ge", "}", "{", "f{", "fx",
+    ];
     let hist = vec!["u", "<C-r>", "u", ".", ".", "2u", "3."];
     match nome {
         "mov" => mov,
+        "obj" => obj,
         "op" => [mov, op].concat(),
         _ => [mov, op, ins, hist].concat(),
     }

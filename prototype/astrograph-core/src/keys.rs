@@ -8,6 +8,7 @@ pub enum Key {
     Backspace,
     Tab,
     Ctrl(char),
+    Delete,
 }
 
 impl Key {
@@ -37,6 +38,7 @@ pub fn parse_keys(s: &str) -> Vec<Key> {
                     "cr" | "enter" | "return" => Some(Key::Enter),
                     "bs" | "backspace" => Some(Key::Backspace),
                     "tab" => Some(Key::Tab),
+                    "del" | "delete" => Some(Key::Delete),
                     "lt" => Some(Key::Char('<')),
                     "space" => Some(Key::Char(' ')),
                     n if n.starts_with("c-") && n.chars().count() == 3 => Some(Key::Ctrl(n.chars().nth(2).unwrap())),
