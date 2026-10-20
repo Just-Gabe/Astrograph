@@ -167,6 +167,7 @@ pub struct Editor {
     /// executando um macro (as teclas executadas não são regravadas)
     in_macro: bool,
     last_macro: Option<char>,
+    macro_depth: usize,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -203,6 +204,7 @@ impl Editor {
             q_wait: false,
             in_macro: false,
             last_macro: None,
+            macro_depth: 0,
         }
     }
 
@@ -340,6 +342,12 @@ impl Editor {
             return;
         };
         self.last_macro = Some(r);
+        // macro que chama a si mesmo: para na profundidade 100 como erro (o Vim para no primeiro erro)
+        if self.macro_depth >= 100 {
+            self.failed = true;
+            return;
+        }
+        self.macro_depth += 1;
         let keys = macro_keys(&reg.text);
         let was = std::mem::replace(&mut self.in_macro, true);
         'fora: for _ in 0..count {
@@ -352,6 +360,7 @@ impl Editor {
             }
         }
         self.in_macro = was;
+        self.macro_depth -= 1;
     }
 
     /// O último comando falhou (a interface pode apitar). Lê e zera.

@@ -201,6 +201,25 @@ async fn diverge(lines: &[&str], toks: &[&str], cmp_reg: bool) -> Option<String>
     if why.is_empty() { None } else { Some(why.join("; ")) }
 }
 
+/// Sem `@` dentro de uma gravação aberta: macro que chama a si mesmo não termina (nem no nvim).
+fn sem_recursao(toks: &[&str]) -> bool {
+    let mut gravando = false;
+    for t in toks {
+        let completo = t.len() > 2 && t.starts_with('q') && t.ends_with('q');
+        if *t == "q" {
+            gravando = false;
+        } else if t.len() == 2 && t.starts_with('q') {
+            gravando = true;
+        } else if !completo && t.contains('@') && gravando {
+            return false;
+        }
+        if completo {
+            continue;
+        }
+    }
+    true
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -217,7 +236,10 @@ async fn main() {
     for _ in 0..casos {
         let lines = *rng.pick(CORPUS);
         let n = 1 + rng.below(4);
-        let toks: Vec<&str> = (0..n).map(|_| *rng.pick(&voc)).collect();
+        let mut toks: Vec<&str> = (0..n).map(|_| *rng.pick(&voc)).collect();
+        while !sem_recursao(&toks) {
+            toks = (0..n).map(|_| *rng.pick(&voc)).collect();
+        }
         match diverge(lines, &toks, cmp_reg).await {
             None => {
                 ok += 1;
