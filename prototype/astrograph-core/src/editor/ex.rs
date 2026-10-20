@@ -33,6 +33,10 @@ impl Editor {
             Key::Esc | Key::Ctrl('c') => self.cmdline = None,
             Key::Enter => {
                 let linha = self.cmdline.take().unwrap_or_default();
+                if !linha.is_empty() {
+                    self.last_cmdline = Some(linha.clone());
+                    self.regs.insert(':', super::Reg { text: linha.clone(), linewise: false, block: false, bwidth: 0 });
+                }
                 self.run_cmdline(&linha);
             }
             Key::Backspace => {
@@ -161,7 +165,7 @@ impl Editor {
         Some((Faixa { a, b, dado }, i))
     }
 
-    fn run_cmdline(&mut self, linha: &str) {
+    pub(super) fn run_cmdline(&mut self, linha: &str) {
         let s: Vec<char> = linha.chars().collect();
         let Some((faixa, mut i)) = self.faixa(&s) else {
             self.failed = true;
@@ -178,7 +182,7 @@ impl Editor {
         // `s/x/y/`, `g/x/d`, `>`, `<`: o nome é uma letra seguida do delimitador
         if nome.is_empty() {
             if let Some(&c) = s.get(i) {
-                if c == '>' || c == '<' {
+                if c == '>' || c == '<' || c == '&' || c == '~' {
                     nome = c.to_string();
                     i += 1;
                 }
@@ -206,8 +210,15 @@ impl Editor {
                 }
             }
             "s" | "sub" | "substitute" => {
-                self.substituir(faixa.a, faixa.b, &resto);
+                if resto.is_empty() || resto.starts_with(|c: char| c.is_ascii_alphabetic() || c == '&') {
+                    // `:s` e `:s g`: repete a última substituição
+                    self.repetir_substituicao(faixa.a, faixa.b, &resto, false);
+                } else {
+                    self.substituir(faixa.a, faixa.b, &resto);
+                }
             }
+            "&" => self.repetir_substituicao(faixa.a, faixa.b, &resto, false),
+            "~" => self.repetir_substituicao(faixa.a, faixa.b, &resto, true),
             "d" | "delete" => self.ex_apagar(faixa.a, faixa.b),
             "y" | "yank" => {
                 let texto = (faixa.a..=faixa.b).map(|r| self.buf.line(r)).collect::<Vec<_>>().join("\n");
@@ -582,6 +593,22 @@ impl Editor {
     }
 
     /// `:[faixa]s/padrão/substituição/flags`.
+    /// `:&`, `:&&`, `:~` e `:s` sem argumentos. `~` usa o último padrão de busca.
+    fn repetir_substituicao(&mut self, a: usize, b: usize, flags: &str, padrao_de_busca: bool) {
+        let Some((pat, rep, antigas)) = self.last_sub.clone() else {
+            self.failed = true;
+            return;
+        };
+        let pat = if padrao_de_busca { self.last_search.as_ref().map(|(p, _)| p.clone()).unwrap_or(pat) } else { pat };
+        let flags = flags.trim_start();
+        let flags = match flags.strip_prefix('&') {
+            Some(r) => format!("{antigas}{r}"),
+            None => flags.to_string(),
+        };
+        let d = '\u{1f}';
+        self.substituir(a, b, &format!("{d}{pat}{d}{rep}{d}{flags}"));
+    }
+
     fn substituir(&mut self, a: usize, b: usize, resto: &str) {
         let chars: Vec<char> = resto.chars().collect();
         let Some(&delim) = chars.first() else {
@@ -614,6 +641,10 @@ impl Editor {
             self.failed = true;
             return;
         }
+        if delim != '\u{1f}' {
+            self.last_sub = Some((pat.clone(), rep.clone(), flags.trim().to_string()));
+        }
+        let contar = flags.contains('n');
         let (padrao, ic_vim) = search::vim_to_regex(&pat);
         let prefixo = if (ic || ic_vim) && !cs { "(?i)" } else { "" };
         let Ok(re) = regex::Regex::new(&format!("{prefixo}{padrao}")) else {
@@ -646,6 +677,11 @@ impl Editor {
                 row += 1;
                 continue;
             }
+            if contar {
+                ultimo = Some(row);
+                row += 1;
+                continue;
+            }
             novo.push_str(&linha[pos..]);
             if !mudou {
                 self.checkpoint();
@@ -664,6 +700,7 @@ impl Editor {
             row += extra + 1;
         }
         match ultimo {
+            Some(_) if contar => {}
             Some(r) => {
                 self.cursor = Pos::new(r, self.buf.first_nonblank(r));
                 self.fix_cursor();

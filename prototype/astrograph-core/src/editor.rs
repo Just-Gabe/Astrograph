@@ -205,6 +205,9 @@ pub struct Editor {
     emptied: bool,
     /// último padrão buscado e a direção (para `n`/`N`)
     last_search: Option<(String, bool)>,
+    /// última substituição (`:s`): padrão, substituto, flags
+    last_sub: Option<(String, String, String)>,
+    last_cmdline: Option<String>,
     /// padrão do comando em execução (`/texto<CR>`)
     search_now: Option<(String, bool)>,
     /// mensagem da última busca ("search hit BOTTOM..." ou erro)
@@ -305,6 +308,8 @@ impl Editor {
             failed: false,
             emptied: false,
             last_search: None,
+            last_sub: None,
+            last_cmdline: None,
             search_now: None,
             msg: String::new(),
             vis: None,
@@ -540,6 +545,11 @@ impl Editor {
     }
 
     /// `setpcmark()`: guarda de onde o salto saiu (marca de contexto + lista de saltos).
+    /// Executa uma linha de comando `:` (usado por `&` e `@:`).
+    fn run_cmdline_ext(&mut self, l: &str) {
+        self.run_cmdline(l);
+    }
+
     fn set_pcmark(&mut self, p: Pos) {
         self.pcmark = Some(p);
         if self.jumps.len() >= 100 {
@@ -678,6 +688,19 @@ impl Editor {
 
     /// `@r`: executa o conteúdo do registrador como teclas; um comando que falha encerra o macro.
     fn run_macro(&mut self, r: char, count: usize) {
+        let r = if r == '@' && self.last_macro == Some(':') { ':' } else { r };
+        if r == ':' {
+            // `@:` repete a última linha de comando
+            let Some(l) = self.last_cmdline.clone() else {
+                self.failed = true;
+                return;
+            };
+            self.last_macro = Some(':');
+            for _ in 0..count {
+                self.run_cmdline_ext(&l);
+            }
+            return;
+        }
         let r = if r == '@' {
             match self.last_macro {
                 Some(l) => l,
@@ -1031,7 +1054,7 @@ impl Editor {
                     Key::Char(c @ ('x' | 'X' | 'D' | 'C' | 's' | 'S' | 'Y' | 'p' | 'P' | 'u' | 'J' | 'i' | 'a' | 'I' | 'A' | 'o' | 'O' | '~' | '.')) => {
                         done(Cmd::Simple(c, None))
                     }
-                    Key::Char(c @ ('v' | 'V')) => done(Cmd::Simple(c, None)),
+                    Key::Char(c @ ('v' | 'V' | '&')) => done(Cmd::Simple(c, None)),
                     Key::Char('r') => match keys.get(i) {
                         Some(Key::Char(c)) => done(Cmd::Simple('r', Some(*c))),
                         Some(_) => Parse::Invalid,
@@ -1227,6 +1250,7 @@ impl Editor {
                 }
                 _ => {}
             },
+            '&' => self.run_cmdline_ext("s"),
             '\u{f}' => self.jump_older(-(count1 as i64)),
             '\t' => self.jump_older(count1 as i64),
             'p' => self.put(true, count1, reg),
