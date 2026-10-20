@@ -77,6 +77,14 @@ enum UiCommand {
     TermSize(i64, i64),
     /// clique na barra de abas
     Tab(i64),
+    /// tamanho de cada painel (id, colunas, linhas) das janelas divididas
+    Panes(Vec<(u32, i64, i64)>),
+    /// clique (pressionar) num painel: foca e posiciona o cursor
+    PaneClick { id: u32, row: i64, col: i64 },
+    /// roda a rolagem sobre um painel, em linhas
+    PaneScroll(u32, f64),
+    /// arrasta um divisor: índice, área (x, y, w, h), espaço entre painéis, posição em pixels
+    Divisor { idx: usize, area: (f32, f32, f32, f32), gap: f32, pos: f32 },
     Focus(bool),
     Mouse {
         button: &'static str,
@@ -85,6 +93,83 @@ enum UiCommand {
         row: i64,
         col: i64,
     },
+}
+
+/// Janelas divididas: pinta cada painel na sua parte do canvas (cada um com a própria cena, e
+/// portanto as próprias animações) e, por cima, a "casca" da janela.
+#[allow(clippy::too_many_arguments)]
+fn paint_paineis(
+    shell: &mut nscene::Scene,
+    pool: &mut std::collections::HashMap<u32, nscene::Scene>,
+    c: &mut paint::Canvas,
+    vm: &nview::ViewModel,
+    now: Instant,
+    font_px: f32,
+    scale: f32,
+) -> (nscene::Frame, Vec<(u32, janelas::Rect)>, janelas::Rect, f32) {
+    use nscene::Camada;
+    let Some(layout) = vm.layout.as_ref() else { unreachable!("só com layout") };
+    let (w, h) = (c.w, c.h);
+    let area = shell.area_paineis(w as u32, h as u32);
+    let gap = shell.gap_paineis();
+    let rects = layout.rects(area, gap);
+    pool.retain(|id, _| rects.iter().any(|(i, _)| i == id));
+    c.clear(design::BG);
+    let (mut animating, mut wake) = (false, None::<Duration>);
+    let mut juntar = |f: nscene::Frame| {
+        animating |= f.animating;
+        wake = match (wake, f.wake) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    };
+    for (id, r) in &rects {
+        if !pool.contains_key(id) {
+            if let Some(sc) = nscene::Scene::new(font_px, scale) {
+                pool.insert(*id, sc);
+            }
+        }
+        let Some(sc) = pool.get_mut(id) else { continue };
+        let foco = *id == vm.pane;
+        // o painel não conhece abas, explorador, buscador nem avisos: são da casca
+        let pvm = if foco {
+            let mut v = vm.clone();
+            v.tabs.clear();
+            v.tree = None;
+            v.picker = None;
+            v.toast = None;
+            v.panes.clear();
+            v
+        } else if let Some(p) = vm.panes.iter().find(|p| p.id == *id) {
+            (*p.vm).clone()
+        } else {
+            continue;
+        };
+        let (x, y, pw, ph) = (r.x.round() as i32, r.y.round() as i32, r.w.round() as i32, r.h.round() as i32);
+        let mut sub = c.sub(x, y, pw, ph);
+        juntar(sc.paint_camada(&mut sub, &pvm, now, Camada::Painel { foco }));
+        if !foco {
+            // painéis sem o foco ficam um pouco apagados
+            let (sw, sh) = (sub.w, sub.h);
+            sub.rect(0, 0, sw, sh, design::BG, 0.28);
+        }
+    }
+    // divisores finos no espaço entre os painéis e o contorno do painel focado
+    for dv in layout.divisores(area, gap) {
+        let rc = dv.rect;
+        let (x, y, dw, dh) = match dv.dir {
+            janelas::Dir::Row => ((rc.x + rc.w / 2.0).floor() as i32, rc.y as i32, 1.max(scale as i32), rc.h as i32),
+            janelas::Dir::Col => (rc.x as i32, (rc.y + rc.h / 2.0).floor() as i32, rc.w as i32, 1.max(scale as i32)),
+        };
+        c.rect(x, y, dw, dh, design::WHITE, 0.10);
+    }
+    if rects.len() > 1 {
+        if let Some((_, r)) = rects.iter().find(|(i, _)| *i == vm.pane) {
+            c.rrect_border(r.x, r.y, r.w, r.h, 0.0, 1.0 * scale.max(1.0), design::ACCENT_SOFT, 0.35);
+        }
+    }
+    juntar(shell.paint_camada(c, vm, now, Camada::Casca));
+    (nscene::Frame { animating, wake }, rects, area, gap)
 }
 
 /// Ultima copia feita no Neovim: o sistema guarda so o texto, aqui fica o
@@ -362,7 +447,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -524,6 +609,14 @@ struct App {
     /// quando o relógio precisa ser redesenhado (virada do minuto)
     clock_next: Instant,
     last_term: (usize, usize),
+    /// janelas divididas: uma cena por painel, onde cada um foi pintado e o último tamanho enviado
+    pane_scenes: std::collections::HashMap<u32, nscene::Scene>,
+    pane_rects: Vec<(u32, janelas::Rect)>,
+    pane_area: janelas::Rect,
+    pane_gap: f32,
+    pane_sizes: Vec<(u32, i64, i64)>,
+    /// divisor sendo arrastado (índice em `Layout::divisores`)
+    drag_div: Option<usize>,
 }
 
 impl App {
@@ -575,6 +668,12 @@ impl App {
             last_vm: Arc::new(nview::ViewModel::empty()),
             clock_next: now,
             last_term: (0, 0),
+            pane_scenes: std::collections::HashMap::new(),
+            pane_rects: Vec::new(),
+            pane_area: janelas::Rect::new(0.0, 0.0, 0.0, 0.0),
+            pane_gap: 2.0,
+            pane_sizes: Vec::new(),
+            drag_div: None,
         }
     }
 
@@ -618,6 +717,33 @@ impl App {
             self.redraw_pending = true;
             window.request_redraw();
         }
+    }
+
+    /// Painel (e seu retângulo) sob o ponteiro, nas janelas divididas.
+    fn painel_sob_mouse(&self) -> Option<(u32, janelas::Rect)> {
+        let (x, y) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+        self.pane_rects.iter().find(|(_, r)| r.contains(x, y)).map(|(i, r)| (*i, *r))
+    }
+
+    fn divisor(&self, idx: usize) -> Option<janelas::Divisor> {
+        let layout = self.last_vm.layout.as_ref()?;
+        layout.divisores(self.pane_area, self.pane_gap).into_iter().find(|d| d.idx == idx)
+    }
+
+    /// Divisor perto do ponteiro (uma faixa mais larga que o desenho, para ser fácil de pegar).
+    fn divisor_sob_mouse(&self) -> Option<usize> {
+        let layout = self.last_vm.layout.as_ref()?;
+        let (x, y) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+        let folga = 4.0 * self.scale_factor();
+        layout.divisores(self.pane_area, self.pane_gap).into_iter().find_map(|d| {
+            let r = d.rect;
+            let (dentro_x, dentro_y) = (x >= r.x - folga && x < r.x + r.w + folga, y >= r.y - folga && y < r.y + r.h + folga);
+            (dentro_x && dentro_y).then_some(d.idx)
+        })
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.window.as_ref().map_or(1.0, |w| w.scale_factor() as f32)
     }
 
     fn mouse_cell(&self) -> (i64, i64) {
@@ -681,12 +807,21 @@ impl App {
         let now = Instant::now();
         let vm = shared.lock().unwrap().clone();
         let clock = self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12));
+        let scale = window.scale_factor() as f32;
+        let font_px = self.base_font * scale;
         let Some(scene) = self.scene.as_mut() else { return };
         scene.set_clock(clock);
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
+        let mut multi = None;
         let frame = {
             let mut canvas = paint::Canvas::new(&mut buffer, w, h);
-            scene.paint(&mut canvas, &vm, now)
+            if vm.layout.is_some() {
+                let (f, rects, area, gap) = paint_paineis(scene, &mut self.pane_scenes, &mut canvas, &vm, now, font_px, scale);
+                multi = Some((rects, area, gap));
+                f
+            } else {
+                scene.paint(&mut canvas, &vm, now)
+            }
         };
         buffer.present().expect("present");
         self.anim_next = frame.animating.then(|| now + ANIM_FRAME);
@@ -712,8 +847,31 @@ impl App {
             self.last_term = (tr, tc);
             let _ = self.tx.send(UiCommand::TermSize(tr as i64, tc as i64));
         }
+        // janelas divididas: cada painel informa o seu tamanho; sem elas, a área toda
+        if let Some((rects, area, gap)) = multi {
+            let mut tam = Vec::new();
+            for (id, r) in &rects {
+                let Some(sc) = self.pane_scenes.get(id) else { continue };
+                let lines = if *id == vm.pane { vm.lines } else { vm.panes.iter().find(|p| p.id == *id).map_or(1, |p| p.vm.lines) };
+                let (c, rows) = sc.tamanho_painel(r.w as u32, r.h as u32, lines);
+                tam.push((*id, c as i64, rows as i64));
+            }
+            if tam != self.pane_sizes {
+                self.pane_sizes = tam.clone();
+                let _ = self.tx.send(UiCommand::Panes(tam));
+            }
+            self.pane_rects = rects;
+            self.pane_area = area;
+            self.pane_gap = gap;
+            return;
+        }
+        // voltou a uma janela só: o tamanho dela precisa ser dito de novo
+        let estava_dividido = !self.pane_rects.is_empty();
+        self.pane_rects.clear();
+        self.pane_scenes.clear();
+        self.pane_sizes.clear();
         let dims = (lay.cols, lay.rows.floor() as usize);
-        if dims != self.last_grid {
+        if dims != self.last_grid || estava_dividido {
             self.last_grid = dims;
             let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, dims.1 as i64));
         }
@@ -1057,6 +1215,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.set_metrics(self.base_font * scale, scale);
                 }
+                self.pane_scenes.clear();
                 self.request_redraw();
             }
             WindowEvent::Focused(focused) => {
@@ -1074,6 +1233,25 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(window) = &self.window {
                     window.set_cursor_visible(true);
                 }
+                // janelas divididas: arrastar o divisor, ou mostrar que ele pode ser arrastado
+                if !self.pane_rects.is_empty() {
+                    if let Some(idx) = self.drag_div {
+                        let pos = match self.divisor(idx).map(|d| d.dir) {
+                            Some(janelas::Dir::Row) => self.mouse_pos.0 as f32,
+                            _ => self.mouse_pos.1 as f32,
+                        };
+                        let a = self.pane_area;
+                        let _ = self.tx.send(UiCommand::Divisor { idx, area: (a.x, a.y, a.w, a.h), gap: self.pane_gap, pos });
+                    } else if let Some(window) = &self.window {
+                        let icone = match self.divisor_sob_mouse().and_then(|i| self.divisor(i)).map(|d| d.dir) {
+                            Some(janelas::Dir::Row) => CursorIcon::ColResize,
+                            Some(janelas::Dir::Col) => CursorIcon::RowResize,
+                            None => CursorIcon::Text,
+                        };
+                        window.set_cursor(icone);
+                    }
+                    return;
+                }
                 // arrastar so manda evento quando muda de celula
                 if self.left_down && self.mouse_cell() != before {
                     self.send_mouse("left", "drag");
@@ -1086,7 +1264,15 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseScrollDelta::PixelDelta(p) => p.y / line_h,
                 };
                 if dy != 0.0 {
-                    let _ = self.tx.send(UiCommand::Scroll(-dy));
+                    // janelas divididas: a roda age sobre o painel sob o ponteiro
+                    match self.painel_sob_mouse() {
+                        Some((id, _)) => {
+                            let _ = self.tx.send(UiCommand::PaneScroll(id, -dy));
+                        }
+                        None => {
+                            let _ = self.tx.send(UiCommand::Scroll(-dy));
+                        }
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1117,6 +1303,37 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                if !self.pane_rects.is_empty() {
+                    // janelas divididas: o clique é da casca (abas, explorador), de um divisor ou de um painel
+                    if button != MouseButton::Left {
+                        return;
+                    }
+                    if state == ElementState::Released {
+                        self.drag_div = None;
+                        return;
+                    }
+                    let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                    if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tab_hit(mx, my)) {
+                        let _ = self.tx.send(UiCommand::Tab(i as i64));
+                        return;
+                    }
+                    if self.scene.as_ref().is_some_and(|sc| sc.in_side(mx)) {
+                        return;
+                    }
+                    if let Some(i) = self.divisor_sob_mouse() {
+                        self.drag_div = Some(i);
+                        return;
+                    }
+                    if let Some((id, r)) = self.painel_sob_mouse() {
+                        let vm = &self.last_vm;
+                        let pvm = if id == vm.pane { Some(&**vm) } else { vm.panes.iter().find(|p| p.id == id).map(|p| &*p.vm) };
+                        if let (Some(pvm), Some(sc)) = (pvm, self.pane_scenes.get(&id)) {
+                            let (row, col) = sc.hit_test(mx - r.x, my - r.y, r.w as u32, r.h as u32, pvm);
+                            let _ = self.tx.send(UiCommand::PaneClick { id, row: row as i64, col: col as i64 });
+                        }
+                    }
+                    return;
+                }
                 if button == MouseButton::Left && state == ElementState::Pressed {
                     if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tab_hit(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32)) {
                         let _ = self.tx.send(UiCommand::Tab(i as i64));
@@ -1516,4 +1733,99 @@ fn spawn_smoke(grid: Arc<Mutex<Grid>>, tx: UnboundedSender<UiCommand>, proxy: Ev
         }
         let _ = proxy.send_event(UserEvent::Quit);
     });
+}
+
+#[cfg(test)]
+mod testes_paineis {
+    use super::*;
+
+    /// Compõe `n` quadros (aplicando os tamanhos que a tela informa ao editor, como o app faz).
+    fn compor(w: &mut native::Workspace, shell: &mut nscene::Scene, pool: &mut std::collections::HashMap<u32, nscene::Scene>, largura: u32, altura: u32, t0: Instant, n: u32) -> Vec<u32> {
+        let mut buf = vec![0u32; (largura * altura) as usize];
+        for i in 0..n {
+            let vm = w.view_model();
+            let mut c = paint::Canvas::new(&mut buf, largura, altura);
+            let (_, rects, _, _) = paint_paineis(shell, pool, &mut c, &vm, t0 + Duration::from_millis(16 * i as u64), 14.0, 1.0);
+            let tam: Vec<(u32, usize, f32)> = rects
+                .iter()
+                .filter_map(|(id, r)| {
+                    let lines = if *id == vm.pane { vm.lines } else { vm.panes.iter().find(|p| p.id == *id)?.vm.lines };
+                    let (c, rows) = pool.get(id)?.tamanho_painel(r.w as u32, r.h as u32, lines);
+                    Some((*id, c, rows))
+                })
+                .collect();
+            w.tamanhos_paineis(&tam);
+        }
+        buf
+    }
+
+    fn arquivo() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("astrograph-pn-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("exemplo.rs");
+        std::fs::write(&f, "fn main() {\n    let nome = \"astrograph\";\n    println!(\"{nome}\");\n}\n\nfn soma(a: i32, b: i32) -> i32 {\n    a + b\n}\n").unwrap();
+        f
+    }
+
+    #[test]
+    fn paineis_pintam_cada_um_no_seu_retangulo_e_o_foco_se_destaca() {
+        let (Some(mut shell), true) = (nscene::Scene::new(14.0, 1.0), true) else { return };
+        let mut pool = std::collections::HashMap::new();
+        let mut w = native::Workspace::new(Some(arquivo()), ' ', Arc::new(|| {}));
+        let (largura, altura) = (1200u32, 760u32);
+        let t0 = Instant::now();
+        // uma janela só primeiro, para o `tabs_n` da casca e o tamanho existirem
+        w.feed(":vsplit<CR>");
+        w.feed(":split<CR>");
+        let buf = compor(&mut w, &mut shell, &mut pool, largura, altura, t0, 80);
+        let vm = w.view_model();
+        let rects = vm.layout.as_ref().unwrap().rects(shell.area_paineis(largura, altura), shell.gap_paineis());
+        assert_eq!(rects.len(), 3);
+        assert_eq!(pool.len(), 3, "uma cena por painel");
+        // cada painel tem texto pintado (pixels diferentes do fundo) dentro do seu retângulo
+        for (id, r) in &rects {
+            let mut diferentes = 0;
+            for y in (r.y as u32)..((r.y + r.h) as u32) {
+                for x in (r.x as u32)..((r.x + r.w) as u32) {
+                    let p = buf[(y * largura + x) as usize] & 0xffffff;
+                    if p != design::BG && p != 0 {
+                        diferentes += 1;
+                    }
+                }
+            }
+            assert!(diferentes > 1500, "painel {id} pintado ({diferentes})");
+        }
+        // os tamanhos chegaram ao editor: o painel estreito tem menos colunas que o largo
+        if let Ok(caminho) = std::env::var("ASTROGRAPH_PNG") {
+            let mut ppm = format!("P6\n{largura} {altura}\n255\n").into_bytes();
+            for p in &buf {
+                ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+            }
+            std::fs::write(format!("{caminho}.ppm"), ppm).unwrap();
+        }
+    }
+
+    #[test]
+    fn paineis_com_abas_explorador_e_terminal_pela_casca() {
+        let Some(mut shell) = nscene::Scene::new(14.0, 1.0) else { return };
+        let mut pool = std::collections::HashMap::new();
+        let f = arquivo();
+        let mut w = native::Workspace::new(Some(f.clone()), ' ', Arc::new(|| {}));
+        let t0 = Instant::now();
+        w.feed(&format!(":tabnew {}<CR>", f.display()));
+        w.feed(":vsplit<CR>");
+        w.feed(" e");
+        let buf = compor(&mut w, &mut shell, &mut pool, 1200, 760, t0, 90);
+        let vm = w.view_model();
+        assert_eq!(vm.tabs.len(), 2);
+        let area = shell.area_paineis(1200, 760);
+        assert!(area.x > 100.0 && area.y > 20.0, "explorador à esquerda e abas no topo: {area:?}");
+        if let Ok(caminho) = std::env::var("ASTROGRAPH_PNG") {
+            let mut ppm = format!("P6\n1200 760\n255\n").into_bytes();
+            for p in &buf {
+                ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+            }
+            std::fs::write(format!("{caminho}2.ppm"), ppm).unwrap();
+        }
+    }
 }

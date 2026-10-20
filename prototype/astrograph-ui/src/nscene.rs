@@ -38,6 +38,16 @@ const TOAST_MS: u128 = 3200;
 /// Altura da barra de abas (px lógicos).
 const TAB_H: f32 = 32.0;
 
+/// O que esta cena pinta: a janela toda (uma janela só), um painel de janelas divididas
+/// (conteúdo, título, pílula do focado, completar/hover) ou a "casca" por cima dos painéis
+/// (abas, explorador, terminal, buscador, paleta, avisos, relógio).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Camada {
+    Tudo,
+    Painel { foco: bool },
+    Casca,
+}
+
 pub struct Frame {
     /// ainda há animação em curso: peça outro quadro logo
     pub animating: bool,
@@ -99,6 +109,8 @@ pub struct Scene {
     term: Spring,
     /// modo zen: 0 = normal, 1 = agente em tela cheia
     zen: Spring,
+    /// camada em pintura (a barra de abas sobe quando os painéis ocupam a janela)
+    camada: Camada,
     term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
     tree_top: Spring,
@@ -176,6 +188,7 @@ impl Scene {
             side: Spring::new(0.0, 24.0, 1.0),
             term: Spring::new(0.0, 22.0, 1.0),
             zen: Spring::new(0.0, 16.0, 1.0),
+            camada: Camada::Tudo,
             term_cache: None,
             tree_cache: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
@@ -280,11 +293,30 @@ impl Scene {
             return None;
         }
         let s = self.scale;
-        let (y0, y1) = (d::M.title_h * s - 4.0 * s, d::M.title_h * s + TAB_H * s);
+        let (y0, y1) = if self.camada == Camada::Casca { (0.0, TAB_H * s) } else { (d::M.title_h * s - 4.0 * s, d::M.title_h * s + TAB_H * s) };
         if y < y0 || y > y1 {
             return None;
         }
         self.tab_rects.iter().position(|&(a, b)| x >= a && x <= b)
+    }
+
+    /// Área (pixels) onde ficam os painéis de janelas divididas: à direita do explorador, abaixo
+    /// das abas e acima do terminal.
+    pub fn area_paineis(&self, w: u32, h: u32) -> crate::janelas::Rect {
+        let x = self.side.x.max(0.0);
+        let y = if self.tabs_n >= 2 { TAB_H * self.scale } else { 0.0 };
+        crate::janelas::Rect::new(x, y, (w as f32 - x).max(0.0), (h as f32 - y - self.term.x.max(0.0)).max(0.0))
+    }
+
+    /// Espaço entre painéis.
+    pub fn gap_paineis(&self) -> f32 {
+        (2.0 * self.scale).round().max(1.0)
+    }
+
+    /// Colunas e linhas de texto de um painel de `w`×`h` pixels com `lines` linhas no buffer.
+    pub fn tamanho_painel(&self, w: u32, h: u32, lines: usize) -> (usize, f32) {
+        let lay = self.layout(w, h, lines);
+        (lay.cols, lay.rows.floor().max(3.0))
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -302,6 +334,11 @@ impl Scene {
 
     /// Pinta o quadro. `now` marca o instante do quadro.
     pub fn paint(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant) -> Frame {
+        self.paint_camada(c, vm, now, Camada::Tudo)
+    }
+
+    pub fn paint_camada(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, camada: Camada) -> Frame {
+        self.camada = camada;
         let t0 = Instant::now();
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
@@ -312,8 +349,10 @@ impl Scene {
             self.first = true;
             self.comp_reset();
         }
-        self.term.target = if vm.term.is_some() { (h * 0.36).round() } else { 0.0 };
-        self.zen.target = if vm.term.as_ref().is_some_and(|t| t.zen) { 1.0 } else { 0.0 };
+        // o terminal e o zen são da janela, não de um painel
+        let da_janela = !matches!(camada, Camada::Painel { .. });
+        self.term.target = if vm.term.is_some() && da_janela { (h * 0.36).round() } else { 0.0 };
+        self.zen.target = if vm.term.as_ref().is_some_and(|t| t.zen) && da_janela { 1.0 } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
         self.last_paint = Some(now);
@@ -342,21 +381,27 @@ impl Scene {
         }
         self.last_top = self.top.x;
 
-        c.clear(d::BG);
-        if vm.dash {
-            if self.dash_at.is_none() {
-                self.dash_at = Some(now);
-                self.ready_ms = crate::nview::T0.get().map_or(0, |t| t.elapsed().as_millis() as u32);
+        if camada != Camada::Casca {
+            c.clear(d::BG);
+            if vm.dash {
+                if self.dash_at.is_none() {
+                    self.dash_at = Some(now);
+                    self.ready_ms = crate::nview::T0.get().map_or(0, |t| t.elapsed().as_millis() as u32);
+                }
+                self.paint_dash(c, now, (w, h, s));
+            } else {
+                self.dash_at = None;
+                self.paint_content(c, vm, &lay, now);
             }
-            self.paint_dash(c, now, (w, h, s));
-        } else {
-            self.dash_at = None;
-            self.paint_content(c, vm, &lay, now);
         }
-        self.paint_side(c, (w, h, s));
-        self.paint_term(c, (w, h, s), now);
+        if !matches!(camada, Camada::Painel { .. }) {
+            self.paint_side(c, (w, h, s));
+            self.paint_term(c, (w, h, s), now);
+        }
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
-        self.paint_zen(c, (w, h, s), now);
+        if !matches!(camada, Camada::Painel { .. }) {
+            self.paint_zen(c, (w, h, s), now);
+        }
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.paint_ms = self.paint_ms.max(ms);
@@ -842,6 +887,12 @@ impl Scene {
     // ------------------------------------------------------------------
 
     fn paint_chrome(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, now: Instant, (w, h, s): (f32, f32, f32)) {
+        // a casca só pinta o que é da janela (abas e camadas por cima)
+        if self.camada == Camada::Casca {
+            self.paint_tabs(c, vm, (w, h, s));
+            self.paint_overlays(c, vm, lay, (w, h, s));
+            return;
+        }
         // título: o texto rola por baixo de um véu que se dissolve (à direita do explorador)
         let prev_clip = c.clip;
         c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, c.h);
@@ -863,9 +914,20 @@ impl Scene {
         }
 
         c.clip = prev_clip;
-        self.paint_tabs(c, vm, (w, h, s));
-        self.paint_overlays(c, vm, lay, (w, h, s));
-        self.paint_pill(c, vm, now, (w, h, s));
+        match self.camada {
+            Camada::Painel { foco } => {
+                self.paint_completion(c, vm, lay, (w, h, s));
+                self.paint_hover(c, vm, lay, (w, h, s));
+                if foco {
+                    self.paint_pill(c, vm, now, (w, h, s));
+                }
+            }
+            _ => {
+                self.paint_tabs(c, vm, (w, h, s));
+                self.paint_overlays(c, vm, lay, (w, h, s));
+                self.paint_pill(c, vm, now, (w, h, s));
+            }
+        }
     }
 
     /// Barra de abas: cada aba é uma pílula; a ativa fica em destaque e as modificadas têm um ponto.
@@ -874,7 +936,7 @@ impl Scene {
         if vm.tabs.len() < 2 {
             return;
         }
-        let y0 = d::M.title_h * s - 4.0 * s;
+        let y0 = if self.camada == Camada::Casca { 4.0 * s } else { d::M.title_h * s - 4.0 * s };
         let hh = TAB_H * s - 4.0 * s;
         let px = 12.5 * s;
         let x_ini = self.side.x.max(0.0) + 14.0 * s;
@@ -910,8 +972,10 @@ impl Scene {
         if veil > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
         }
-        self.paint_completion(c, _vm, lay, (w, h, s));
-        self.paint_hover(c, _vm, lay, (w, h, s));
+        if self.camada != Camada::Casca {
+            self.paint_completion(c, _vm, lay, (w, h, s));
+            self.paint_hover(c, _vm, lay, (w, h, s));
+        }
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));

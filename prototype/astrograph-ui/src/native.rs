@@ -1678,6 +1678,16 @@ impl Workspace {
         foco.irmao = algum;
     }
 
+    /// Rola o painel `id` (a roda do mouse age sobre o painel sob o ponteiro, sem tirar o foco).
+    pub fn rolar_painel(&mut self, id: PaneId, linhas: f32) {
+        let foco = &mut self.abas[self.ativa];
+        if foco.pane_id == id {
+            foco.scroll(linhas);
+        } else if let Some(o) = foco.splits.as_mut().and_then(|sp| sp.outros.iter_mut().find(|o| o.pane_id == id)) {
+            o.scroll(linhas);
+        }
+    }
+
     /// Tamanho de cada painel (colunas, linhas), calculado pela tela a partir do layout.
     pub fn tamanhos_paineis(&mut self, tam: &[(PaneId, usize, f32)]) {
         let foco = &mut self.abas[self.ativa];
@@ -1830,6 +1840,16 @@ pub async fn native_task(
             UiCommand::TermOut => {}
             UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
+            UiCommand::Panes(t) => {
+                let t: Vec<(PaneId, usize, f32)> = t.into_iter().map(|(id, c, r)| (id, c.max(1) as usize, r.max(1) as f32)).collect();
+                w.tamanhos_paineis(&t);
+            }
+            UiCommand::PaneClick { id, row, col } => {
+                w.focar(id);
+                w.click(row.max(0) as usize, col.max(0) as usize);
+            }
+            UiCommand::PaneScroll(id, linhas) => w.rolar_painel(id, linhas as f32),
+            UiCommand::Divisor { idx, area, gap, pos } => w.arrastar_divisor(idx, crate::janelas::Rect::new(area.0, area.1, area.2, area.3), gap, pos),
             UiCommand::Mouse { button, action, row, col, .. } => match (button, action) {
                 ("left", "press") => w.click(row.max(0) as usize, col.max(0) as usize),
                 _ => continue,
