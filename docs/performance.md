@@ -49,6 +49,16 @@ O que entrou para isso:
   busca, o explorador e executa `fd`/`rg`/`git` uma vez (no Windows, a primeira
   execução de cada um custa 120–210 ms porque o sistema e o antivírus os examinam).
   Desligue com `vim.g.astrograph_warmup = false`.
+- **Preparo em segundo plano** (`astrograph.prepare`): ao abrir, e a cada troca
+  de pasta, detecta o projeto (Cargo.toml, package.json, pyproject.toml, go.mod,
+  lua...), compila os parsers do Treesitter e instala os servidores do Mason que
+  ele pede, tudo sem avisos. Com git, roda só comandos de leitura (`status`,
+  `HEAD`, refs; com `--no-optional-locks`, nunca `fetch`). Compila o agente nativo
+  e o app em Rust quando faltam e há `cargo`. O que passar de ~0,4 s mostra um
+  ícone de carregamento no canto inferior direito, que some ao acabar. Na home e
+  na raiz do disco só os parsers base são preparados. `:Astrograph preparo` mostra
+  o estado. Desligue com `vim.g.astrograph_prepare = false` (ou só
+  `astrograph_prepare_mason` / `astrograph_prepare_native`).
 - **Buscas abrem na hora**: a janela aparece sem esperar o `fd`/`rg` responder,
   e os resultados entram conforme chegam.
 - **Janelas flutuantes mais leves**: o core não recalcula dobras nem procura

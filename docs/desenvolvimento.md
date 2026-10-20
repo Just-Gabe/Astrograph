@@ -45,6 +45,7 @@ O caminho real da config é resolvido mesmo através de junction/symlink, então
 | `agents.lua` | Detecta CLIs de IA, Ollama e modelo local (com cache) |
 | `commands.lua` | `:Astrograph atualizar / saude / agentes / atalhos / docs` |
 | `health.lua` | `:checkhealth astrograph` |
+| `prepare.lua` | Preparo em segundo plano por projeto: parsers, Mason, git, build em Rust, ícone de carregamento |
 | `warmup.lua` | Pré-aquecimento no ocioso (busca, explorador, `fd`/`rg`/`git`) |
 | `motion.lua` | Fade das janelas, explorador deslizante e `dd` animado |
 | `clipboard.lua` | Área de transferência sem espera (cópia agrupada, colar da memória) |

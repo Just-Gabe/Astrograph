@@ -12,6 +12,7 @@ nav_order: 5
 | `:Astrograph atualizar` | Baixa a versão nova (`git pull` no clone) e sincroniza os plugins com o `lazy-lock.json` |
 | `:Astrograph saude` | Abre o diagnóstico (`:checkhealth astrograph`) |
 | `:Astrograph agentes` | Mostra cada agente de IA: instalado, logado e com o chat pronto |
+| `:Astrograph preparo` | Mostra o que o preparo em segundo plano detectou (linguagens, git) e o que está rodando |
 | `:Astrograph configurar` | Instala as pontes do chat e faz os logins que faltam |
 | `:Astrograph login [agente]` | Abre o login de um agente (`claude`, `opencode`, `codex`, `gemini`) |
 | `:Astrograph agente [agente]` | Escolhe o agente de todo o modo agentic (fica salvo) |
