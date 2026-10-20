@@ -107,6 +107,10 @@ com animações próprias, todas em mola:
 - guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
 - buscador com fade, trecho que casou em destaque e seleção que desliza;
 - explorador que desliza da esquerda e empurra o texto;
+- LSP nativo (rust-analyzer, pyright, typescript-language-server, gopls, lua-language-server,
+  clangd e bash-language-server, do PATH ou do Mason): diagnósticos com sublinhado ondulado,
+  ponto na margem e mensagem ao fim da linha, `K` (hover) e `gd` (ir para a definição),
+  contagem de erros e avisos na pílula (`ASTROGRAPH_LSP=0` desliga);
 - git na margem (linha nova, alterada ou removida, ao vivo enquanto você digita, sem
   salvar) e o branch na pílula;
 - terminal nativo (`<Espaço>t`) que sobe da base, com cores e cursor, onde o agente de IA

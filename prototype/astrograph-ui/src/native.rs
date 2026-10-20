@@ -16,6 +16,7 @@ use crate::design::{classify, ModeKind};
 use crate::arvore::Arvore;
 use crate::busca;
 use crate::git;
+use crate::lsp::{self, Cliente};
 use crate::nview::{GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
 
@@ -60,6 +61,12 @@ pub struct Session {
     tree_focus: bool,
     term: Option<Term>,
     term_focus: bool,
+    lsp: Option<Cliente>,
+    lsp_rev: u64,
+    lsp_diags: std::sync::Arc<Vec<lsp::Diag>>,
+    hover_wait: Option<i64>,
+    hover_text: Option<String>,
+    def_wait: Option<i64>,
     git_branch: Option<String>,
     /// o arquivo em `HEAD` (None: fora de um repositório)
     git_base: Option<Vec<String>>,
@@ -108,6 +115,12 @@ impl Session {
             tree_focus: false,
             term: None,
             term_focus: false,
+            lsp: None,
+            lsp_rev: u64::MAX,
+            lsp_diags: std::sync::Arc::new(Vec::new()),
+            hover_wait: None,
+            hover_text: None,
+            def_wait: None,
             git_branch: None,
             git_base: None,
             git_rev: u64::MAX,
@@ -334,6 +347,119 @@ impl Session {
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // LSP
+    // ------------------------------------------------------------------
+
+    /// Liga o servidor de linguagem do arquivo (reaproveita o anterior se for o mesmo programa).
+    pub fn lsp_attach(&mut self, reuse: Option<Cliente>, old_path: Option<PathBuf>) {
+        let off = std::env::var("ASTROGRAPH_LSP").is_ok_and(|v| v == "0");
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let alvo = if off { None } else { lsp::servidor_para(&path) };
+        let (reuse_ok, mut velho) = match (reuse, &alvo) {
+            (Some(c), Some((prog, _, _))) if prog.ends_with(&c.nome) || c.nome == prog.rsplit(['/', '\\']).next().unwrap_or("") => (true, Some(c)),
+            (other, _) => (false, other),
+        };
+        if reuse_ok {
+            let mut c = velho.take().unwrap();
+            if let Some(op) = &old_path {
+                c.fechar(op);
+            }
+            let (_, _, lang) = alvo.clone().unwrap();
+            c.abrir(&path, lang, &self.ed.buf.rope.to_string());
+            self.lsp = Some(c);
+        } else if let Some((prog, args, lang)) = alvo {
+            drop(velho.take());
+            let raiz = git::raiz(path.parent().unwrap_or(&self.root)).unwrap_or_else(|| self.root.clone());
+            let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
+            match Cliente::iniciar(&prog, &args, &raiz, notify) {
+                Ok(mut c) => {
+                    c.abrir(&path, lang, &self.ed.buf.rope.to_string());
+                    self.lsp = Some(c);
+                }
+                Err(_) => self.lsp = None,
+            }
+        }
+        self.lsp_rev = self.ed.buf.rev;
+        self.lsp_diags = std::sync::Arc::new(Vec::new());
+    }
+
+    /// Manda o texto novo ao servidor e pega o que ele já respondeu.
+    fn lsp_sync(&mut self) {
+        let (Some(c), Some(path)) = (self.lsp.as_mut(), self.path.clone()) else { return };
+        if self.lsp_rev != self.ed.buf.rev {
+            self.lsp_rev = self.ed.buf.rev;
+            c.mudou(&path, &self.ed.buf.rope.to_string());
+        }
+        // diagnósticos: colunas UTF-16 -> caracteres
+        let diags = c.diagnosticos(&path);
+        if diags.as_slice() != self.lsp_diags.as_slice() || self.lsp_diags.is_empty() != diags.is_empty() {
+            let n = self.ed.buf.line_count();
+            let conv = |row: usize, col: usize| -> usize {
+                if row < n { lsp::col_chars(&self.ed.buf.line(row), col) } else { col }
+            };
+            self.lsp_diags = std::sync::Arc::new(
+                diags.into_iter().map(|d| lsp::Diag { col: conv(d.row, d.col), end_col: conv(d.end_row, d.end_col), ..d }).collect(),
+            );
+        }
+        // hover e definição pedidos
+        let (hover, def) = {
+            let st = c.estado.lock().unwrap();
+            (st.hover.clone(), st.definicao.clone())
+        };
+        if let (Some(id), Some((hid, texto))) = (self.hover_wait, hover) {
+            if id == hid {
+                self.hover_wait = None;
+                if texto.trim().is_empty() {
+                    self.say("Sem informação aqui.".into(), ToastKind::Info);
+                } else {
+                    self.hover_text = Some(texto);
+                }
+            }
+        }
+        if let (Some(id), Some((did, locs))) = (self.def_wait, def) {
+            if id == did {
+                self.def_wait = None;
+                match locs.first() {
+                    None => self.say("Definição não encontrada.".into(), ToastKind::Info),
+                    Some(l) => {
+                        let (arq, row, col16) = (l.arquivo.clone(), l.row, l.col);
+                        if Some(&arq) == self.path.as_ref() || arq.canonicalize().ok() == self.path.as_ref().and_then(|p| p.canonicalize().ok()) {
+                            let col = if row < self.ed.buf.line_count() { lsp::col_chars(&self.ed.buf.line(row), col16) } else { 0 };
+                            self.ed.set_cursor(row, col);
+                        } else {
+                            self.open_file(&arq, Some((row, 0)));
+                            if row < self.ed.buf.line_count() {
+                                let col = lsp::col_chars(&self.ed.buf.line(row), col16);
+                                self.ed.set_cursor(row, col);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn lsp_hover(&mut self) {
+        let (Some(c), Some(path)) = (self.lsp.as_ref(), self.path.as_ref()) else {
+            self.say("Sem servidor de linguagem para este arquivo.".into(), ToastKind::Info);
+            return;
+        };
+        let (r, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        self.hover_wait = Some(c.hover(path, r, lsp::col_utf16(&self.ed.buf.line(r), col) as usize));
+    }
+
+    fn lsp_definition(&mut self) {
+        let (Some(c), Some(path)) = (self.lsp.as_ref(), self.path.as_ref()) else {
+            self.say("Sem servidor de linguagem para este arquivo.".into(), ToastKind::Info);
+            return;
+        };
+        let (r, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        self.def_wait = Some(c.definicao(path, r, lsp::col_utf16(&self.ed.buf.line(r), col)));
     }
 
     // ------------------------------------------------------------------
@@ -606,6 +732,7 @@ impl Session {
         }
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
+        let (old_lsp, old_path) = (self.lsp.take(), self.path.clone());
         let (term, term_focus, term_dims, term_screen, notify) = (self.term.take(), self.term_focus, self.term_dims, self.term_screen.take(), self.notify.take());
         *self = Session::open(path);
         self.root = root;
@@ -615,6 +742,7 @@ impl Session {
         self.term_dims = term_dims;
         self.term_screen = term_screen;
         self.notify = notify;
+        self.lsp_attach(old_lsp, old_path);
         self.tree = tree;
         self.tree_focus = foco;
         self.resize(cols, rows);
@@ -629,6 +757,16 @@ impl Session {
     }
 
     fn key_inner(&mut self, k: Key) {
+        // qualquer tecla fecha o hover aberto
+        self.hover_text = None;
+        let livre = self.cmdline.is_none() && self.ed.mode() == Mode::Normal;
+        if livre && !self.ed.has_pending() && k == Key::Char('K') {
+            return self.lsp_hover();
+        }
+        if livre && self.ed.showcmd() == "g" && k == Key::Char('d') {
+            self.ed.feed(&[Key::Esc]);
+            return self.lsp_definition();
+        }
         if let Some(cmd) = self.cmdline.as_mut() {
             match k {
                 Key::Esc | Key::Ctrl('c') => self.cmdline = None,
@@ -808,6 +946,7 @@ impl Session {
 
     pub fn view_model(&mut self) -> ViewModel {
         self.term_refresh();
+        self.lsp_sync();
         self.follow_cursor();
         self.refresh_syntax();
         self.seq += 1;
@@ -904,6 +1043,8 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
+            diags: self.lsp_diags.clone(),
+            hover: self.hover_text.clone(),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
             term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus }),
             tree: self.tree.as_ref().map(|t| {
@@ -957,6 +1098,7 @@ pub async fn native_task(
     s.set_notify(std::sync::Arc::new(move || {
         let _ = tx.send(crate::UiCommand::TermOut);
     }));
+    s.lsp_attach(None, None);
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => s.feed(&k),
@@ -1198,6 +1340,51 @@ mod testes {
         // desfazer tudo: some
         s.feed("uu");
         assert!(modelo(&mut s).git.unwrap().signs.is_empty());
+    }
+
+    #[test]
+    fn lsp_mostra_diagnosticos_hover_e_vai_para_a_definicao() {
+        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let d = projeto("lsp");
+        let script = d.join("falso.py");
+        std::fs::write(&script, crate::lsp::testes::FALSO).unwrap();
+        std::env::set_var("ASTROGRAPH_LSP_CMD", format!("{py} {}", script.display()));
+        let alvo = d.join("src/alfa.rs");
+        let mut s = Session::open(&alvo);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.lsp_attach(None, None);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let m = loop {
+            let m = modelo(&mut s);
+            if !m.diags.is_empty() || std::time::Instant::now() > fim {
+                break m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        };
+        assert_eq!(m.diags.len(), 1, "diagnóstico do servidor chegou");
+        assert_eq!((m.diags[0].row, m.diags[0].col, m.diags[0].severity), (0, 1, 2));
+        // K abre o hover; qualquer tecla fecha
+        s.feed("K");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let hover = loop {
+            let m = modelo(&mut s);
+            if m.hover.is_some() || std::time::Instant::now() > fim {
+                break m.hover;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        };
+        assert_eq!(hover.as_deref(), Some("fn x()\ndoc da x"));
+        s.feed("l");
+        assert!(modelo(&mut s).hover.is_none());
+        // gd: o falso devolve outro arquivo (que não existe): abre como novo, na linha 4
+        s.feed("gd");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while std::time::Instant::now() < fim && modelo(&mut s).name == "alfa.rs" {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(modelo(&mut s).name, "alvo x.rs");
+        std::env::remove_var("ASTROGRAPH_LSP_CMD");
     }
 
     #[test]

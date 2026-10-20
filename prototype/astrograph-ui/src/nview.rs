@@ -110,6 +110,10 @@ pub struct ViewModel {
     pub tree: Option<TreeView>,
     pub term: Option<TermView>,
     pub git: Option<GitView>,
+    /// diagnósticos do servidor de linguagem para o arquivo (colunas em caracteres)
+    pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
+    /// texto do hover (`K`) aberto
+    pub hover: Option<String>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -140,6 +144,8 @@ impl ViewModel {
             tree: None,
             term: None,
             git: None,
+            diags: std::sync::Arc::new(Vec::new()),
+            hover: None,
             flash: None,
         }
     }

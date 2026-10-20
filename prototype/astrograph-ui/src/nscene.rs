@@ -442,8 +442,10 @@ impl Scene {
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
+        let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
+        let diag_w = if nerr + nwarn == 0 { 0.0 } else { 18.0 * s + 1.0 + 18.0 * s + (if nerr > 0 { self.ui.measure(&nerr.to_string(), 12.0 * s) + 18.0 * s } else { 0.0 }) + (if nwarn > 0 { self.ui.measure(&nwarn.to_string(), 12.0 * s) + 18.0 * s } else { 0.0 }) };
         let branch_w = vm.git.as_ref().map_or(0.0, |g| 18.0 * s + 1.0 + 18.0 * s + self.ui.measure(&g.branch, 12.0 * s));
-        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + branch_w + 18.0 * s;
+        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + diag_w + branch_w + 18.0 * s;
     }
 
     fn snap_all(&mut self, vm: &ViewModel, lay: &Layout) {
@@ -659,6 +661,10 @@ impl Scene {
                 }
                 v += wd;
             }
+            // diagnósticos do servidor de linguagem: sublinhado, ponto na margem e mensagem ao fim da linha
+            if !vm.diags.is_empty() {
+                self.paint_diags_row(c, vm, lay, row, &line, y, ra);
+            }
         }
 
         // cursor: de volta à área do editor
@@ -796,6 +802,7 @@ impl Scene {
         if veil > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
         }
+        self.paint_hover(c, _vm, lay, (w, h, s));
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
@@ -901,6 +908,91 @@ impl Scene {
         c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
     }
 
+    fn paint_diags_row(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, row: usize, line: &str, y: f32, ra: f32) {
+        let s = self.scale;
+        let cor = |sev: u8| match sev {
+            1 => d::RED,
+            2 => d::ORANGE,
+            3 => d::ACCENT,
+            _ => d::DIM,
+        };
+        let n = line.chars().count();
+        let mut mais_grave: Option<&crate::lsp::Diag> = None;
+        for dg in vm.diags.iter().filter(|dg| dg.row <= row && row <= dg.end_row) {
+            if mais_grave.is_none_or(|m| dg.severity < m.severity) {
+                mais_grave = Some(dg);
+            }
+            let a = if dg.row == row { dg.col } else { 0 };
+            let b = if dg.end_row == row { dg.end_col } else { n };
+            let b = if b <= a { (a + 1).min(n.max(a + 1)) } else { b };
+            let (va, vb) = (vcol_start(line, a.min(n)), vcol_start(line, b.min(n)).max(vcol_start(line, a.min(n)) + 1));
+            let x0 = lay.text_x + (va as f32 - vm.left as f32) * lay.char_w;
+            let x1 = lay.text_x + (vb as f32 - vm.left as f32) * lay.char_w;
+            // sublinhado ondulado: segmentos curtos alternando a altura
+            let base = y + lay.line_h - 4.0 * s;
+            let mut x = x0;
+            let mut k = 0;
+            while x < x1 {
+                let w = (3.0 * s).min(x1 - x);
+                c.rect(x as i32, (base + if k % 2 == 0 { 0.0 } else { 1.5 * s }) as i32, w.ceil() as i32, 1.max((1.2 * s) as i32), cor(dg.severity), 0.95 * ra);
+                x += 3.0 * s;
+                k += 1;
+            }
+        }
+        let Some(m) = mais_grave else { return };
+        // ponto na margem, à esquerda do número
+        c.rrect(lay.gutter_x - 22.0 * s, y + lay.line_h / 2.0 - 3.0 * s, 6.0 * s, 6.0 * s, 3.0 * s, cor(m.severity), 0.95 * ra);
+        // mensagem ao fim da linha (a da linha do cursor, mais forte)
+        let fim = lay.text_x + (vcol_start(line, n) as f32 - vm.left as f32) * lay.char_w + 28.0 * s;
+        let maxw = c.w as f32 - fim - 24.0 * s;
+        if maxw > 60.0 * s {
+            let px = self.font_px * 0.88;
+            let msg: String = m.message.lines().next().unwrap_or("").chars().collect();
+            let mut texto = String::new();
+            let mut wsum = 0.0;
+            for ch in msg.chars() {
+                let cw = self.ui.advance(ch, px);
+                if wsum + cw > maxw {
+                    texto.push('…');
+                    break;
+                }
+                wsum += cw;
+                texto.push(ch);
+            }
+            let al = if row == vm.cursor.0 { 0.95 } else { 0.55 };
+            c.text(&mut self.ui, px, fim, y + lay.line_h / 2.0 + px * 0.34, &texto, cor(m.severity), al * ra);
+        }
+    }
+
+    /// Hover (`K`): cartão com o texto do servidor, abaixo do cursor.
+    fn paint_hover(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        let Some(texto) = vm.hover.clone() else { return };
+        let px = self.font_px * 0.92;
+        let linhas: Vec<&str> = texto.lines().take(14).collect();
+        let largura = linhas.iter().map(|l| l.chars().take(90).map(|ch| self.ui.advance(ch, px)).sum::<f32>()).fold(0.0, f32::max).clamp(160.0 * s, 620.0 * s);
+        let (cw, ch_h) = (largura + 32.0 * s, linhas.len() as f32 * px * 1.5 + 22.0 * s);
+        let x = (self.cur_x.x).min(w - cw - 16.0 * s).max(self.side.x + 12.0 * s);
+        let mut y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x) + lay.line_h + 6.0 * s;
+        if y + ch_h > h - d::M.bottom * s {
+            y = (lay.text_y + self.cur_y.x - (self.top.x - self.over.x) - ch_h - 6.0 * s).max(lay.text_y);
+        }
+        c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch_h, 12.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch_h, 12.0 * s, 1.0, d::WHITE, 0.10);
+        for (i, l) in linhas.iter().enumerate() {
+            let mut pen = x + 16.0 * s;
+            let base = y + 12.0 * s + px * 1.5 * (i as f32 + 0.75);
+            for ch in l.chars().take(90) {
+                let a = self.ui.advance(ch, px);
+                if pen + a > x + cw - 12.0 * s {
+                    break;
+                }
+                c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+                pen += a;
+            }
+        }
+    }
+
     /// Relógio pequeno e discreto no canto inferior direito, alinhado à pílula.
     fn paint_clock(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
         let Some(text) = self.clock.clone() else { return };
@@ -948,10 +1040,27 @@ impl Scene {
             let pw2 = self.ui.measure(&pos, ppx).max(34.0 * s);
             c.text(&mut self.ui_semi, ppx, cx + pw2 + 14.0 * s, mid + ppx * 0.36, &vm.showcmd, d::ACCENT, fade);
         }
+        let pos_w = self.ui.measure(&pos, ppx).max(34.0 * s);
+        let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
+        let mut ex = cx + pos_w + show_w;
+        let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
+        if nerr + nwarn > 0 {
+            ex += 18.0 * s;
+            c.rect(ex as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+            ex += 18.0 * s;
+            for (n, cor) in [(nerr, d::RED), (nwarn, d::ORANGE)] {
+                if n == 0 {
+                    continue;
+                }
+                c.rrect(ex, mid - 3.5 * s, 7.0 * s, 7.0 * s, 3.5 * s, cor, fade);
+                let t = n.to_string();
+                c.text(&mut self.ui, ppx, ex + 12.0 * s, mid + ppx * 0.36, &t, d::TEXT, fade);
+                ex += 12.0 * s + self.ui.measure(&t, ppx) + 18.0 * s;
+            }
+            ex -= 18.0 * s;
+        }
         if let Some(g) = &vm.git {
-            let pos_w = self.ui.measure(&pos, ppx).max(34.0 * s);
-            let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
-            let bx = cx + pos_w + show_w + 18.0 * s;
+            let bx = ex + 18.0 * s;
             c.rect(bx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
             c.text(&mut self.ui, ppx, bx + 18.0 * s, mid + ppx * 0.36, &g.branch, d::DIM, fade);
         }

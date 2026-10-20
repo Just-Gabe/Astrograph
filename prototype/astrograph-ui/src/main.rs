@@ -19,6 +19,7 @@ mod arvore;
 mod busca;
 mod design;
 mod native;
+mod lsp;
 mod nscene;
 mod nview;
 mod paint;
