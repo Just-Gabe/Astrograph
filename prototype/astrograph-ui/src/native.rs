@@ -105,6 +105,8 @@ struct Picker {
 }
 
 const PICK_LINHAS: usize = 10;
+/// linhas do trecho mostrado ao lado do buscador
+const PICK_PREVIEW: usize = 12;
 
 struct Comp {
     start: Pos,
@@ -1886,6 +1888,34 @@ impl Session {
         self.pick_refresh();
     }
 
+    /// Trecho do arquivo do item selecionado (buscador de arquivos, recentes e texto).
+    fn pick_preview(&self, p: &Picker) -> Vec<(usize, String, bool)> {
+        use std::io::Read;
+        let Some(it) = p.items.get(p.sel) else { return Vec::new() };
+        let (rel, alvo) = match p.kind {
+            PickKind::Arquivos | PickKind::Recentes => (it.text.clone(), None),
+            PickKind::Texto => match it.text.rsplit_once(':') {
+                Some((f, l)) => (f.to_string(), l.parse::<usize>().ok().map(|n| n.saturating_sub(1))),
+                None => return Vec::new(),
+            },
+            PickKind::Lista => return Vec::new(),
+        };
+        let caminho = if std::path::Path::new(&rel).is_absolute() { std::path::PathBuf::from(&rel) } else { self.root.join(&rel) };
+        let Ok(f) = std::fs::File::open(&caminho) else { return Vec::new() };
+        let mut buf = Vec::new();
+        if f.take(96 * 1024).read_to_end(&mut buf).is_err() || buf.contains(&0) {
+            return Vec::new();
+        }
+        let texto = String::from_utf8_lossy(&buf);
+        let linhas: Vec<&str> = texto.lines().collect();
+        let n = PICK_PREVIEW;
+        let ini = match alvo {
+            Some(a) => a.saturating_sub(n / 2).min(linhas.len().saturating_sub(n)),
+            None => 0,
+        };
+        linhas.iter().enumerate().skip(ini).take(n).map(|(i, l)| (i + 1, l.chars().take(200).collect(), alvo == Some(i))).collect()
+    }
+
     fn pick_refresh(&mut self) {
         self.pick_atualizar(false);
     }
@@ -2615,6 +2645,7 @@ impl Session {
                 sel: p.sel.min(PICK_LINHAS - 1),
                 total: p.total,
                 buscando: p.listando.is_some() || p.buscando.is_some(),
+                preview: self.pick_preview(p),
             }),
             hits,
             hits_id,
@@ -3464,6 +3495,25 @@ mod testes {
         assert!(modelo(&mut s).tree.unwrap().focus);
         s.feed(" e");
         assert!(modelo(&mut s).tree.is_none());
+    }
+
+    #[test]
+    fn buscador_mostra_o_trecho_do_arquivo_selecionado() {
+        let d = projeto("preview");
+        std::fs::write(d.join("src/alfa.rs"), (1..=40).map(|i| format!("linha {i}\n")).collect::<String>()).unwrap();
+        let mut s = Session::new("x\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        s.feed(" ffalfa");
+        let pv = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| !p.items.is_empty() && !p.preview.is_empty())).picker.unwrap();
+        assert_eq!(pv.preview.len(), PICK_PREVIEW);
+        assert_eq!(pv.preview[0], (1, "linha 1".to_string(), false), "arquivo sem posição começa no topo");
+        // na busca de texto o trecho se centra na linha achada e a marca
+        s.feed("<Esc> fwlinha 30");
+        let pv = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| p.items.iter().any(|i| i.text.ends_with(":30")) && !p.preview.is_empty())).picker.unwrap();
+        let marcada: Vec<_> = pv.preview.iter().filter(|l| l.2).collect();
+        assert_eq!(marcada.len(), 1);
+        assert_eq!(marcada[0].1, "linha 30");
     }
 
     #[test]

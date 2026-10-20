@@ -790,8 +790,9 @@ impl Renderer {
             lay.ox as i32 + col * cw + cw / 2,
             lay.oy as i32 + row as i32 * ch + ch / 2,
         );
-        let radius = (ch as f32 * 0.26).max(3.0);
         let dot = ((ch / 9).max(2)) as i32;
+        // o anel cabe na coluna (fontes estreitas): senão suja a vizinha
+        let radius = (ch as f32 * 0.26).min((cw - dot) as f32 / 2.0 - 0.5).max(2.0);
         let (fg, bg) = (grid.default_fg, grid.default_bg);
         for i in 0..8usize {
             let age = (frame + 8 - i) % 8; // 0 = ponto da frente
@@ -1536,6 +1537,13 @@ fn resolve_styles(cfg: &FontCfg) -> Result<Vec<FontEntry>, String> {
         names.push(primary.to_string());
         names.push(alt.to_string());
         names.push(fallback.to_string());
+        // sem a Nerd Font nem o Consolas (Linux/macOS): uma monoespaçada do sistema
+        let extras: [&[&str]; 3] = [
+            &["JetBrainsMono-Regular.ttf", "DejaVuSansMono.ttf", "LiberationMono-Regular.ttf", "UbuntuMono-R.ttf", "NotoSansMono-Regular.ttf"],
+            &["JetBrainsMono-Bold.ttf", "DejaVuSansMono-Bold.ttf", "LiberationMono-Bold.ttf", "UbuntuMono-B.ttf", "NotoSansMono-Bold.ttf"],
+            &["JetBrainsMono-Italic.ttf", "DejaVuSansMono-Oblique.ttf", "LiberationMono-Italic.ttf", "UbuntuMono-RI.ttf"],
+        ];
+        names.extend(extras[i].iter().map(|n| n.to_string()));
         let entry = load_font(&names)
             .ok_or_else(|| format!("nao encontrei nenhuma fonte para o estilo {} ({primary})", i))?;
         styles.push(entry);
@@ -1559,6 +1567,10 @@ fn load_font(names: &[String]) -> Option<FontEntry> {
             if let Some(entry) = read_font(&dir.join(name)) {
                 return Some(entry);
             }
+        }
+        // subpastas (Linux: /usr/share/fonts/truetype/dejavu/...)
+        if let Some(entry) = find_font_file(&[name.as_str()]).and_then(|p| read_font(&p)) {
+            return Some(entry);
         }
     }
     None

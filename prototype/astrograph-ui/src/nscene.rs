@@ -1625,7 +1625,11 @@ impl Scene {
         let e = ease_out_expo(p);
         let rows = pv.items.len().max(1) as f32;
         let (pw0, row_h, head) = ((680.0 * s).min(w - 48.0 * s), 34.0 * s, 56.0 * s);
-        let ph0 = head + rows * row_h + 18.0 * s;
+        // o trecho usa o que sobra da altura da janela (no máximo as linhas que vieram)
+        let sobra = h - h * 0.14 - head - rows * row_h - 18.0 * s - 40.0 * s - 22.0 * s;
+        let prev_n = ((sobra / (self.font_px * 1.3)).floor().max(0.0) as usize).min(pv.preview.len());
+        let prev_h = if prev_n < 3 { 0.0 } else { prev_n as f32 * self.font_px * 1.3 + 22.0 * s };
+        let ph0 = head + rows * row_h + 18.0 * s + prev_h;
         let k = lerp(0.965, 1.0, e);
         let (pw, ph) = (pw0 * k, ph0 * k);
         let x = ((w - pw) / 2.0).round();
@@ -1689,6 +1693,38 @@ impl Scene {
                         break;
                     }
                     c.glyph_at(&mut self.mono, fpx * 0.92, pen, base, ch, d::DIM, a);
+                    pen += cw;
+                }
+            }
+        }
+        // trecho do arquivo selecionado, embaixo da lista
+        if prev_h > 0.0 {
+            let py = top + rows * row_h * k + 8.0 * s;
+            c.rect((x + 14.0 * s) as i32, py as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::WHITE, 0.07 * p);
+            let lh = self.font_px * 1.3;
+            let ppx = self.font_px * 0.92;
+            let gutter = pv.preview.get(prev_n.saturating_sub(1)).map_or(2, |l| l.0.to_string().len()).max(2);
+            for (i, (num, texto, hit)) in pv.preview.iter().take(prev_n).enumerate() {
+                let ly = py + 10.0 * s + i as f32 * lh;
+                if *hit {
+                    c.rrect(x + 10.0 * s, ly, pw - 20.0 * s, lh, 5.0 * s, d::ACCENT, 0.2 * p);
+                }
+                let base = ly + lh * 0.5 + ppx * 0.34;
+                let mut pen = x + 22.0 * s;
+                for ch in format!("{num:>gutter$}  ").chars() {
+                    let cw = self.mono.advance(ch, ppx);
+                    c.glyph_at(&mut self.mono, ppx, pen, base, ch, d::FAINT, p * 0.9);
+                    pen += cw;
+                }
+                let maxx = x + pw - 22.0 * s;
+                for ch in texto.chars() {
+                    let cw = if ch == '\t' { self.mono.advance(' ', ppx) * 4.0 } else { self.mono.advance(ch, ppx) };
+                    if pen + cw > maxx {
+                        break;
+                    }
+                    if ch != '\t' {
+                        c.glyph_at(&mut self.mono, ppx, pen, base, ch, if *hit { d::TEXT_STRONG } else { d::DIM }, p * 0.95);
+                    }
                     pen += cw;
                 }
             }

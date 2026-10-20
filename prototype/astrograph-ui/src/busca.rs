@@ -292,6 +292,30 @@ pub fn pontuar(busca: &[char], texto: &str) -> Option<(i32, Vec<usize>)> {
             break;
         }
     }
+    // trecho contíguo igual à busca (`main` em `main.rs`) vale mais que letras espalhadas
+    let n = busca.len();
+    if t.len() >= n {
+        let casa = |i: usize| (0..n).all(|k| eq(t[i + k], busca[k]));
+        let achou = (nome_ini..=t.len() - n).find(|&i| casa(i)).or_else(|| (0..=t.len() - n).find(|&i| casa(i)));
+        if let Some(i) = achou {
+            let mut nota = 10 * n as i32 + 14 * (n as i32 - 1) + 80;
+            if i == 0 || matches!(t[i - 1], '/' | '_' | '-' | '.' | ' ') {
+                nota += 18;
+            }
+            if i >= nome_ini {
+                nota += 30;
+                // o nome do arquivo (sem extensão) é exatamente a busca
+                let fim = t[nome_ini..].iter().position(|&c| c == '.').map_or(t.len(), |d| nome_ini + d);
+                if i == nome_ini && i + n == fim {
+                    nota += 40;
+                }
+            }
+            nota -= (t.len() as i32 - n as i32) / 8;
+            if melhor.as_ref().is_none_or(|(m, _)| nota > *m) {
+                melhor = Some((nota, (i..i + n).collect()));
+            }
+        }
+    }
     melhor
 }
 
@@ -388,6 +412,15 @@ pub fn lembrar(caminho: &Path) {
 
 #[cfg(test)]
 mod testes {
+    #[test]
+    fn trecho_contiguo_ganha_de_letras_espalhadas() {
+        let itens: Vec<String> = ["core/lua/plugins/mason-tool-installer.lua", "src/main.rs", "docs/maintenance.md", "src/domain.rs"].iter().map(|s| s.to_string()).collect();
+        let r = fuzzy("main", &itens, 10);
+        assert_eq!(itens[r[0].item], "src/main.rs", "nome igual à busca vem primeiro");
+        assert_eq!(r[0].pos, vec![4, 5, 6, 7]);
+        assert_eq!(itens[r[1].item], "docs/maintenance.md");
+    }
+
     use super::*;
 
     fn tmp(nome: &str) -> PathBuf {

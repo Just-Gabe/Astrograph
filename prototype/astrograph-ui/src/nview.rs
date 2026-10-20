@@ -41,6 +41,8 @@ pub struct PickerView {
     pub total: usize,
     /// ainda procurando em segundo plano
     pub buscando: bool,
+    /// trecho do arquivo do item selecionado: (número da linha, texto, em destaque)
+    pub preview: Vec<(usize, String, bool)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
