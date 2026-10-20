@@ -160,6 +160,13 @@ pub struct Editor {
     vis: Option<VState>,
     /// o operador em curso vem do modo visual (sem a regra de `d` multilinha → linhas)
     visual_op: bool,
+    /// gravando macro: (registrador, teclas)
+    rec: Option<(char, Vec<Key>)>,
+    /// apertou `q` e espera o nome do registrador
+    q_wait: bool,
+    /// executando um macro (as teclas executadas não são regravadas)
+    in_macro: bool,
+    last_macro: Option<char>,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -192,6 +199,10 @@ impl Editor {
             msg: String::new(),
             vis: None,
             visual_op: false,
+            rec: None,
+            q_wait: false,
+            in_macro: false,
+            last_macro: None,
         }
     }
 
@@ -278,8 +289,69 @@ impl Editor {
     /// como na digitação de verdade.
     pub fn feed(&mut self, keys: &[Key]) {
         for &k in keys {
-            self.key(k);
+            self.feed_one(k);
         }
+    }
+
+    /// Entrada digitada: aqui o `q` liga/desliga a gravação e as teclas são gravadas.
+    fn feed_one(&mut self, k: Key) {
+        if self.mode == Mode::Normal && self.pending.is_empty() {
+            if self.q_wait {
+                self.q_wait = false;
+                match k {
+                    Key::Char(r) if r.is_ascii_alphanumeric() || r == '"' => self.rec = Some((r, Vec::new())),
+                    _ => self.failed = true,
+                }
+                return;
+            }
+            if k == Key::Char('q') {
+                if let Some((r, keys)) = self.rec.take() {
+                    let text = macro_text(&keys);
+                    let lower = r.to_ascii_lowercase();
+                    let prev = if r.is_ascii_uppercase() { self.regs.get(&lower).map(|x| x.text.clone()) } else { None };
+                    self.regs.insert(lower, Reg { text: prev.unwrap_or_default() + &text, linewise: false });
+                } else {
+                    self.q_wait = true;
+                }
+                return;
+            }
+        }
+        if let Some((_, ks)) = self.rec.as_mut() {
+            ks.push(k);
+        }
+        self.key(k);
+    }
+
+    /// `@r`: executa o conteúdo do registrador como teclas; um comando que falha encerra o macro.
+    fn run_macro(&mut self, r: char, count: usize) {
+        let r = if r == '@' {
+            match self.last_macro {
+                Some(l) => l,
+                None => {
+                    self.failed = true;
+                    return;
+                }
+            }
+        } else {
+            r
+        };
+        let Some(reg) = self.regs.get(&r.to_ascii_lowercase()).cloned() else {
+            self.failed = true;
+            return;
+        };
+        self.last_macro = Some(r);
+        let keys = macro_keys(&reg.text);
+        let was = std::mem::replace(&mut self.in_macro, true);
+        'fora: for _ in 0..count {
+            for &k in &keys {
+                self.failed = false;
+                self.key(k);
+                if self.failed {
+                    break 'fora;
+                }
+            }
+        }
+        self.in_macro = was;
     }
 
     /// O último comando falhou (a interface pode apitar). Lê e zera.
@@ -420,6 +492,11 @@ impl Editor {
                         Some(_) => Parse::Invalid,
                         None => Parse::Incomplete,
                     },
+                    Key::Char('@') => match keys.get(i) {
+                        Some(Key::Char(c)) => done(Cmd::Simple('@', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
                     Key::Ctrl('r') => done(Cmd::Simple('R', None)),
                     _ => Parse::Invalid,
                 },
@@ -436,7 +513,7 @@ impl Editor {
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
             Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V'),
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@'),
         };
         self.search_now = p.search.clone();
         // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
@@ -527,6 +604,7 @@ impl Editor {
             'J' => {
                 self.join(count1.max(2));
             }
+            '@' => self.run_macro(arg.unwrap(), count1),
             'r' => self.replace_chars(arg.unwrap(), count1),
             '~' => self.toggle_case(count1),
             'i' | 'a' | 'I' | 'A' | 'o' | 'O' => self.start_insert(c, count1),
@@ -1784,6 +1862,36 @@ impl Editor {
             Mode::Insert => {}
         }
     }
+}
+
+/// Teclas gravadas -> texto do registrador (como o Vim: `<Esc>` é ^[, `<CR>` é ^M).
+fn macro_text(keys: &[Key]) -> String {
+    keys.iter()
+        .map(|k| match *k {
+            Key::Char(c) => c,
+            Key::Esc => '\x1b',
+            Key::Enter => '\r',
+            Key::Backspace => '\x7f',
+            Key::Tab => '\t',
+            Key::Ctrl(c) => ((c.to_ascii_lowercase() as u8) & 0x1f) as char,
+            Key::Delete => '\u{e000}',
+        })
+        .collect()
+}
+
+/// Texto do registrador -> teclas.
+fn macro_keys(text: &str) -> Vec<Key> {
+    text.chars()
+        .map(|c| match c {
+            '\x1b' => Key::Esc,
+            '\r' | '\n' => Key::Enter,
+            '\x7f' | '\x08' => Key::Backspace,
+            '\t' => Key::Tab,
+            '\u{e000}' => Key::Delete,
+            c if (c as u32) < 0x20 => Key::Ctrl((c as u8 + 0x60) as char),
+            c => Key::Char(c),
+        })
+        .collect()
 }
 
 /// Padrão de um movimento `/texto<CR>` / `?texto<CR>` (as teclas começam na barra).

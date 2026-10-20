@@ -80,7 +80,34 @@ fn vocabulario_busca() -> Vec<&'static str> {
     ]
 }
 
+fn vocabulario_macro() -> Vec<&'static str> {
+    vec![
+        "qa", "qb", "q", "@a", "@b", "@@", "2@a", "3@b", "qaxq", "qadwjq", "qaA;<Esc>jq", "qbI#<Esc>q", "qaq", "qaj0q", "qbjq", "qaiX<Esc>q", "qAdwq",
+        "x", "dw", "j", "k", "w", "b", "iX<Esc>", "A.<Esc>", "dd", "p", "u", ".", "3@a", "0", "$", "G", "gg", "J", "ddp", "yyp", "cwY<Esc>", "ve<Esc>",
+    ]
+}
+
+fn vocabulario_marcas() -> Vec<&'static str> {
+    vec![
+        "ma", "mb", "'a", "'b", "`a", "`b", "d'a", "d`a", "y'a", "y`a", "c'aX<Esc>", "c`aX<Esc>", "''", "``", "d''", "y``", "gg", "G", "3G", "2j", "3k", "w", "e", "$", "0", "fo", "}", "{",
+        "dd", "p", "P", "x", "u", ".", "ohi<Esc>", "Ohi<Esc>", "J", "ddp", "yyp", "3dd", "maj", "mbjj", "jma", "kmb", "v'a<Esc>", "d%", "/o<CR>", "n", "'<", "`>", "v<Esc>", "jv<Esc>",
+    ]
+}
+
+fn vocabulario_vp() -> Vec<&'static str> {
+    vec![
+        "yw", "yy", "yiw", "yj", "y$", "yG", "dw", "dd", "x", "D", "vp", "vP", "Vp", "VP", "viwp", "viwP", "vep", "vjp", "vlp", "V2jp", "vawp", "v$p", "vgp", "vip", "Vjp", "vp.", "p", "P",
+        "w", "e", "b", "j", "k", "$", "0", "G", "gg", "2w", "3j", "fo", "u", ".", "yyp", "ve<Esc>", "v<Esc>",
+    ]
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
+    match nome {
+        "mac" => return vocabulario_macro(),
+        "marc" => return vocabulario_marcas(),
+        "vp" => return vocabulario_vp(),
+        _ => {}
+    }
     if nome == "bus" {
         return vocabulario_busca();
     }
@@ -124,7 +151,7 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
         vim.fn.writefile(lines, tmp)
         vim.cmd('silent edit! ' .. vim.fn.fnameescape(tmp))
         vim.api.nvim_win_set_cursor(0, { 1, 0 })
-        for _, r in ipairs({ '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) do vim.fn.setreg(r, '') end
+        for _, r in ipairs({ 'a', 'b', 'c', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) do vim.fn.setreg(r, '') end
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), 'xt', false)
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nxt', false)
         local c = vim.api.nvim_win_get_cursor(0)
