@@ -87,13 +87,14 @@ rodar `nvim`.
 
 Uma janela própria em Rust ([`prototype/astrograph-ui`](prototype/astrograph-ui)),
 com dois motores: o Neovim (padrão) e o **motor nativo em Rust, sem Neovim**
-(`ASTROGRAPH_ENGINE=native astrograph-ui [arquivo]`), que reproduz os atalhos do
+(`ASTROGRAPH_ENGINE=native astrograph-ui [arquivo]`, ou `[engine] native = true` no
+`config.toml` da UI para abrir sempre nele), que reproduz os atalhos do
 Vim e é testado contra o Neovim de verdade (mais de 1000 sequências de teclas).
 Cobre movimentos, operadores, objetos de texto, modo visual, busca, registradores,
 desfazer/refazer, comandos `:w :q :wq :e`, macros (`q`, `@`), um **buscador próprio** (com a tecla líder,
 `<Espaço>` por padrão: `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, sem `fd`/`ripgrep`) e um
-**explorador de arquivos** (`<Espaço>e`); o restante (visual em bloco, marcas,
-`:s`, git, LSP) ainda é do Neovim. A tecla líder é configurável
+**explorador de arquivos** (`<Espaço>e`); abas (`:tabnew`, `gt`/`gT`, `:tabc`, barra de abas clicável, o buscador e o explorador abrem em aba); o
+restante (janelas divididas) ainda é do Neovim. A tecla líder é configurável
 (`[keys] leader = ","` no `config.toml` da UI); o app mostra o nome da tecla
 escolhida (por exemplo `<Espaço>f` ou `<,>f` enquanto você digita o atalho).
 
@@ -106,7 +107,19 @@ com animações próprias, todas em mola:
 - paleta de comandos com fade, avisos que deslizam, pílula de modo na base;
 - guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
 - buscador com fade, trecho que casou em destaque e seleção que desliza;
-- explorador que desliza da esquerda e empurra o texto.
+- explorador que desliza da esquerda e empurra o texto;
+- LSP nativo (rust-analyzer, pyright, typescript-language-server, gopls, lua-language-server,
+  clangd e bash-language-server, do PATH ou do Mason): diagnósticos com sublinhado ondulado,
+  ponto na margem e mensagem ao fim da linha, `K` (hover), `gd` (ir para a definição) e completar ao digitar (`Tab` aceita, `<C-n>`/`<C-p>`
+  navegam),
+  contagem de erros e avisos na pílula (`ASTROGRAPH_LSP=0` desliga);
+- git na margem (linha nova, alterada ou removida, ao vivo enquanto você digita, sem
+  salvar) e o branch na pílula;
+- terminal nativo (`<Espaço>t`) que sobe da base, com cores e cursor, onde o agente de IA
+  instalado (claude, opencode, codex ou gemini) roda via `<Espaço>Al`; `<C-\><C-n>` devolve o
+  teclado ao texto e `<Espaço>T` fecha;
+- relógio pequeno no canto inferior direito (também no app com Neovim), útil em tela
+  cheia; `[clock] enabled = false` desliga e `hour12 = true` mostra `3:07 PM`.
 
 Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.
 

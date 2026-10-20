@@ -12,7 +12,7 @@ use astrograph_core::VKind;
 
 use crate::anim::{ease_out_cubic, ease_out_expo, lerp, mix_color, Chase, Spring};
 use crate::design::{self as d, Cls, ModeKind};
-use crate::nview::{PickerView, ToastKind, TreeView, ViewModel};
+use crate::nview::{PickerView, TermView, ToastKind, TreeView, ViewModel};
 use crate::paint::{Canvas, Font, INTER_REGULAR, INTER_SEMIBOLD};
 
 const MONO_NAMES: &[&str] = &[
@@ -28,7 +28,15 @@ const MONO_ITALIC: &[&str] = &["JetBrainsMonoNerdFontMono-Italic.ttf", "JetBrain
 const MONO_BOLD: &[&str] = &["JetBrainsMonoNerdFontMono-Bold.ttf", "JetBrainsMonoNLNerdFont-Bold.ttf", "JetBrainsMono-Bold.ttf", "consolab.ttf", "DejaVuSansMono-Bold.ttf"];
 
 /// Quanto tempo o aviso fica na tela.
+/// largura máxima (colunas), e margens (px lógicos) do modo zen
+const ZEN_COLS: usize = 100;
+const ZEN_PAD_X: f32 = 24.0;
+const ZEN_TOP: f32 = 64.0;
+const ZEN_BOTTOM: f32 = 56.0;
+
 const TOAST_MS: u128 = 3200;
+/// Altura da barra de abas (px lógicos).
+const TAB_H: f32 = 32.0;
 
 pub struct Frame {
     /// ainda há animação em curso: peça outro quadro logo
@@ -84,13 +92,21 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    tabs_n: usize,
+    doc_seen: u64,
+    tab_rects: Vec<(f32, f32)>,
     side: Spring,
+    term: Spring,
+    /// modo zen: 0 = normal, 1 = agente em tela cheia
+    zen: Spring,
+    term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
     tree_top: Spring,
     tree_sel: Spring,
     pick: Chase,
     pick_sel: Spring,
     pick_cache: Option<PickerView>,
+    clock: Option<String>,
     dash_at: Option<Instant>,
     ready_ms: u32,
     hit_id: u64,
@@ -154,13 +170,20 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            tabs_n: 0,
+            doc_seen: 0,
+            tab_rects: Vec::new(),
             side: Spring::new(0.0, 24.0, 1.0),
+            term: Spring::new(0.0, 22.0, 1.0),
+            zen: Spring::new(0.0, 16.0, 1.0),
+            term_cache: None,
             tree_cache: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
             tree_sel: Spring::new(0.0, 34.0, 1.0),
             pick: Chase::new(0.0, 18.0),
             pick_sel: Spring::new(0.0, 36.0, 1.0),
             pick_cache: None,
+            clock: None,
             dash_at: None,
             ready_ms: 0,
             hit_id: 0,
@@ -211,10 +234,57 @@ impl Scene {
         let gutter_w = digits * gch;
         let text_x = (gutter_x + gutter_w + 18.0 * s).round();
         let text_x_final = (d::M.pad_x * s + sx_final + gutter_w + 18.0 * s).round();
-        let text_y = (d::M.title_h * s).round();
-        let area_h = h as f32 - text_y - d::M.bottom * s;
+        // com duas ou mais abas, a barra de abas fica entre o título e o texto
+        let text_y = (d::M.title_h * s + if self.tabs_n >= 2 { TAB_H * s } else { 0.0 }).round();
+        let area_h = h as f32 - text_y - d::M.bottom * s - self.term.target.max(0.0);
         let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
+    }
+
+    /// Hora para o canto inferior direito (`None` desliga o relógio).
+    pub fn set_clock(&mut self, text: Option<String>) {
+        self.clock = text;
+    }
+
+    /// Linhas e colunas do painel do terminal para uma janela `w`×`h` (pixels).
+    pub fn term_dims(&self, w: u32, h: u32) -> (usize, usize) {
+        let s = self.scale;
+        if self.zen.target > 0.5 {
+            let (rows, cols) = self.zen_grid(w as f32, h as f32);
+            return (rows, cols);
+        }
+        let rows = (((h as f32 * 0.36) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
+        let cols = (((w as f32 - self.side.target.max(0.0)) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
+        (rows, cols)
+    }
+
+    /// Linhas e colunas da coluna do modo zen: estreita para ler bem, centrada, com respiro em volta.
+    fn zen_grid(&self, w: f32, h: f32) -> (usize, usize) {
+        let s = self.scale;
+        let cols = (((w - 2.0 * (ZEN_PAD_X + 28.0) * s) / self.char_w).floor() as usize).clamp(20, ZEN_COLS);
+        let rows = (((h - (ZEN_TOP + ZEN_BOTTOM) * s - 2.0 * 24.0 * s) / self.line_h).floor() as usize).max(3);
+        (rows, cols)
+    }
+
+    fn comp_reset(&mut self) {
+        self.flash_at = None;
+        self.shift.snap(0.0);
+        self.over.snap(0.0);
+        self.fade.v = 1.0;
+        self.hit_fade.v = 0.0;
+    }
+
+    /// Clique na barra de abas: qual aba (se houver).
+    pub fn tab_hit(&self, x: f32, y: f32) -> Option<usize> {
+        if self.tabs_n < 2 {
+            return None;
+        }
+        let s = self.scale;
+        let (y0, y1) = (d::M.title_h * s - 4.0 * s, d::M.title_h * s + TAB_H * s);
+        if y < y0 || y > y1 {
+            return None;
+        }
+        self.tab_rects.iter().position(|&(a, b)| x >= a && x <= b)
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -235,6 +305,15 @@ impl Scene {
         let t0 = Instant::now();
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
+        self.tabs_n = vm.tabs.len();
+        // outro documento (aba nova, arquivo trocado): recomeça sem animar a viagem do cursor
+        if vm.doc_id != self.doc_seen {
+            self.doc_seen = vm.doc_id;
+            self.first = true;
+            self.comp_reset();
+        }
+        self.term.target = if vm.term.is_some() { (h * 0.36).round() } else { 0.0 };
+        self.zen.target = if vm.term.as_ref().is_some_and(|t| t.zen) { 1.0 } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
         self.last_paint = Some(now);
@@ -244,7 +323,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.term, &mut self.zen, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -275,7 +354,9 @@ impl Scene {
             self.paint_content(c, vm, &lay, now);
         }
         self.paint_side(c, (w, h, s));
+        self.paint_term(c, (w, h, s), now);
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
+        self.paint_zen(c, (w, h, s), now);
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.paint_ms = self.paint_ms.max(ms);
@@ -354,6 +435,9 @@ impl Scene {
             self.mode = vm.mode;
             self.mode_label = vm.mode.label().to_string();
         }
+        if let Some(tv) = &vm.term {
+            self.term_cache = Some(tv.clone());
+        }
         // explorador: a largura desliza; a janela de itens alimenta a seleção
         match &vm.tree {
             Some(tv) => {
@@ -418,7 +502,10 @@ impl Scene {
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
-        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + 18.0 * s;
+        let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
+        let diag_w = if nerr + nwarn == 0 { 0.0 } else { 18.0 * s + 1.0 + 18.0 * s + (if nerr > 0 { self.ui.measure(&nerr.to_string(), 12.0 * s) + 18.0 * s } else { 0.0 }) + (if nwarn > 0 { self.ui.measure(&nwarn.to_string(), 12.0 * s) + 18.0 * s } else { 0.0 }) };
+        let branch_w = vm.git.as_ref().map_or(0.0, |g| 18.0 * s + 1.0 + 18.0 * s + self.ui.measure(&g.branch, 12.0 * s));
+        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + diag_w + branch_w + 18.0 * s;
     }
 
     fn snap_all(&mut self, vm: &ViewModel, lay: &Layout) {
@@ -468,7 +555,7 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = [&self.term, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -486,6 +573,10 @@ impl Scene {
         }
         let flash = self.flash_at.is_some();
         let intro = vm.dash && self.dash_at.is_some_and(|t| now.saturating_duration_since(t).as_millis() < 700);
+        if self.clock.is_some() {
+            let d = crate::relogio::ate_proximo_minuto();
+            wake = Some(wake.map_or(d, |w| w.min(d)));
+        }
         Frame { animating: springs || chases || mode_anim || flash || intro, wake }
     }
 
@@ -497,10 +588,11 @@ impl Scene {
         let s = self.scale;
         let (w, h) = (c.w as f32, c.h as f32);
         let top_px = self.top.x - self.over.x;
-        let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
+        // o painel do terminal (quando sobe) é o novo fundo da área do texto
+        let clip_bottom = (h - d::M.bottom * s * 0.55 - self.term.x.max(0.0)) as i32;
         // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
         // sem invadir o título nem a base, mesmo quando a mola passa do alvo
-        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s - self.term.x.max(0.0)) as i32);
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
@@ -580,6 +672,19 @@ impl Scene {
                 let vx = lay.text_x + (vcol_start(&l, mc) as f32 - vm.left as f32) * lay.char_w;
                 c.rrect(vx - 1.0 * s, y + 2.0, lay.char_w + 2.0 * s, lay.line_h - 4.0, 4.0 * s, d::ACCENT, 0.30);
             }
+            // sinais do git na margem: barra verde (nova), laranja (alterada), traço vermelho (removida acima)
+            if let Some(g) = &vm.git {
+                let i = g.signs.partition_point(|&(r, _)| r < row);
+                for &(r, k) in g.signs[i..].iter().take_while(|&&(r, _)| r == row) {
+                    let _ = r;
+                    let sx = lay.gutter_x - 10.0 * s;
+                    match k {
+                        crate::git::Sign::Added => c.rrect(sx, y + 3.0 * s, 3.0 * s, lay.line_h - 6.0 * s, 1.5 * s, d::GREEN, 0.9),
+                        crate::git::Sign::Changed => c.rrect(sx, y + 3.0 * s, 3.0 * s, lay.line_h - 6.0 * s, 1.5 * s, d::ORANGE, 0.9),
+                        crate::git::Sign::Removed => c.rrect(sx - 1.0 * s, y - 1.0 * s, 7.0 * s, 2.5 * s, 1.0 * s, d::RED, 0.9),
+                    }
+                }
+            }
             let ra = if row >= self.fade_rows.0 && row < self.fade_rows.1 { self.fade.v.clamp(0.0, 1.0) } else { 1.0 };
             // número da linha
             let num = (row + 1).to_string();
@@ -616,6 +721,10 @@ impl Scene {
                 }
                 v += wd;
             }
+            // diagnósticos do servidor de linguagem: sublinhado, ponto na margem e mensagem ao fim da linha
+            if !vm.diags.is_empty() {
+                self.paint_diags_row(c, vm, lay, row, &line, y, ra);
+            }
         }
 
         // cursor: de volta à área do editor
@@ -642,7 +751,7 @@ impl Scene {
             let line = vm.line(row);
             let len = line.chars().count();
             let (a, b) = match kind {
-                VKind::Line => (0, vcol_start(&line, len) + 1),
+                VKind::Line | VKind::Block => (0, vcol_start(&line, len) + 1),
                 VKind::Char => {
                     let a = if row == lo.0 { vcol_start(&line, lo.1.min(len)) } else { 0 };
                     let b = if row == hi.0 { vcol_cursor(&line, hi.1.min(len.saturating_sub(1))) + 1 } else { vcol_start(&line, len) + 1 };
@@ -658,7 +767,15 @@ impl Scene {
 
     fn paint_selection(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, kind: VKind, lo: (usize, usize), hi: (usize, usize), top_px: f32, alpha: f32) {
         let s = self.scale;
-        for row in lo.0..=hi.0.min(vm.lines.saturating_sub(1)) {
+        // bloco: um retângulo de colunas visuais entre os dois cantos
+        let bloco = (kind == VKind::Block).then(|| {
+            let (la, lb) = (vm.line(lo.0), vm.line(hi.0));
+            let ini = vcol_start(&la, lo.1).min(vcol_start(&lb, hi.1));
+            let fim = (vcol_cursor(&la, lo.1) + 1).max(vcol_cursor(&lb, hi.1) + 1);
+            (ini, fim)
+        });
+        let (r0, r1) = (lo.0.min(hi.0), lo.0.max(hi.0));
+        for row in r0..=r1.min(vm.lines.saturating_sub(1)) {
             let y = lay.text_y + row as f32 * lay.line_h - top_px;
             if y + lay.line_h < 0.0 || y > c.h as f32 {
                 continue;
@@ -666,6 +783,10 @@ impl Scene {
             let line = vm.line(row);
             let len = line.chars().count();
             let (a, b) = match kind {
+                VKind::Block => {
+                    let (ini, fim) = bloco.unwrap();
+                    (ini, if vm.sel_eol { vcol_start(&line, len).max(ini) + 1 } else { fim })
+                }
                 VKind::Line => (0, vcol_start(&line, len) + 1),
                 VKind::Char => {
                     let a = if row == lo.0 { vcol_start(&line, lo.1.min(len)) } else { 0 };
@@ -687,7 +808,8 @@ impl Scene {
     fn paint_cursor(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, top_px: f32, now: Instant) {
         let s = self.scale;
         let (alpha, _) = self.blink(now);
-        if vm.cmd.is_some() {
+        // o cursor do texto some enquanto o teclado está no terminal
+        if vm.cmd.is_some() || vm.term.as_ref().is_some_and(|t| t.focus) {
             return;
         }
         let x = self.cur_x.x;
@@ -741,16 +863,55 @@ impl Scene {
         }
 
         c.clip = prev_clip;
+        self.paint_tabs(c, vm, (w, h, s));
         self.paint_overlays(c, vm, lay, (w, h, s));
         self.paint_pill(c, vm, now, (w, h, s));
     }
 
+    /// Barra de abas: cada aba é uma pílula; a ativa fica em destaque e as modificadas têm um ponto.
+    fn paint_tabs(&mut self, c: &mut Canvas, vm: &ViewModel, (w, _h, s): (f32, f32, f32)) {
+        self.tab_rects.clear();
+        if vm.tabs.len() < 2 {
+            return;
+        }
+        let y0 = d::M.title_h * s - 4.0 * s;
+        let hh = TAB_H * s - 4.0 * s;
+        let px = 12.5 * s;
+        let x_ini = self.side.x.max(0.0) + 14.0 * s;
+        c.rect(x_ini as i32 - 14 * s as i32, (y0 + hh + 2.0 * s) as i32, (w - x_ini) as i32 + 14, 1.max(s as i32), d::WHITE, 0.06);
+        let mut x = x_ini;
+        for (i, t) in vm.tabs.iter().enumerate() {
+            let nome: String = t.name.chars().take(26).collect();
+            let tw = self.ui_semi.measure(&nome, px);
+            let pw = tw + 36.0 * s + if t.modified { 12.0 * s } else { 0.0 };
+            if x + pw > w - 12.0 * s {
+                break;
+            }
+            let ativa = i == vm.tab_active;
+            if ativa {
+                c.rrect(x, y0, pw, hh, 9.0 * s, d::SURFACE_HI, 0.95);
+                c.rrect_border(x, y0, pw, hh, 9.0 * s, 1.0, d::WHITE, 0.09);
+            }
+            let base = y0 + hh / 2.0 + px * 0.36;
+            let cor = if ativa { d::TEXT_STRONG } else { d::DIM };
+            c.text(&mut self.ui_semi, px, x + 18.0 * s, base, &nome, cor, 1.0);
+            if t.modified {
+                c.rrect(x + 18.0 * s + tw + 6.0 * s, base - 8.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
+            }
+            self.tab_rects.push((x, x + pw));
+            x += pw + 6.0 * s;
+        }
+    }
+
     fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        self.paint_clock(c, (w, h, s));
         // escurece o fundo atrás da paleta
         let veil = self.cmd.v.max(self.pick.v);
         if veil > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
         }
+        self.paint_completion(c, _vm, lay, (w, h, s));
+        self.paint_hover(c, _vm, lay, (w, h, s));
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
@@ -856,6 +1017,155 @@ impl Scene {
         c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
     }
 
+    fn paint_diags_row(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, row: usize, line: &str, y: f32, ra: f32) {
+        let s = self.scale;
+        let cor = |sev: u8| match sev {
+            1 => d::RED,
+            2 => d::ORANGE,
+            3 => d::ACCENT,
+            _ => d::DIM,
+        };
+        let n = line.chars().count();
+        let mut mais_grave: Option<&crate::lsp::Diag> = None;
+        for dg in vm.diags.iter().filter(|dg| dg.row <= row && row <= dg.end_row) {
+            if mais_grave.is_none_or(|m| dg.severity < m.severity) {
+                mais_grave = Some(dg);
+            }
+            let a = if dg.row == row { dg.col } else { 0 };
+            let b = if dg.end_row == row { dg.end_col } else { n };
+            let b = if b <= a { (a + 1).min(n.max(a + 1)) } else { b };
+            let (va, vb) = (vcol_start(line, a.min(n)), vcol_start(line, b.min(n)).max(vcol_start(line, a.min(n)) + 1));
+            let x0 = lay.text_x + (va as f32 - vm.left as f32) * lay.char_w;
+            let x1 = lay.text_x + (vb as f32 - vm.left as f32) * lay.char_w;
+            // sublinhado ondulado: segmentos curtos alternando a altura
+            let base = y + lay.line_h - 4.0 * s;
+            let mut x = x0;
+            let mut k = 0;
+            while x < x1 {
+                let w = (3.0 * s).min(x1 - x);
+                c.rect(x as i32, (base + if k % 2 == 0 { 0.0 } else { 1.5 * s }) as i32, w.ceil() as i32, 1.max((1.2 * s) as i32), cor(dg.severity), 0.95 * ra);
+                x += 3.0 * s;
+                k += 1;
+            }
+        }
+        let Some(m) = mais_grave else { return };
+        // ponto na margem, à esquerda do número
+        c.rrect(lay.gutter_x - 22.0 * s, y + lay.line_h / 2.0 - 3.0 * s, 6.0 * s, 6.0 * s, 3.0 * s, cor(m.severity), 0.95 * ra);
+        // mensagem ao fim da linha (a da linha do cursor, mais forte)
+        let fim = lay.text_x + (vcol_start(line, n) as f32 - vm.left as f32) * lay.char_w + 28.0 * s;
+        let maxw = c.w as f32 - fim - 24.0 * s;
+        if maxw > 60.0 * s {
+            let px = self.font_px * 0.88;
+            let msg: String = m.message.lines().next().unwrap_or("").chars().collect();
+            let mut texto = String::new();
+            let mut wsum = 0.0;
+            for ch in msg.chars() {
+                let cw = self.ui.advance(ch, px);
+                if wsum + cw > maxw {
+                    texto.push('…');
+                    break;
+                }
+                wsum += cw;
+                texto.push(ch);
+            }
+            let al = if row == vm.cursor.0 { 0.95 } else { 0.55 };
+            c.text(&mut self.ui, px, fim, y + lay.line_h / 2.0 + px * 0.34, &texto, cor(m.severity), al * ra);
+        }
+    }
+
+    /// Completar: lista abaixo da palavra, com o trecho digitado em destaque e a seleção que desliza.
+    fn paint_completion(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        let Some(cv) = &vm.completion else { return };
+        let px = self.font_px;
+        let row_h = 27.0 * s;
+        let linha = vm.line(cv.anchor.0);
+        let ax = lay.text_x + (vcol_start(&linha, cv.anchor.1) as f32 - vm.left as f32) * lay.char_w - 38.0 * s;
+        let cur_top = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
+        let maior = cv.items.iter().map(|i| i.label.chars().count() as f32 * lay.char_w + if i.detail.is_empty() { 0.0 } else { self.ui.measure(&i.detail.chars().take(28).collect::<String>(), 11.5 * s) + 28.0 * s }).fold(0.0, f32::max);
+        let cw = (maior + 74.0 * s).clamp(240.0 * s, 560.0 * s);
+        let ch = cv.items.len() as f32 * row_h + 12.0 * s;
+        let x = ax.min(w - cw - 12.0 * s).max(self.side.x + 8.0 * s);
+        let mut y = cur_top + lay.line_h + 4.0 * s;
+        if y + ch > h - d::M.bottom * s {
+            y = (cur_top - ch - 4.0 * s).max(lay.text_y);
+        }
+        c.shadow(x, y, cw, ch, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch, 12.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch, 12.0 * s, 1.0, d::WHITE, 0.10);
+        c.rrect(x + 5.0 * s, y + 6.0 * s + cv.sel as f32 * row_h, cw - 10.0 * s, row_h, 8.0 * s, d::ACCENT, 0.30);
+        for (i, it) in cv.items.iter().enumerate() {
+            let base = y + 6.0 * s + i as f32 * row_h + row_h / 2.0 + px * 0.34;
+            // distintivo do tipo: quadrado colorido com a inicial
+            let (letra, cor) = match it.kind {
+                2 | 3 | 4 => ('ƒ', d::PURPLE),
+                5 | 10 => ('p', d::ORANGE),
+                6 => ('v', d::ACCENT),
+                7 | 8 | 22 => ('T', d::GREEN),
+                9 => ('M', d::DIM),
+                14 => ('k', d::RED),
+                15 => ('s', d::DIM),
+                _ => ('a', d::DIM),
+            };
+            let bx = x + 12.0 * s;
+            c.rrect(bx, base - px * 0.34 - 8.0 * s, 16.0 * s, 16.0 * s, 4.0 * s, cor, 0.22);
+            let lw = self.ui_semi.measure(&letra.to_string(), 10.5 * s);
+            c.text(&mut self.ui_semi, 10.5 * s, bx + (16.0 * s - lw) / 2.0, base - px * 0.34 + 3.5 * s, &letra.to_string(), cor, 1.0);
+            let mut pen = bx + 26.0 * s;
+            for (j, ch) in it.label.chars().enumerate() {
+                let col = if it.hits.contains(&j) { d::ACCENT_SOFT } else if i == cv.sel { d::TEXT_STRONG } else { d::TEXT };
+                c.glyph_at(&mut self.mono, px, pen, base, ch, col, 1.0);
+                pen += lay.char_w;
+            }
+            if !it.detail.is_empty() {
+                let det: String = it.detail.chars().take(28).collect();
+                let dw = self.ui.measure(&det, 11.5 * s);
+                if pen + 16.0 * s < x + cw - dw - 12.0 * s {
+                    c.text(&mut self.ui, 11.5 * s, x + cw - dw - 14.0 * s, base - 1.0 * s, &det, d::DIM, 0.9);
+                }
+            }
+        }
+    }
+
+    /// Hover (`K`): cartão com o texto do servidor, abaixo do cursor.
+    fn paint_hover(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        let Some(texto) = vm.hover.clone() else { return };
+        let px = self.font_px * 0.92;
+        let linhas: Vec<&str> = texto.lines().take(14).collect();
+        let largura = linhas.iter().map(|l| l.chars().take(90).map(|ch| self.ui.advance(ch, px)).sum::<f32>()).fold(0.0, f32::max).clamp(160.0 * s, 620.0 * s);
+        let (cw, ch_h) = (largura + 32.0 * s, linhas.len() as f32 * px * 1.5 + 22.0 * s);
+        let x = (self.cur_x.x).min(w - cw - 16.0 * s).max(self.side.x + 12.0 * s);
+        let mut y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x) + lay.line_h + 6.0 * s;
+        if y + ch_h > h - d::M.bottom * s {
+            y = (lay.text_y + self.cur_y.x - (self.top.x - self.over.x) - ch_h - 6.0 * s).max(lay.text_y);
+        }
+        c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
+        c.rrect(x, y, cw, ch_h, 12.0 * s, d::SURFACE_HI, 0.98);
+        c.rrect_border(x, y, cw, ch_h, 12.0 * s, 1.0, d::WHITE, 0.10);
+        for (i, l) in linhas.iter().enumerate() {
+            let mut pen = x + 16.0 * s;
+            let base = y + 12.0 * s + px * 1.5 * (i as f32 + 0.75);
+            for ch in l.chars().take(90) {
+                let a = self.ui.advance(ch, px);
+                if pen + a > x + cw - 12.0 * s {
+                    break;
+                }
+                c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+                pen += a;
+            }
+        }
+    }
+
+    /// Relógio pequeno e discreto no canto inferior direito, alinhado à pílula.
+    fn paint_clock(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let Some(text) = self.clock.clone() else { return };
+        let px = 12.5 * s;
+        let tw = self.ui.measure(&text, px);
+        let x = (w - d::M.pad_x * s - tw).round();
+        // mesma linha da pílula: centro a 37 px (em escala 1) da borda de baixo
+        let mid = h - 20.0 * s - 17.0 * s;
+        c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::DIM, 0.85);
+    }
+
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
         let ph = 34.0 * s;
         let pw = self.pill_w.x;
@@ -892,6 +1202,30 @@ impl Scene {
             let pw2 = self.ui.measure(&pos, ppx).max(34.0 * s);
             c.text(&mut self.ui_semi, ppx, cx + pw2 + 14.0 * s, mid + ppx * 0.36, &vm.showcmd, d::ACCENT, fade);
         }
+        let pos_w = self.ui.measure(&pos, ppx).max(34.0 * s);
+        let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
+        let mut ex = cx + pos_w + show_w;
+        let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
+        if nerr + nwarn > 0 {
+            ex += 18.0 * s;
+            c.rect(ex as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+            ex += 18.0 * s;
+            for (n, cor) in [(nerr, d::RED), (nwarn, d::ORANGE)] {
+                if n == 0 {
+                    continue;
+                }
+                c.rrect(ex, mid - 3.5 * s, 7.0 * s, 7.0 * s, 3.5 * s, cor, fade);
+                let t = n.to_string();
+                c.text(&mut self.ui, ppx, ex + 12.0 * s, mid + ppx * 0.36, &t, d::TEXT, fade);
+                ex += 12.0 * s + self.ui.measure(&t, ppx) + 18.0 * s;
+            }
+            ex -= 18.0 * s;
+        }
+        if let Some(g) = &vm.git {
+            let bx = ex + 18.0 * s;
+            c.rect(bx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+            c.text(&mut self.ui, ppx, bx + 18.0 * s, mid + ppx * 0.36, &g.branch, d::DIM, fade);
+        }
     }
 
     fn paint_palette(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
@@ -923,6 +1257,118 @@ impl Scene {
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+    }
+
+    /// Terminal: painel que sobe da base, com a tela do pty em células da fonte do código.
+    fn paint_term(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32), now: Instant) {
+        let ph = self.term.x;
+        if ph < 2.0 {
+            if self.term.target < 1.0 {
+                self.term_cache = None;
+            }
+            return;
+        }
+        let Some(tv) = self.term_cache.clone() else { return };
+        let x0 = self.side.x.max(0.0);
+        let y1 = h - d::M.bottom * s;
+        let y0 = (y1 - ph).round();
+        let prev = c.clip;
+        c.set_clip(x0 as i32, y0 as i32, w as i32, y1 as i32);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::BG, 1.0);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::SURFACE, 0.9);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::WHITE, if tv.focus { 0.16 } else { 0.08 });
+        self.paint_term_cells(c, &tv, x0 + 14.0 * s, y0 + 12.0 * s, y1, w, 1.0, now);
+        c.clip = prev;
+    }
+
+    /// Modo zen: o editor some num véu e o agente ocupa uma coluna centrada, num cartão
+    /// suave. Entra com fade e sobe devagar; sai fazendo o caminho inverso.
+    fn paint_zen(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32), now: Instant) {
+        let z = self.zen.x.clamp(0.0, 1.0);
+        if z < 0.01 {
+            return;
+        }
+        let Some(tv) = self.term_cache.clone() else { return };
+        let e = ease_out_expo(z);
+        // véu: apaga o editor e deixa só um brilho fraco no meio
+        c.rect(0, 0, c.w, c.h, d::BG, 0.97 * e);
+        let (rows, cols) = self.zen_grid(w, h);
+        let (cw, lh) = (self.char_w, self.line_h);
+        let (gw, gh) = (cols as f32 * cw, rows as f32 * lh);
+        let pad = 28.0 * s;
+        let (cardw, cardh) = (gw + 2.0 * pad, gh + 2.0 * 24.0 * s);
+        let rise = (1.0 - e) * 18.0 * s;
+        let x = ((w - cardw) / 2.0).round();
+        let y = (((h - cardh) / 2.0) + (ZEN_TOP - ZEN_BOTTOM) * s * 0.5 + rise).round();
+        c.shadow(x, y, cardw, cardh, 22.0 * s, 60.0 * s, 24.0 * s, d::BLACK, 0.55 * e);
+        c.rrect(x, y, cardw, cardh, 22.0 * s, d::SURFACE, 0.55 * e);
+        c.rrect_border(x, y, cardw, cardh, 22.0 * s, 1.0, d::WHITE, if tv.focus { 0.10 } else { 0.05 } * e);
+        // título discreto acima do cartão e dica de saída abaixo
+        let tpx = 12.0 * s;
+        let titulo = "AGENTE";
+        let tw = self.ui_semi.measure(titulo, tpx);
+        c.text(&mut self.ui_semi, tpx, ((w - tw) / 2.0).round(), y - 18.0 * s, titulo, d::DIM, 0.9 * e);
+        let dica = "Ctrl-\\  Ctrl-n  volta ao editor";
+        let dpx = 11.5 * s;
+        let dw = self.ui.measure(dica, dpx);
+        c.text(&mut self.ui, dpx, ((w - dw) / 2.0).round(), y + cardh + 26.0 * s, dica, d::FAINT, 0.9 * e);
+        let prev = c.clip;
+        c.set_clip(x as i32, y as i32, (x + cardw) as i32, (y + cardh) as i32);
+        self.paint_term_cells(c, &tv, x + pad, y + 24.0 * s, y + cardh - 24.0 * s, x + cardw - pad + cw, e, now);
+        c.clip = prev;
+    }
+
+    /// Células do terminal a partir de (`left`, `top`); `k` é a opacidade (fade do zen).
+    #[allow(clippy::too_many_arguments)]
+    fn paint_term_cells(&mut self, c: &mut Canvas, tv: &TermView, left: f32, top: f32, y1: f32, xmax: f32, k: f32, now: Instant) {
+        let (px, lh, cw) = (self.font_px, self.line_h, self.char_w);
+        let s = self.scale;
+        for (r, row) in tv.screen.rows.iter().enumerate() {
+            let y = top + r as f32 * lh;
+            if y + lh > y1 {
+                break;
+            }
+            for (cidx, cell) in row.iter().enumerate() {
+                let x = left + cidx as f32 * cw;
+                if x + cw > xmax {
+                    break;
+                }
+                if let Some(bg) = cell.bg {
+                    c.rect(x as i32, y as i32, cw.ceil() as i32 + 1, lh as i32, bg, k);
+                }
+                if cell.cont || cell.ch == ' ' {
+                    continue;
+                }
+                let color = cell.fg.unwrap_or(d::TEXT);
+                let font = if cell.italic && self.mono_italic.is_some() {
+                    self.mono_italic.as_mut().unwrap()
+                } else if cell.bold && self.mono_bold.is_some() {
+                    self.mono_bold.as_mut().unwrap()
+                } else {
+                    &mut self.mono
+                };
+                c.glyph_at(font, px, x, y + self.ascent, cell.ch, color, k);
+                if cell.underline {
+                    c.rect(x as i32, (y + lh - 3.0 * s) as i32, cw as i32, 1.max(s as i32), color, 0.9 * k);
+                }
+            }
+        }
+        // cursor: bloco cheio com o foco, contorno sem ele
+        if tv.screen.cursor_visible {
+            let (cr, cc) = tv.screen.cursor;
+            let (x, y) = (left + cc as f32 * cw, top + cr as f32 * lh);
+            let (blink, _) = self.blink(now);
+            if tv.focus {
+                c.rrect(x, y + 1.0, cw, lh - 2.0, 2.0 * s, d::GREEN, 0.9 * blink.max(0.35) * k);
+                if let Some(cell) = tv.screen.rows.get(cr).and_then(|r| r.get(cc)) {
+                    if cell.ch != ' ' && !cell.cont {
+                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::BG, blink.max(0.35) * k);
+                    }
+                }
+            } else {
+                c.rrect_border(x, y + 1.0, cw, lh - 2.0, 2.0 * s, 1.0, d::GREEN, 0.7 * k);
+            }
+        }
     }
 
     /// Explorador: painel que desliza da esquerda, itens com recuo, seleção que desliza.
@@ -1440,9 +1886,9 @@ mod testes {
             b = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
-        s.feed("a");
+        s.feed("s");
         let vm = s.view_model();
-        assert!(vm.dash && vm.toast.is_some(), "a ainda não existe: avisa e segue na tela inicial");
+        assert!(vm.dash && vm.toast.is_some(), "s ainda não existe: avisa e segue na tela inicial");
         s.feed("f");
         assert!(s.view_model().picker.is_some(), "f abre o buscador de arquivos");
         s.feed("<Esc>");
@@ -1510,6 +1956,132 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!((sc.layout(800, 600, 1).text_x - x0).abs() < 1.0, "e volta ao fechar");
+    }
+
+    #[test]
+    fn relogio_aparece_no_canto_inferior_direito() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("abc\n", None);
+        let (w, h) = (800u32, 600u32);
+        let lay = sc.layout(w, h, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let vm = s.view_model();
+        let t0 = Instant::now();
+        sc.set_clock(None);
+        let sem = quadro(&mut sc, &vm, w, h, t0);
+        sc.set_clock(Some("14:32".into()));
+        let com = quadro(&mut sc, &vm, w, h, t0);
+        let mut dentro = 0;
+        let mut fora = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if sem[(y * w + x) as usize] != com[(y * w + x) as usize] {
+                    if x > w - 160 && y > h - 70 {
+                        dentro += 1;
+                    } else {
+                        fora += 1;
+                    }
+                }
+            }
+        }
+        assert!(dentro > 40, "o relógio foi desenhado no canto: {dentro}");
+        assert_eq!(fora, 0, "e só ali");
+    }
+
+    #[test]
+    fn terminal_sobe_da_base_e_encolhe_o_editor() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let rows0 = lay0.rows;
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: true,
+            exited: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, rows0.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        let sem = quadro(&mut sc, &vm, w, h, t0);
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
+        let mut com = sem.clone();
+        for i in 1..60 {
+            com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sem.iter().zip(&com).filter(|(a, b)| a != b).count() > 20_000, "o painel apareceu");
+        assert!(sc.layout(w, h, 1).rows < rows0 - 3.0, "o editor ficou mais baixo");
+        let (tr, tc) = sc.term_dims(w, h);
+        assert!(tr >= 5 && tc > 60, "{tr}x{tc}");
+        vm.term = None;
+        for i in 60..140 {
+            quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!((sc.layout(w, h, 1).rows - rows0).abs() < 0.01, "e volta ao fechar");
+    }
+
+    #[test]
+    fn zen_cobre_a_janela_com_uma_coluna_centrada_e_volta() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (1000u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: true,
+            exited: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false });
+        let mut normal = quadro(&mut sc, &vm, w, h, t0);
+        for i in 1..60 {
+            normal = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        vm.term.as_mut().unwrap().zen = true;
+        let mut zen = normal.clone();
+        for i in 60..140 {
+            zen = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(normal.iter().zip(&zen).filter(|(a, b)| a != b).count() > 50_000, "o zen repinta a janela");
+        let (tr, tc) = sc.term_dims(w, h);
+        assert!(tc <= super::ZEN_COLS && tc >= 60, "coluna estreita: {tc}");
+        assert!(tr > 20, "ocupa a altura: {tr}");
+        // os cantos ficam só com o véu (sem o editor nem o terminal)
+        assert_eq!(zen[0], zen[(w * h - 1) as usize], "cantos iguais");
+        vm.term.as_mut().unwrap().zen = false;
+        let mut volta = zen.clone();
+        for i in 140..240 {
+            volta = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(volta.iter().zip(&normal).filter(|(a, b)| a != b).count() < 200, "e volta ao normal");
+    }
+
+    #[test]
+    fn barra_de_abas_aparece_com_duas_e_o_clique_acerta_a_aba() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 600u32);
+        let mut s = Session::new("abc\n", None);
+        let lay0 = sc.layout(w, h, 1);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        let t0 = Instant::now();
+        quadro(&mut sc, &vm, w, h, t0);
+        let y_sem = sc.layout(w, h, 1).text_y;
+        assert!(sc.tab_hit(100.0, 50.0).is_none(), "com uma aba só, sem barra");
+        vm.tabs = vec![crate::nview::TabInfo { name: "um.rs".into(), modified: false }, crate::nview::TabInfo { name: "dois.rs".into(), modified: true }];
+        vm.tab_active = 1;
+        quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16));
+        assert!(sc.layout(w, h, 1).text_y > y_sem + 20.0, "o texto desceu para dar lugar à barra");
+        let (a0, a1) = sc.tab_rects[0];
+        let (b0, b1) = sc.tab_rects[1];
+        let y = d::M.title_h + 8.0;
+        assert_eq!(sc.tab_hit((a0 + a1) / 2.0, y), Some(0));
+        assert_eq!(sc.tab_hit((b0 + b1) / 2.0, y), Some(1));
+        assert_eq!(sc.tab_hit(b1 + 200.0, y), None);
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

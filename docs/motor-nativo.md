@@ -35,13 +35,21 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Objetos de texto `iw aw iW aW ip ap i( a( ib i[ i{ iB i< i\" i' i\``, com contagem | **99,9%** (2500 casos) |
 | Visual `v` e `V` (movimentos, objetos, `d y c x X D Y C s S < > ~ u U J r o`), com as regras do Vim (cursor sobre a quebra de linha, `ip` que estende) | 99,2% (2500 casos) |
 | Busca (`/ ? n N * #`, realce animado, `:noh`) | pronto |
-| Visual em bloco (`<C-v>`), `p` no visual, marcas, macros (`q @`), `:s` `:g` | próximo |
+| Marcas (`m a-z`, `'x`, `` `x ``, `''`, `'<` `'>`), com reajuste por linhas e desfazer | **99%** (195/200) |
+| Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
+| `p`/`P`/`gp`/`gP` no visual (substitui a seleção; linha x caractere, registrador, um passo de desfazer) | **97%** (145/150) |
+| Comandos `:` do núcleo: faixas (`%`, `1,3`, `'<,'>`, `.+1`, `'a`), `:s` (grupos, `&`, `\\u \\U`, flags `g i I e`), `:d`, `:y`, `:j`, `:>` `:<`, `:g`/`:v`, `:normal` e `:N` | **98%** (196/200) |
+| Visual em bloco (`<C-v>`: `d y c r ~ u U I A o O $`, `p`/`P` de registro em bloco, retângulo na tela) | **96%** (138/150; sobram blocos que cortam tab ou caractere largo) |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
 | Tecla líder configurável (`[keys] leader` no `config.toml` da UI; padrão `<Espaço>`); as menções a ela mostram o nome da tecla escolhida | pronto |
 | Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
-| Janelas/abas, git, LSP, completar, agentes | roadmap (S3, S4...) |
+| Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele; `<Espaço>Az` abre o **modo zen**: o agente em tela cheia, coluna centrada num cartão, com fade) | **funcionando** |
+| Git: branch na pílula e sinais de margem (nova/alterada/removida) comparando o buffer ao `HEAD`, ao vivo (`similar`; só lê o `HEAD` com o `git` instalado) | **funcionando** |
+| LSP nativo (cliente JSON-RPC próprio; servidores do PATH ou do Mason): diagnósticos, hover `K`, definição `gd`, completar (popup com filtro local; `Tab`/`<C-y>` aceita, `<C-n>`/`<C-p>` navegam); renomear ainda não | **funcionando** (verificado com o pyright real) |
+| Abas: uma sessão por aba (`:tabnew [arquivo]`, `gt`/`gT`, `:tabc[!]`, `:tabo`, `:q` fecha a aba), barra de abas clicável, servidor LSP compartilhado, explorador e terminal acompanham a aba ativa | **funcionando** |
+| Janelas divididas (`:split`/`:vsplit`) | roadmap — exige separar buffer de janela e a cena por painel (ver as issues) |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
 
 ## Experimentar

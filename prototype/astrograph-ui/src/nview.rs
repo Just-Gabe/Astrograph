@@ -60,6 +60,47 @@ pub struct TreeView {
     pub focus: bool,
 }
 
+/// Terminal nativo: o instantâneo da tela e se ele tem o foco do teclado.
+#[derive(Clone)]
+pub struct TermView {
+    pub screen: std::sync::Arc<crate::term::TermScreen>,
+    pub focus: bool,
+    /// modo zen: o terminal (agente) ocupa a janela, numa coluna centralizada
+    pub zen: bool,
+}
+
+/// Git do arquivo aberto: branch e sinais da margem (ordenados por linha).
+#[derive(Clone)]
+pub struct GitView {
+    pub branch: String,
+    pub signs: std::sync::Arc<Vec<(usize, crate::git::Sign)>>,
+}
+
+/// Uma aba aberta.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabInfo {
+    pub name: String,
+    pub modified: bool,
+}
+
+/// Uma linha do popup de completar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompItem {
+    pub label: String,
+    pub detail: String,
+    pub kind: u8,
+    /// posições (em caracteres) do rótulo que casaram com o que foi digitado
+    pub hits: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompView {
+    pub items: Vec<CompItem>,
+    pub sel: usize,
+    /// onde a palavra começa (linha, coluna): o popup alinha com ela
+    pub anchor: (usize, usize),
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -77,6 +118,8 @@ pub struct ViewModel {
     pub cursor: (usize, usize),
     pub mode: ModeKind,
     pub selection: Option<(VKind, (usize, usize), (usize, usize))>,
+    /// seleção em bloco com `$`: vai até o fim de cada linha
+    pub sel_eol: bool,
     pub name: String,
     pub modified: bool,
     /// `:`, `/` ou `?` com o texto digitado
@@ -94,6 +137,18 @@ pub struct ViewModel {
     pub dash: bool,
     pub picker: Option<PickerView>,
     pub tree: Option<TreeView>,
+    pub term: Option<TermView>,
+    pub git: Option<GitView>,
+    /// diagnósticos do servidor de linguagem para o arquivo (colunas em caracteres)
+    pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
+    /// texto do hover (`K`) aberto
+    pub hover: Option<String>,
+    pub completion: Option<CompView>,
+    /// abas abertas (a barra só aparece com duas ou mais) e a ativa
+    pub tabs: Vec<TabInfo>,
+    pub tab_active: usize,
+    /// muda ao trocar de arquivo/aba: a cena zera as animações
+    pub doc_id: u64,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -111,6 +166,7 @@ impl ViewModel {
             cursor: (0, 0),
             mode: ModeKind::Normal,
             selection: None,
+            sel_eol: false,
             name: String::new(),
             modified: false,
             cmd: None,
@@ -122,6 +178,14 @@ impl ViewModel {
             dash: false,
             picker: None,
             tree: None,
+            term: None,
+            git: None,
+            diags: std::sync::Arc::new(Vec::new()),
+            hover: None,
+            completion: None,
+            tabs: Vec::new(),
+            tab_active: 0,
+            doc_id: 0,
             flash: None,
         }
     }

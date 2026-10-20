@@ -9,18 +9,22 @@
 //! alteradas na grade que a UI desenha e pede um quadro via `EventLoopProxy`.
 
 mod config;
+mod git;
 mod grid;
 mod realce;
+mod relogio;
 mod render;
 mod anim;
 mod arvore;
 mod busca;
 mod design;
 mod native;
+mod lsp;
 mod nscene;
 mod nview;
 mod paint;
 mod servicos;
+mod term;
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -66,6 +70,12 @@ enum UiCommand {
     Resize(i64, i64),
     /// rolagem do editor nativo, em linhas (> 0 desce)
     Scroll(f64),
+    /// o terminal nativo tem saída nova (ou terminou)
+    TermOut,
+    /// linhas e colunas do painel do terminal
+    TermSize(i64, i64),
+    /// clique na barra de abas
+    Tab(i64),
     Focus(bool),
     Mouse {
         button: &'static str,
@@ -351,7 +361,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -510,6 +520,9 @@ struct App {
     native: Option<nview::Shared>,
     scene: Option<nscene::Scene>,
     last_vm: Arc<nview::ViewModel>,
+    /// quando o relógio precisa ser redesenhado (virada do minuto)
+    clock_next: Instant,
+    last_term: (usize, usize),
 }
 
 impl App {
@@ -559,6 +572,8 @@ impl App {
             native,
             scene: None,
             last_vm: Arc::new(nview::ViewModel::empty()),
+            clock_next: now,
+            last_term: (0, 0),
         }
     }
 
@@ -646,6 +661,11 @@ impl App {
         let _ = self.tx.send(UiCommand::Mouse { button, action, modifier, row, col });
     }
 
+    /// Texto do relógio, se ligado na config.
+    fn clock_text(&self) -> Option<String> {
+        self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12))
+    }
+
     /// Quadro do editor nativo: a cena pinta pixels, sem grade de celulas.
     fn draw_native(&mut self) {
         let (Some(window), Some(shared)) = (self.window.clone(), self.native.clone()) else { return };
@@ -659,7 +679,9 @@ impl App {
         }
         let now = Instant::now();
         let vm = shared.lock().unwrap().clone();
+        let clock = self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12));
         let Some(scene) = self.scene.as_mut() else { return };
+        scene.set_clock(clock);
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
         let frame = {
             let mut canvas = paint::Canvas::new(&mut buffer, w, h);
@@ -680,9 +702,15 @@ impl App {
             self.first_paint = Some(elapsed);
             println!("FIRST_PAINT: {} ms desde o inicio", elapsed.as_millis());
         }
+        self.clock_next = now + relogio::ate_proximo_minuto();
         self.frames += 1;
         self.last_vm = vm.clone();
         let lay = scene.layout(w, h, vm.lines);
+        let (tr, tc) = scene.term_dims(w, h);
+        if (tr, tc) != self.last_term {
+            self.last_term = (tr, tc);
+            let _ = self.tx.send(UiCommand::TermSize(tr as i64, tc as i64));
+        }
         let dims = (lay.cols, lay.rows.floor() as usize);
         if dims != self.last_grid {
             self.last_grid = dims;
@@ -704,6 +732,7 @@ impl App {
             return;
         };
         let pre_alpha = self.cursor_alpha(Instant::now()).0;
+        let clock = self.clock_text();
         let (Some(surface), Some(renderer)) = (self.surface.as_mut(), self.renderer.as_mut()) else {
             return;
         };
@@ -751,6 +780,7 @@ impl App {
             let alpha = if grid.generation < 2 { 0.0 } else { alpha };
             self.drawn_alpha = alpha;
             renderer.set_spinner(servicos::quadro(now));
+            renderer.set_clock(clock);
             renderer.render(&mut buffer, w, h, &mut grid, alpha, self.focused, now, full)
         };
         if !spans.is_empty() {
@@ -770,6 +800,7 @@ impl App {
         } else {
             self.render_partial += elapsed;
         }
+        self.clock_next = now + relogio::ate_proximo_minuto();
         self.anim_next = renderer.animating(now).then(|| now + ANIM_FRAME);
         // trabalho em segundo plano: o anel gira no ritmo dele, sem forcar 140 quadros por segundo
         if !servicos::em_andamento().is_empty() {
@@ -993,6 +1024,14 @@ impl ApplicationHandler<UserEvent> for App {
                 soonest(next);
             }
         }
+        if self.shown && self.cfg.clock.enabled {
+            if now >= self.clock_next {
+                self.clock_next = now + relogio::ate_proximo_minuto();
+                self.request_redraw();
+            } else {
+                soonest(self.clock_next);
+            }
+        }
         if let Some(t) = self.anim_next {
             if now >= t {
                 self.anim_next = None;
@@ -1077,6 +1116,12 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tab_hit(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32)) {
+                        let _ = self.tx.send(UiCommand::Tab(i as i64));
+                        return;
+                    }
+                }
                 if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {
                     // clique no explorador: ainda sem ação (o teclado navega)
                     return;
@@ -1314,10 +1359,16 @@ fn main() {
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     let leader_key = cfg.keys.leader_char();
-    let native_on = std::env::var("ASTROGRAPH_ENGINE").is_ok_and(|v| v == "native");
+    // motor: ASTROGRAPH_ENGINE=native|nvim manda; sem ela vale `[engine] native` do config.toml
+    let native_on = match std::env::var("ASTROGRAPH_ENGINE").as_deref() {
+        Ok("native") => true,
+        Ok("nvim") => false,
+        _ => cfg.engine.native,
+    };
     let native_shared = nview::shared();
     let app_native = native_on.then(|| native_shared.clone());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<UiCommand>();
+    let tx_native = tx.clone();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -1340,7 +1391,7 @@ fn main() {
         // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
         if native_on {
             let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
-            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key));
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key, tx_native));
         } else {
             runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
         }

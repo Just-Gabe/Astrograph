@@ -167,6 +167,8 @@ pub struct Renderer {
     /// que foi pintado, para repintar a linha quando ele muda ou some.
     spinner: Option<usize>,
     spinner_row: Option<usize>,
+    clock: Option<String>,
+    clock_row: Option<usize>,
     last_size: (u32, u32),
     last_layout: Option<Layout>,
     invalid: bool,
@@ -214,6 +216,8 @@ impl Renderer {
             last_cursor: None,
             spinner: None,
             spinner_row: None,
+            clock: None,
+            clock_row: None,
             last_size: (0, 0),
             last_layout: None,
             invalid: true,
@@ -316,6 +320,11 @@ impl Renderer {
     /// inferior direito.
     pub fn set_spinner(&mut self, frame: Option<usize>) {
         self.spinner = frame;
+    }
+
+    /// Texto do relógio do canto inferior direito (`None` desliga).
+    pub fn set_clock(&mut self, text: Option<String>) {
+        self.clock = text;
     }
 
     /// Duracao da rolagem suave (0 desliga).
@@ -673,6 +682,12 @@ impl Renderer {
                     *slot = true;
                 }
             }
+            // o relógio mora na última linha: ela é repintada junto (some o texto antigo)
+            for r in [self.clock_row, self.clock.as_ref().map(|_| rows.saturating_sub(1))].into_iter().flatten() {
+                if let Some(slot) = self.paint.get_mut(r) {
+                    *slot = true;
+                }
+            }
             for rect in [self.last_cursor, cursor_rect].into_iter().flatten() {
                 let top = (rect.y - lay.oy as i32).max(0) as u32 / ch;
                 let bot = ((rect.y + rect.h as i32 - 1 - lay.oy as i32).max(0) as u32) / ch;
@@ -707,6 +722,13 @@ impl Renderer {
             self.spinner_row = Some(row);
         }
 
+        self.clock_row = None;
+        if let Some(text) = self.clock.clone() {
+            let row = rows.saturating_sub(1);
+            self.draw_clock(buffer, win_w, win_h, grid, &lay, row, &text);
+            self.clock_row = Some(row);
+        }
+
         if let Some(rect) = cursor_rect {
             let a8 = (cursor_alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
             self.draw_cursor(buffer, win_w, win_h, grid, rect, shape, focused, settled && cursor_in && !morphing, a8);
@@ -736,6 +758,25 @@ impl Renderer {
             .into_iter()
             .filter_map(|(y, h)| (y < win_h).then(|| (y, h.min(win_h - y))))
             .collect()
+    }
+
+    /// Relógio discreto no canto inferior direito, na última linha da grade.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_clock(&mut self, buffer: &mut [u32], win_w: u32, win_h: u32, grid: &Grid, lay: &Layout, row: usize, text: &str) {
+        let n = text.chars().count() as u32;
+        let (cw, ch) = (self.cell_w, self.cell_h);
+        let w = n * cw;
+        // duas células de folga da borda direita da grade
+        let x = (lay.ox + lay.cols.saturating_sub(2) as u32 * cw).saturating_sub(w);
+        let y = lay.oy + row as u32 * ch;
+        let (fg, bg) = (grid.default_fg, grid.default_bg);
+        // fundo próprio: se houver mensagem por baixo, ela é cortada em vez de embolar
+        fill_rect(buffer, win_w, win_h, x.saturating_sub(cw), y, w + cw * 2, ch.min(win_h.saturating_sub(y)), bg);
+        let color = mix(fg, bg, 120);
+        let clip = (y, (y + ch).min(win_h));
+        for (i, c) in text.chars().enumerate() {
+            self.blit(buffer, win_w, clip, x + i as u32 * cw, y as i32, c, color, 0);
+        }
     }
 
     /// Anel de 8 pontos girando, na penultima coluna e acima da linha de status.
