@@ -13,6 +13,10 @@ local M = {}
 
 local wrapped = false
 
+---Enquanto > 0, a instalação de parsers não avisa (o preparo em segundo plano
+---compila sem poluir a tela).
+M.quiet = 0
+
 local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Astrograph" }) end
 
 ---Linguagens de `ensure_installed` (já mescladas pelo AstroCore), sem repetição.
@@ -51,6 +55,57 @@ local function prepare_toolchain()
     end
   end
   if vim.fn.has "win32" == 1 and (not vim.env.CC or vim.env.CC == "") then vim.env.CC = "gcc" end
+end
+
+---Das linguagens pedidas, as que o nvim-treesitter conhece e ainda não estão
+---instaladas.
+---@param langs string[]
+---@return string[]
+function M.missing(langs)
+  local have = installed()
+  local known
+  local ok, ts = pcall(require, "nvim-treesitter")
+  if ok and type(ts.get_available) == "function" then
+    local aok, list = pcall(ts.get_available)
+    if aok and type(list) == "table" then
+      known = {}
+      for _, l in ipairs(list) do
+        known[l] = true
+      end
+    end
+  end
+  local seen, out = {}, {}
+  for _, lang in ipairs(langs) do
+    if lang ~= "auto" and not seen[lang] and not have[lang] and (not known or known[lang]) then
+      seen[lang] = true
+      out[#out + 1] = lang
+    end
+  end
+  return out
+end
+
+---Compila em segundo plano, sem avisos, os parsers que faltarem. `cb` roda
+---(no loop principal) quando acaba, ou na hora se não houver o que fazer.
+---@param langs string[]
+---@param cb? fun(missing: string[])
+function M.install_quiet(langs, cb)
+  cb = cb or function() end
+  prepare_toolchain()
+  local plugin = vim.tbl_get(require "lazy.core.config", "plugins", "nvim-treesitter")
+  if not plugin or vim.fn.executable "tree-sitter" ~= 1 then return cb {} end
+  if not plugin._.loaded then require("lazy").load { plugins = { "nvim-treesitter" } } end
+  local missing = M.missing(langs)
+  if #missing == 0 then return cb {} end
+  M.quiet = M.quiet + 1
+  local ok, task = pcall(function() return require("nvim-treesitter").install(missing, { summary = false }) end)
+  if not ok or not task then
+    M.quiet = M.quiet - 1
+    return cb {}
+  end
+  task:await(function()
+    M.quiet = M.quiet - 1
+    vim.schedule(function() cb(missing) end)
+  end)
 end
 
 ---Compila de forma síncrona os parsers que faltarem (usado pelo instalador).
@@ -94,7 +149,7 @@ function M.setup()
         type(langs) == "table" and langs or { langs }
       )
       local task = original(langs, opts)
-      if #todo > 0 then
+      if #todo > 0 and M.quiet == 0 then
         local start = vim.uv.hrtime()
         notify("Preparando o realce de sintaxe (" .. table.concat(todo, ", ") .. ")… aguarde um instante.")
         task:await(function()

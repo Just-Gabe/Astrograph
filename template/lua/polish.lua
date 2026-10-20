@@ -53,3 +53,7 @@ require("astrograph.warmup").setup()
 -- Treesitter: o instalador pré-compila os parsers; se ainda faltar algum,
 -- avisa enquanto compila em vez de deixar o realce sumido sem explicação
 require("astrograph.treesitter").setup()
+
+-- Preparo em segundo plano: parsers, ferramentas e git do projeto prontos ao
+-- abrir (e ao trocar de pasta); ícone de carregamento no canto inferior direito
+require("astrograph.prepare").setup()
