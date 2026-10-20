@@ -163,11 +163,12 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
     // um nvim novo por caso: sem histórico de undo, registradores, busca de f/t nem `.` herdados
     let mut cmd = Command::new(std::env::var("NVIM_BIN").unwrap_or_else(|_| "nvim".into()));
     cmd.args(["--embed", "--headless", "--clean", "-n"]);
-    let (nvim, _io, _child) = create::new_child_cmd(&mut cmd, Nada).await.ok()?;
+    let (nvim, _io, mut child) = create::new_child_cmd(&mut cmd, Nada).await.ok()?;
     let args = vec![Value::from(lines.iter().map(|l| Value::from(*l)).collect::<Vec<_>>()), Value::from(keys)];
     // um caso que trava o nvim (pergunta, prompt) não pode travar o teste
     let r = tokio::time::timeout(std::time::Duration::from_secs(4), nvim.exec_lua(code, args)).await.ok().and_then(|r| r.ok());
-    let _ = nvim.command("qa!").await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), nvim.command("qa!")).await;
+    let _ = child.kill().await;
     let r = r?;
     let a = r.as_array()?;
     let text: Vec<String> = a[0].as_array()?.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
