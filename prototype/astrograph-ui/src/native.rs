@@ -156,6 +156,24 @@ pub struct Splits {
 
 static PROXIMO_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Pergunta aberta no explorador.
+#[derive(Clone, Debug)]
+enum TreeOp {
+    Novo(std::path::PathBuf),
+    Renomear(std::path::PathBuf),
+    Apagar(std::path::PathBuf),
+}
+
+impl TreeOp {
+    fn rotulo(&self) -> String {
+        match self {
+            TreeOp::Novo(d) => format!("Novo em {}/ (termine com / para pasta): ", d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            TreeOp::Renomear(_) => "Renomear para: ".into(),
+            TreeOp::Apagar(p) => format!("Apagar {}? (s/n): ", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+        }
+    }
+}
+
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
@@ -174,6 +192,10 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// pergunta aberta no explorador (`a`, `r`, `d`) e o que foi digitado
+    tree_prompt: Option<(TreeOp, String)>,
+    /// `y`/`x` no explorador: o que `p` cola e se é para mover
+    tree_clip: Option<(std::path::PathBuf, bool)>,
     term: Option<Term>,
     term_focus: bool,
     term_zen: bool,
@@ -296,6 +318,8 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            tree_prompt: None,
+            tree_clip: None,
             term: None,
             term_focus: false,
             term_zen: false,
@@ -1730,9 +1754,93 @@ impl Session {
         }
     }
 
+    fn tree_prompt_key(&mut self, k: Key) {
+        let Some((op, mut texto)) = self.tree_prompt.take() else { return };
+        match k {
+            Key::Esc | Key::Ctrl('c') => return,
+            Key::Backspace => {
+                texto.pop();
+            }
+            Key::Char(c) => texto.push(c),
+            Key::Enter => return self.tree_prompt_ok(op, texto),
+            _ => {}
+        }
+        self.tree_prompt = Some((op, texto));
+    }
+
+    fn tree_prompt_ok(&mut self, op: TreeOp, texto: String) {
+        use crate::arvore::ops;
+        let Some(t) = self.tree.as_mut() else { return };
+        let r = match &op {
+            TreeOp::Novo(dir) => ops::criar(dir, &texto).map(|p| (p, "Criado")),
+            TreeOp::Renomear(de) => ops::renomear(de, &texto).map(|p| (p, "Renomeado")),
+            TreeOp::Apagar(alvo) => {
+                if matches!(texto.trim(), "s" | "S" | "y" | "Y") {
+                    ops::apagar(alvo).map(|_| (alvo.clone(), "Apagado"))
+                } else {
+                    return;
+                }
+            }
+        };
+        match r {
+            Ok((p, verbo)) => {
+                if matches!(op, TreeOp::Apagar(_)) {
+                    t.recarregar();
+                } else {
+                    t.mostrar(&p);
+                }
+                let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.say(format!("{verbo}: {nome}"), ToastKind::Done);
+            }
+            Err(e) => self.say(format!("Não deu: {e}"), ToastKind::Error),
+        }
+    }
+
     fn tree_key(&mut self, k: Key) {
+        if self.tree_prompt.is_some() {
+            return self.tree_prompt_key(k);
+        }
         let Some(t) = self.tree.as_mut() else { return };
         match k {
+            Key::Char('a') => {
+                let dir = t.pasta_alvo();
+                self.tree_prompt = Some((TreeOp::Novo(dir), String::new()));
+            }
+            Key::Char('r') => {
+                if let Some(n) = t.atual() {
+                    let (c, nome) = (n.caminho.clone(), n.nome.clone());
+                    self.tree_prompt = Some((TreeOp::Renomear(c), nome));
+                }
+            }
+            Key::Char('d') => {
+                if let Some(n) = t.atual() {
+                    self.tree_prompt = Some((TreeOp::Apagar(n.caminho.clone()), String::new()));
+                }
+            }
+            Key::Char(c @ ('y' | 'x')) => {
+                if let Some(n) = t.atual() {
+                    let nome = n.nome.clone();
+                    self.tree_clip = Some((n.caminho.clone(), c == 'x'));
+                    self.say(format!("{}: {nome}", if c == 'x' { "Recortado" } else { "Copiado" }), ToastKind::Info);
+                }
+            }
+            Key::Char('p') => {
+                let Some((origem, mover)) = self.tree_clip.clone() else {
+                    self.say("Nada copiado (use y ou x)".into(), ToastKind::Info);
+                    return;
+                };
+                let dir = t.pasta_alvo();
+                match crate::arvore::ops::colar(&origem, &dir, mover) {
+                    Ok(p) => {
+                        t.mostrar(&p);
+                        if mover {
+                            self.tree_clip = None;
+                        }
+                        self.say("Colado".into(), ToastKind::Done);
+                    }
+                    Err(e) => self.say(format!("Não deu: {e}"), ToastKind::Error),
+                }
+            }
             Key::Char('j') | Key::Ctrl('n') => t.mover(1),
             Key::Char('k') | Key::Ctrl('p') => t.mover(-1),
             Key::Char('G') => t.mover(i64::MAX / 2),
@@ -2417,7 +2525,7 @@ impl Session {
         let signs = self.git_signs();
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
-        } else if self.ed.cmdline().is_some() {
+        } else if self.ed.cmdline().is_some() || self.tree_prompt.is_some() {
             ModeKind::Command
         } else if search.is_some() {
             ModeKind::Search
@@ -2433,9 +2541,10 @@ impl Session {
             }
         };
         let cmd = self
-            .ed
-            .cmdline()
-            .map(|c| (':', c.to_string()))
+            .tree_prompt
+            .as_ref()
+            .map(|(op, t)| ('›', format!("{}{t}", op.rotulo())))
+            .or_else(|| self.ed.cmdline().map(|c| (':', c.to_string())))
             .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
         ViewModel {
             tabs: Vec::new(),
@@ -3355,6 +3464,42 @@ mod testes {
         assert!(modelo(&mut s).tree.unwrap().focus);
         s.feed(" e");
         assert!(modelo(&mut s).tree.is_none());
+    }
+
+    #[test]
+    fn explorador_cria_renomeia_copia_cola_e_apaga() {
+        let d = projeto("tree-ops");
+        let mut s = Session::new("x\n", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed(" e");
+        // a: arquivo novo dentro de src (a pasta selecionada)
+        s.feed("a");
+        let m = modelo(&mut s);
+        assert_eq!(m.cmd.as_ref().map(|c| c.0), Some('›'));
+        assert_eq!(m.mode, ModeKind::Command);
+        s.feed("novo.rs<CR>");
+        assert!(d.join("src/novo.rs").is_file());
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items[t.sel].name, "novo.rs", "o novo item fica selecionado");
+        // r: renomear (o campo já vem com o nome)
+        s.feed("r");
+        assert!(modelo(&mut s).cmd.unwrap().1.ends_with("novo.rs"));
+        s.feed("<BS><BS>txt<CR>");
+        assert!(d.join("src/novo.txt").is_file() && !d.join("src/novo.rs").exists());
+        // y e p: copia para o lado
+        s.feed("yp");
+        assert!(d.join("src/novo_copia.txt").is_file());
+        // d: pede confirmação; n cancela, s apaga
+        s.feed("dn<CR>");
+        assert!(d.join("src/novo_copia.txt").is_file());
+        s.feed("ds<CR>");
+        assert!(!d.join("src/novo_copia.txt").exists());
+        // x e p: move para a raiz (o foco vai para LEIA.md, que é arquivo: cola ao lado dele)
+        s.feed("gjjjx");
+        s.feed("Gp");
+        let t = modelo(&mut s).tree.unwrap();
+        assert!(t.items.iter().any(|i| i.name == "novo.txt" && i.level == 0), "{:?}", t.items.iter().map(|i| (&i.name, i.level)).collect::<Vec<_>>());
     }
 
     #[test]
