@@ -216,6 +216,13 @@ pub struct Session {
     pub abrir_pedido: Option<(PathBuf, Option<(usize, usize)>)>,
     pub aba_pedido: Option<PedidoAba>,
     pub jan_pedido: Option<PedidoJanela>,
+    /// mouse: último clique (instante, linha, coluna visual, quantos seguidos) e se o botão esquerdo está apertado
+    clique: Option<(std::time::Instant, usize, usize, u8)>,
+    mouse_baixo: bool,
+    /// `:set number relativenumber scrolloff`
+    numero: bool,
+    relativo: bool,
+    scrolloff: f32,
     /// pedidos ao servidor de linguagem esperando resposta
     lsp_pend: Vec<Pendente>,
     /// trocas de texto do servidor (renomear, ações) que o espaço de trabalho aplica em todos os arquivos
@@ -238,7 +245,6 @@ pub struct Session {
 /// arquivos até esta quantidade de linhas têm os sinais do git calculados na hora; maiores, em segundo plano
 const SINAIS_SINCRONOS: usize = 5000;
 
-const SCROLLOFF: f32 = 3.0;
 /// linhas de realce calculadas além da tela, para a rolagem suave não ficar sem cor
 const SPAN_MARGIN: usize = 80;
 
@@ -315,6 +321,11 @@ impl Session {
             abrir_pedido: None,
             aba_pedido: None,
             jan_pedido: None,
+            clique: None,
+            mouse_baixo: false,
+            numero: true,
+            relativo: false,
+            scrolloff: 3.0,
             lsp_pend: Vec::new(),
             edicoes_pedido: None,
             sig: None,
@@ -330,6 +341,7 @@ impl Session {
     /// Define a tecla líder (as menções a ela mostram o nome da tecla escolhida).
     pub fn set_leader(&mut self, c: char) {
         self.leader_key = c;
+        self.ed.set_leader(c);
     }
 
     /// Sem arquivo: abre na tela inicial (some ao editar, ao `n` ou ao abrir um arquivo).
@@ -1786,6 +1798,64 @@ impl Session {
         let r = row.min(self.ed.buf.line_count() - 1);
         let line = self.ed.buf.line(r);
         let len = line.chars().count();
+        // na inserção o cursor pode ficar depois do último caractere
+        let max = if self.ed.mode() == Mode::Insert { len } else { len.saturating_sub(1) };
+        let c = if vcol >= vcol_start(&line, len) { max } else { col_for_vcol(&line, vcol) };
+        self.ed.set_cursor(r, c);
+    }
+
+    /// Botão esquerdo no texto: `press` posiciona (duplo clique pega a palavra, triplo a linha; com `shift`
+    /// estende a seleção), `drag` seleciona arrastando, `release` solta.
+    pub fn mouse_esq(&mut self, acao: &str, row: usize, vcol: usize, shift: bool) {
+        if self.dash || self.picker.is_some() {
+            return;
+        }
+        match acao {
+            "press" => {
+                let agora = std::time::Instant::now();
+                let n = match self.clique {
+                    Some((t, r, c, n)) if agora.duration_since(t).as_millis() < 450 && r == row && c == vcol => (n % 3) + 1,
+                    _ => 1,
+                };
+                self.clique = Some((agora, row, vcol, n));
+                self.mouse_baixo = true;
+                if shift && self.ed.mode() != Mode::Insert {
+                    // Shift+clique: a seleção vai do cursor até o clique
+                    if self.ed.mode() != Mode::Visual {
+                        self.ed.feed(&[Key::Char('v')]);
+                    }
+                    self.mouse_para(row, vcol);
+                    return;
+                }
+                if self.ed.mode() == Mode::Visual {
+                    self.ed.feed(&[Key::Esc]);
+                }
+                self.click(row, vcol);
+                match n {
+                    2 if self.ed.mode() == Mode::Normal => self.ed.feed_str("viw"),
+                    3 if self.ed.mode() == Mode::Normal => self.ed.feed_str("V"),
+                    _ => {}
+                }
+            }
+            "drag" if self.mouse_baixo => {
+                if self.ed.mode() == Mode::Normal {
+                    // começa a seleção no ponto do clique (onde o cursor está)
+                    self.ed.feed(&[Key::Char('v')]);
+                }
+                if self.ed.mode() == Mode::Visual {
+                    self.mouse_para(row, vcol);
+                }
+            }
+            "release" => self.mouse_baixo = false,
+            _ => {}
+        }
+    }
+
+    /// Leva o cursor (e a ponta móvel da seleção) à célula `(row, vcol)`.
+    fn mouse_para(&mut self, row: usize, vcol: usize) {
+        let r = row.min(self.ed.buf.line_count() - 1);
+        let line = self.ed.buf.line(r);
+        let len = line.chars().count();
         let c = if vcol >= vcol_start(&line, len) { len.saturating_sub(1) } else { col_for_vcol(&line, vcol) };
         self.ed.set_cursor(r, c);
     }
@@ -1800,7 +1870,7 @@ impl Session {
             self.bump = Some((id, wanted - self.top));
         }
         // o cursor acompanha para não sair da tela
-        let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
+        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
         let row = self.ed.cursor.row as f32;
         let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
         if row < lo {
@@ -1813,6 +1883,41 @@ impl Session {
     // ------------------------------------------------------------------
     // comandos `:`
     // ------------------------------------------------------------------
+
+    /// `:set` das opções que são da interface (as do núcleo já foram tratadas): numeração, `scrolloff`,
+    /// `clipboard`. As que o app não tem avisam.
+    fn set_ui(&mut self, args: &str) {
+        for t in args.split_whitespace() {
+            let (nome, valor) = match t.split_once(['=', ':']) {
+                Some((n, v)) => (n, Some(v)),
+                None => (t, None),
+            };
+            let (nome, inverte) = match nome.strip_suffix('!') {
+                Some(n) => (n, true),
+                None => (nome, false),
+            };
+            let (base, liga) = match nome.strip_prefix("no").filter(|r| matches!(*r, "number" | "nu" | "relativenumber" | "rnu" | "wrap" | "list" | "hlsearch" | "hls" | "incsearch" | "is" | "cursorline" | "cul")) {
+                Some(r) => (r, false),
+                None => (nome, true),
+            };
+            let flip = |v: &mut bool| *v = if inverte { !*v } else { liga };
+            match base {
+                "number" | "nu" => flip(&mut self.numero),
+                "relativenumber" | "rnu" => flip(&mut self.relativo),
+                "scrolloff" | "so" => match valor.and_then(|v| v.parse::<f32>().ok()) {
+                    Some(n) if n >= 0.0 => self.scrolloff = n,
+                    _ => self.say(format!("E521: número esperado: {t}"), ToastKind::Error),
+                },
+                "clipboard" | "cb" => {
+                    let v = valor.unwrap_or("");
+                    self.ed.clipboard_unnamedplus = v.contains("unnamedplus");
+                }
+                // opções que o app não implementa mas que não devem incomodar
+                "hlsearch" | "hls" | "incsearch" | "is" | "wrap" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" | "background" | "bg" => {}
+                _ => self.say(format!("E518: Opção desconhecida: {t}"), ToastKind::Error),
+            }
+        }
+    }
 
     /// Segunda tecla do `<C-w>`.
     fn janela_tecla(&mut self, k: Key) {
@@ -1862,6 +1967,7 @@ impl Session {
         }
         match name {
             "noh" | "nohl" | "nohlsearch" => self.hl_off = true,
+            "set" => self.set_ui(arg),
             "w" | "write" => {
                 self.write(arg);
                 self.git_load();
@@ -1905,7 +2011,7 @@ impl Session {
             "tabn" | "tabnext" => self.aba_pedido = Some(PedidoAba::Proxima),
             "tabp" | "tabprevious" | "tabN" | "tabNext" => self.aba_pedido = Some(PedidoAba::Anterior),
             "tabo" | "tabonly" => self.aba_pedido = Some(PedidoAba::So),
-            "noh" | "nohlsearch" | "set" | "syntax" | "filetype" => {}
+            "noh" | "nohlsearch" | "syntax" | "filetype" => {}
             _ => self.say(format!("Comando desconhecido: {name}"), ToastKind::Error),
         }
     }
@@ -1961,7 +2067,7 @@ impl Session {
 
     /// Mantém o cursor à vista: rola o mínimo (ou centraliza num salto longe).
     fn follow_cursor(&mut self) {
-        let so = SCROLLOFF.min((self.rows - 1.0) / 2.0);
+        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
         let row = self.ed.cursor.row as f32;
         let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
         if row < self.top - self.rows || row > self.top + 2.0 * self.rows {
@@ -1984,6 +2090,9 @@ impl Session {
     }
 
     pub fn view_model(&mut self) -> ViewModel {
+        if let Some(t) = self.ed.clipboard_alterado() {
+            self.copiar_clip(t);
+        }
         self.pick_poll();
         self.git_poll();
         self.term_refresh();
@@ -2092,6 +2201,8 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
+            numero: self.numero,
+            relativo: self.relativo,
             sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),
             completion: self.comp.as_ref().filter(|c| !c.shown.is_empty()).map(|c| {
                 let first = c.sel.saturating_sub(COMP_LINHAS - 1);
@@ -2208,6 +2319,11 @@ pub struct Workspace {
     leader: char,
     /// formatar com o servidor ao gravar (`[lsp] format_on_save`)
     formatar: bool,
+    /// `clipboard=unnamedplus` nas sessões novas
+    clipboard_mais: bool,
+    /// mapeamentos do usuário (do `config.toml` e dos `:map`) e a versão que cada editor já tem
+    mapas: Vec<astrograph_core::mapas::Mapa>,
+    mapas_v: u64,
     /// tamanho da área de texto (colunas, linhas)
     dims: (usize, f32),
     pub sair: bool,
@@ -2225,11 +2341,70 @@ impl Workspace {
         s.set_notify(notify.clone());
         s.modo_abas = true;
         s.lsp_attach();
-        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, dims: (80, 24.0), sair: false }
+        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false }
     }
 
     fn atual(&mut self) -> &mut Session {
         &mut self.abas[self.ativa]
+    }
+
+    /// Aplica a cada editor (e aos das próximas sessões) os mapeamentos do `config.toml`.
+    pub fn aplicar_mapas(&mut self, mapas: &[(u8, String, String)]) {
+        let leader = self.leader;
+        {
+            let ed = &mut self.abas[self.ativa].ed;
+            ed.set_leader(leader);
+            for (modos, lhs, rhs) in mapas {
+                ed.mapear(*modos, lhs, rhs, false);
+            }
+            self.mapas = ed.mapas();
+            self.mapas_v = ed.mapas_versao();
+        }
+        self.sincronizar_mapas(true);
+    }
+
+    /// `clipboard=unnamedplus`: copiar e colar sem registrador usa o clipboard do sistema.
+    pub fn clipboard_unnamedplus(&mut self, ligado: bool) {
+        self.clipboard_mais = ligado;
+        for a in self.abas.iter_mut() {
+            a.ed.clipboard_unnamedplus = ligado;
+            if let Some(sp) = a.splits.as_mut() {
+                for o in sp.outros.iter_mut() {
+                    o.ed.clipboard_unnamedplus = ligado;
+                }
+            }
+        }
+    }
+
+    /// O app diz o que está no clipboard do sistema.
+    pub fn clipboard_do_sistema(&mut self, texto: &str) {
+        for a in self.abas.iter_mut() {
+            a.ed.definir_clipboard(Some(texto.to_string()));
+            if let Some(sp) = a.splits.as_mut() {
+                for o in sp.outros.iter_mut() {
+                    o.ed.definir_clipboard(Some(texto.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Copia a tabela de mapeamentos do editor focado para os outros quando ela mudou (`:nnoremap`).
+    fn sincronizar_mapas(&mut self, forcar: bool) {
+        let v = self.abas[self.ativa].ed.mapas_versao();
+        if !forcar && v == self.mapas_v {
+            return;
+        }
+        let m = self.abas[self.ativa].ed.mapas();
+        self.mapas = m.clone();
+        self.mapas_v = v;
+        for a in self.abas.iter_mut() {
+            a.ed.definir_mapas(m.clone(), v);
+            if let Some(sp) = a.splits.as_mut() {
+                for o in sp.outros.iter_mut() {
+                    o.ed.definir_mapas(m.clone(), v);
+                }
+            }
+        }
     }
 
     /// Liga ou desliga o formatar-ao-salvar em todas as sessões (e nas que vierem).
@@ -2253,6 +2428,8 @@ impl Workspace {
         s.lsp_pool = self.pool.clone();
         s.set_leader(self.leader);
         s.formatar_ao_salvar = self.formatar;
+        s.ed.definir_mapas(self.mapas.clone(), self.mapas_v);
+        s.ed.clipboard_unnamedplus = self.clipboard_mais;
         if let Some(n) = &self.notify {
             s.set_notify(n.clone());
         }
@@ -2623,6 +2800,7 @@ impl Workspace {
         self.atual().feed(teclas);
         self.depois();
         self.sincronizar_irmaos();
+        self.sincronizar_mapas(false);
     }
 
     pub fn resize(&mut self, cols: usize, rows: f32) {
@@ -2635,6 +2813,10 @@ impl Workspace {
 
     pub fn scroll(&mut self, linhas: f32) {
         self.atual().scroll(linhas);
+    }
+
+    pub fn mouse_esq(&mut self, acao: &str, row: usize, col: usize, shift: bool) {
+        self.atual().mouse_esq(acao, row, col, shift);
     }
 
     pub fn click(&mut self, row: usize, col: usize) {
@@ -2689,6 +2871,8 @@ pub async fn native_task(
     file: Option<PathBuf>,
     leader: char,
     formatar_ao_salvar: bool,
+    mapeamentos: Vec<(u8, String, String)>,
+    clipboard_mais: bool,
     tx: tokio::sync::mpsc::UnboundedSender<crate::UiCommand>,
 ) {
     use crate::UiCommand;
@@ -2697,6 +2881,8 @@ pub async fn native_task(
     });
     let mut w = Workspace::new(file, leader, notify);
     w.formatar_ao_salvar(formatar_ao_salvar);
+    w.aplicar_mapas(&mapeamentos);
+    w.clipboard_unnamedplus(clipboard_mais);
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => w.feed(&k),
@@ -2708,6 +2894,7 @@ pub async fn native_task(
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
             UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
             UiCommand::Paste(t) => w.atual().colar(&t),
+            UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
             UiCommand::TermCopy => w.atual().term_copiar(),
             UiCommand::Panes(t) => {
                 let t: Vec<(PaneId, usize, f32)> = t.into_iter().map(|(id, c, r)| (id, c.max(1) as usize, r.max(1) as f32)).collect();
@@ -2719,8 +2906,8 @@ pub async fn native_task(
             }
             UiCommand::PaneScroll(id, linhas) => w.rolar_painel(id, linhas as f32),
             UiCommand::Divisor { idx, area, gap, pos } => w.arrastar_divisor(idx, crate::janelas::Rect::new(area.0, area.1, area.2, area.3), gap, pos),
-            UiCommand::Mouse { button, action, row, col, .. } => match (button, action) {
-                ("left", "press") => w.click(row.max(0) as usize, col.max(0) as usize),
+            UiCommand::Mouse { button, action, row, col, modifier } => match (button, action) {
+                ("left", "press" | "drag" | "release") => w.mouse_esq(action, row.max(0) as usize, col.max(0) as usize, modifier.contains("S-")),
                 _ => continue,
             },
         }
@@ -2924,6 +3111,145 @@ mod testes {
         assert!(modelo(&mut s).picker.is_none());
         assert_eq!(modelo(&mut s).cursor, (0, 1), "Espaço anda como `l`");
         assert_eq!(tecla_nome('\t'), "<Tab>");
+    }
+
+    #[test]
+    fn mouse_arrasta_para_selecionar_duplo_clique_palavra_triplo_linha_e_shift_estende() {
+        let mut s = Session::new("hello world foo\nsecond line\n", None);
+        s.resize(80, 20.0);
+        // clique posiciona
+        s.mouse_esq("press", 0, 8, false);
+        s.mouse_esq("release", 0, 8, false);
+        assert_eq!(modelo(&mut s).cursor, (0, 8));
+        assert!(modelo(&mut s).selection.is_none());
+        // arrastar seleciona do ponto do clique até onde chegou
+        s.mouse_esq("press", 0, 2, false);
+        s.mouse_esq("drag", 0, 5, false);
+        s.mouse_esq("drag", 0, 7, false);
+        s.mouse_esq("release", 0, 7, false);
+        let m = modelo(&mut s);
+        assert_eq!(m.mode, ModeKind::Visual);
+        assert_eq!(m.selection.map(|(_, a, b)| (a, b)), Some(((0, 2), (0, 7))));
+        // um clique fora desfaz a seleção
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        s.mouse_esq("press", 1, 3, false);
+        s.mouse_esq("release", 1, 3, false);
+        let m = modelo(&mut s);
+        assert_eq!((m.mode, m.cursor), (ModeKind::Normal, (1, 3)));
+        // duplo clique: a palavra
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        s.mouse_esq("press", 0, 1, false);
+        s.mouse_esq("release", 0, 1, false);
+        s.mouse_esq("press", 0, 1, false);
+        s.mouse_esq("release", 0, 1, false);
+        let m = modelo(&mut s);
+        assert_eq!(m.selection.map(|(_, a, b)| (a, b)), Some(((0, 0), (0, 4))), "hello");
+        // triplo: a linha
+        s.mouse_esq("press", 0, 1, false);
+        s.mouse_esq("release", 0, 1, false);
+        let m = modelo(&mut s);
+        assert_eq!(m.selection.map(|(k, _, _)| k), Some(VKind::Line));
+        // Shift+clique estende do cursor até o clique
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        s.mouse_esq("press", 0, 0, false);
+        s.mouse_esq("release", 0, 0, false);
+        s.mouse_esq("press", 1, 5, true);
+        s.mouse_esq("release", 1, 5, true);
+        let m = modelo(&mut s);
+        assert_eq!(m.selection.map(|(_, a, b)| (a, b)), Some(((0, 0), (1, 5))));
+        s.feed("<Esc>");
+        // na inserção o clique pode ir para depois do último caractere
+        s.feed("i");
+        s.mouse_esq("press", 0, 99, false);
+        s.mouse_esq("release", 0, 99, false);
+        assert_eq!(modelo(&mut s).cursor, (0, 15));
+    }
+
+    #[test]
+    fn set_number_relativenumber_scrolloff_e_opcoes_desconhecidas() {
+        let mut s = Session::new("a\nb\nc\nd\n", None);
+        s.resize(80, 20.0);
+        let m = modelo(&mut s);
+        assert!(m.numero && !m.relativo);
+        s.feed(":set nonumber<CR>");
+        assert!(!modelo(&mut s).numero);
+        s.feed(":set number! rnu<CR>");
+        let m = modelo(&mut s);
+        assert!(m.numero && m.relativo);
+        s.feed(":set norelativenumber<CR>");
+        assert!(!modelo(&mut s).relativo);
+        // scrolloff aceita número; sem número avisa
+        s.feed(":set so=0<CR>");
+        assert_eq!(s.scrolloff, 0.0);
+        s.feed(":set scrolloff=x<CR>");
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.2 == ToastKind::Error));
+        // opções do núcleo passam por lá; as desconhecidas avisam; as inofensivas não incomodam
+        s.feed(":set sw=2 et nohlsearch<CR>");
+        assert_eq!(s.ed.shiftwidth, 2);
+        assert!(s.ed.expandtab);
+        s.feed(":set bobagem<CR>");
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.2 == ToastKind::Error && t.1.contains("bobagem")));
+        // clipboard
+        s.feed(":set clipboard=unnamedplus<CR>");
+        assert!(s.ed.clipboard_unnamedplus);
+        s.feed(":set clipboard=<CR>");
+        assert!(!s.ed.clipboard_unnamedplus);
+        motion_reset();
+    }
+
+    fn motion_reset() {
+        astrograph_core::motion::set_tabstop(8);
+    }
+
+    #[test]
+    fn clipboard_do_sistema_vai_no_view_model_e_volta_pelo_clipsync() {
+        let mut w = Workspace::new(None, ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.feed("ione two<Esc>0\"+yw");
+        let m = w.view_model();
+        assert_eq!(m.clip, Some((1, "one ".to_string())), "o app leva isto ao clipboard do sistema");
+        // o app diz o que há no clipboard; `"+p` cola de lá
+        w.clipboard_do_sistema("ZZ");
+        w.feed("$\"+p");
+        assert_eq!(w.view_model().rope.to_string(), "one twoZZ");
+        // unnamedplus: `yw` comum também copia, e `p` comum cola do clipboard
+        w.clipboard_unnamedplus(true);
+        w.feed("0yw");
+        assert_eq!(w.view_model().clip.map(|c| c.1), Some("one ".to_string()));
+        w.clipboard_do_sistema("QQ");
+        w.feed("$p");
+        assert!(w.view_model().rope.to_string().ends_with("QQ"));
+    }
+
+    #[test]
+    fn mapeamentos_do_config_com_lider_e_dos_comandos_valem_em_todas_as_abas() {
+        use astrograph_core::mapas::{MODO_I, MODO_N};
+        let d = projeto("mapas");
+        let mut w = Workspace::new(Some(d.join("src/alfa.rs")), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.aplicar_mapas(&[(MODO_N, "<Leader>d".into(), "dd".into()), (MODO_N, "<Leader>gs".into(), "A!<Esc>".into()), (MODO_I, "jk".into(), "<Esc>".into())]);
+        // <Leader>d: o líder abre a espera, mas `d` não é atalho do app: vira o mapeamento do usuário
+        w.feed(" d");
+        assert_eq!(w.view_model().rope.to_string(), "fn agulha() {}");
+        // prefixo maior (<Leader>gs): o `g` espera a próxima tecla
+        w.feed(" gs");
+        assert_eq!(w.view_model().rope.to_string(), "fn agulha() {}!");
+        // imap jk sai da inserção
+        w.feed("Aabcjkx");
+        assert_eq!(w.view_model().rope.to_string(), "fn agulha() {}!ab");
+        // :nnoremap digitado numa aba vale nas outras
+        w.feed(":nnoremap Q x<CR>");
+        w.feed(&format!(":tabnew {}<CR>", d.join("src/beta.rs").display()));
+        assert_eq!(w.n_abas(), 2);
+        w.feed("Q");
+        assert_eq!(w.view_model().rope.to_string(), "n beta() {}");
+        // e os que vieram do config também
+        w.feed(" d");
+        assert_eq!(w.view_model().rope.to_string(), "");
+        // o prefixo pendente aparece na pílula
+        w.feed(" g");
+        assert!(w.view_model().showcmd.contains('g'), "{:?}", w.view_model().showcmd);
+        w.feed("<Esc>");
     }
 
     #[cfg(unix)]

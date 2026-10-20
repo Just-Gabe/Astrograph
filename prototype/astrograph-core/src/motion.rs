@@ -215,11 +215,23 @@ pub fn bckend_word(b: &Buffer, p: &mut Pos, count: usize, big: bool, eol: bool) 
     }
 }
 
+static TABSTOP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(8);
+
+/// `tabstop`: colunas de um tab (vale para o processo todo; a tela usa o mesmo valor).
+pub fn tabstop() -> usize {
+    TABSTOP.load(std::sync::atomic::Ordering::Relaxed).max(1)
+}
+
+pub fn set_tabstop(n: usize) {
+    TABSTOP.store(n.clamp(1, 32), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Largura em colunas de tela do caractere na posição (tab até o próximo
 /// múltiplo de 8; CJK e afins ocupam 2).
 pub fn char_width(c: char, vcol: usize) -> usize {
     if c == '\t' {
-        8 - vcol % 8
+        let t = tabstop();
+        t - vcol % t
     } else {
         unicode_width::UnicodeWidthChar::width(c).unwrap_or(1).max(1)
     }

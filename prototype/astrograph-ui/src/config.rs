@@ -15,6 +15,21 @@ pub struct Config {
     pub clock: ClockCfg,
     pub engine: EngineCfg,
     pub lsp: LspCfg,
+    pub editor: EditorCfg,
+}
+
+/// Opções do editor nativo (as de `:set`).
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct EditorCfg {
+    /// `"unnamedplus"`: copiar e colar sem registrador usa o clipboard do sistema (`:set clipboard=unnamedplus`)
+    pub clipboard: String,
+}
+
+impl Default for EditorCfg {
+    fn default() -> Self {
+        EditorCfg { clipboard: String::new() }
+    }
 }
 
 /// Servidores de linguagem do motor nativo.
@@ -54,15 +69,31 @@ impl Default for ClockCfg {
 pub struct KeysCfg {
     /// Tecla líder: `"space"` (padrão), `"\\"`, `","`... Um caractere ou o nome `space`/`espaço`.
     pub leader: String,
+    /// mapeamentos (sem remapeamento) por modo: `"<Leader>w" = ":w<CR>"`
+    pub normal: std::collections::BTreeMap<String, String>,
+    pub insert: std::collections::BTreeMap<String, String>,
+    pub visual: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for KeysCfg {
     fn default() -> Self {
-        KeysCfg { leader: "space".into() }
+        KeysCfg { leader: "space".into(), normal: Default::default(), insert: Default::default(), visual: Default::default() }
     }
 }
 
 impl KeysCfg {
+    /// Os mapeamentos do arquivo como (modos, lhs, rhs): modos são os bits de `astrograph_core::mapas`.
+    pub fn mapeamentos(&self) -> Vec<(u8, String, String)> {
+        use astrograph_core::mapas::{MODO_I, MODO_N, MODO_V};
+        let mut v = Vec::new();
+        for (modo, tabela) in [(MODO_N, &self.normal), (MODO_I, &self.insert), (MODO_V, &self.visual)] {
+            for (l, r) in tabela {
+                v.push((modo, l.clone(), r.clone()));
+            }
+        }
+        v
+    }
+
     /// A líder como caractere (`space`, `<Space>`, `espaço` ou um único caractere); inválida volta a Espaço.
     pub fn leader_char(&self) -> char {
         let t = self.leader.trim();
@@ -124,6 +155,7 @@ impl Default for Config {
             clock: ClockCfg::default(),
             engine: EngineCfg::default(),
             lsp: LspCfg::default(),
+            editor: EditorCfg::default(),
         }
     }
 }
@@ -234,12 +266,30 @@ fn cli_config() -> Option<String> {
 }
 
 #[cfg(test)]
+mod testes_mapas {
+    use super::*;
+
+    #[test]
+    fn keymaps_do_toml_viram_mapeamentos_por_modo() {
+        let c: Config = toml::from_str("[keys]\nleader = \",\"\n[keys.normal]\n\"<Leader>w\" = \":w<CR>\"\n[keys.insert]\n\"jk\" = \"<Esc>\"\n[keys.visual]\n\"<Leader>y\" = \"\\\"+y\"").unwrap();
+        let m = c.keys.mapeamentos();
+        assert_eq!(m.len(), 3);
+        assert!(m.contains(&(astrograph_core::mapas::MODO_N, "<Leader>w".into(), ":w<CR>".into())));
+        assert!(m.contains(&(astrograph_core::mapas::MODO_I, "jk".into(), "<Esc>".into())));
+        assert!(m.contains(&(astrograph_core::mapas::MODO_V, "<Leader>y".into(), "\"+y".into())));
+        assert_eq!(c.keys.leader_char(), ',');
+        // sem a seção: nada
+        assert!(Config::default().keys.mapeamentos().is_empty());
+    }
+}
+
+#[cfg(test)]
 mod testes_teclas {
     use super::*;
 
     #[test]
     fn lider_aceita_nome_ou_caractere_e_cai_em_espaco() {
-        let k = |s: &str| KeysCfg { leader: s.into() }.leader_char();
+        let k = |s: &str| KeysCfg { leader: s.into(), ..Default::default() }.leader_char();
         assert_eq!(k("space"), ' ');
         assert_eq!(k("<Space>"), ' ');
         assert_eq!(k("Espaço"), ' ');

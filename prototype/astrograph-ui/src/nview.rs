@@ -147,6 +147,9 @@ pub struct ViewModel {
     pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
+    /// `:set number` / `relativenumber`
+    pub numero: bool,
+    pub relativo: bool,
     /// assinatura da função em edição (`(` e `,` no modo de inserção)
     pub sig: Option<SigView>,
     pub completion: Option<CompView>,
@@ -209,6 +212,8 @@ impl ViewModel {
             git: None,
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
+            numero: true,
+            relativo: false,
             sig: None,
             completion: None,
             tabs: Vec::new(),

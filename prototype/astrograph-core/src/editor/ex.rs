@@ -11,6 +11,11 @@ struct Faixa {
     dado: bool,
 }
 
+/// Opções booleanas que o núcleo trata (para reconhecer o prefixo `no`).
+fn bool_do_nucleo(n: &str) -> bool {
+    matches!(n, "ignorecase" | "ic" | "smartcase" | "scs" | "expandtab" | "et")
+}
+
 impl Editor {
     pub fn cmdline(&self) -> Option<&str> {
         self.cmdline.as_deref()
@@ -178,7 +183,7 @@ impl Editor {
                     i += 1;
                 }
             }
-        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only") {
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap") {
             // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
             let primeiro = nome.chars().next().unwrap();
             if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {
@@ -231,6 +236,9 @@ impl Editor {
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }
+            "set" | "se" => self.ex_set(&resto),
+            "map" | "nm" | "nmap" | "im" | "imap" | "vm" | "vmap" | "xm" | "xmap" | "no" | "noremap" | "nn" | "nnoremap" | "ino" | "inoremap" | "vn" | "vnoremap" | "xn" | "xnoremap" | "unm" | "unmap" | "nun" | "nunmap"
+            | "iu" | "iunmap" | "vu" | "vunmap" | "xu" | "xunmap" | "mapc" | "mapclear" => self.ex_mapa(&nome, &resto),
             "normal" | "norm" => {
                 let teclas = resto.strip_prefix(' ').unwrap_or(&resto).to_string();
                 self.ex_normal(faixa.a, faixa.b, &teclas, faixa.dado);
@@ -244,6 +252,81 @@ impl Editor {
             _ => self.host_cmd = Some(linha.to_string()),
         }
         let _ = resto_t;
+    }
+
+    /// `:set opção`, `:set noopção`, `:set opção!`, `:set opção=valor` (vários na mesma linha). As que o
+    /// núcleo não conhece (`number`, `scrolloff`, `clipboard`...) voltam para quem hospeda (`take_host_cmd`).
+    fn ex_set(&mut self, args: &str) {
+        let mut fora: Vec<&str> = Vec::new();
+        for t in args.split_whitespace() {
+            let (nome, valor) = match t.split_once(['=', ':']) {
+                Some((n, v)) => (n, Some(v)),
+                None => (t, None),
+            };
+            let (nome, inverte) = match nome.strip_suffix('!') {
+                Some(n) => (n, true),
+                None => (nome, false),
+            };
+            let (base, liga) = match nome.strip_prefix("no").filter(|r| !r.is_empty()) {
+                Some(r) if bool_do_nucleo(r) => (r, false),
+                _ => (nome, true),
+            };
+            let num = valor.and_then(|v| v.parse::<usize>().ok());
+            match (base, num) {
+                ("shiftwidth" | "sw", Some(n)) if n > 0 => self.shiftwidth = n,
+                ("tabstop" | "ts", Some(n)) if n > 0 => motion::set_tabstop(n),
+                ("ignorecase" | "ic", _) => self.ignorecase = if inverte { !self.ignorecase } else { liga },
+                ("smartcase" | "scs", _) => self.smartcase = if inverte { !self.smartcase } else { liga },
+                ("expandtab" | "et", _) => self.expandtab = if inverte { !self.expandtab } else { liga },
+                _ => fora.push(t),
+            }
+        }
+        if !fora.is_empty() {
+            self.host_cmd = Some(format!("set {}", fora.join(" ")));
+        }
+    }
+
+    /// `:map`, `:nnoremap <silent> <Leader>w :w<CR>`, `:unmap`, `:mapclear`...
+    fn ex_mapa(&mut self, nome: &str, args: &str) {
+        use super::mapas::{MODO_I, MODO_N, MODO_V};
+        let modos = match nome.chars().next() {
+            Some('n') if nome != "no" && !nome.starts_with("noremap") => MODO_N,
+            Some('i') => MODO_I,
+            Some('v' | 'x') => MODO_V,
+            _ => MODO_N | MODO_V,
+        };
+        let desmapear = nome.contains("unm") || matches!(nome, "nun" | "iu" | "iunmap" | "vu" | "xu" | "xunmap" | "vunmap" | "nunmap");
+        if nome.starts_with("mapc") {
+            self.limpar_mapas(MODO_N | MODO_V);
+            return;
+        }
+        let recursivo = !nome.contains("no") || nome.starts_with("nm");
+        // tira <silent>, <buffer>, <nowait>, <unique>
+        let mut resto = args.trim_start();
+        loop {
+            let low = resto.to_lowercase();
+            let Some(n) = ["<silent>", "<buffer>", "<nowait>", "<unique>"].iter().find(|o| low.starts_with(*o)).map(|o| o.len()) else { break };
+            resto = resto[n..].trim_start();
+        }
+        let (lhs, rhs) = match resto.split_once(char::is_whitespace) {
+            Some((l, r)) => (l, r.trim_start()),
+            None => (resto, ""),
+        };
+        if desmapear {
+            if lhs.is_empty() || !self.desmapear(modos, lhs) {
+                self.failed = true;
+            }
+            return;
+        }
+        if lhs.is_empty() {
+            // `:map` sozinho lista (a primeira linha de `msg`, para quem quiser mostrar)
+            self.msg = self.listar_mapas().join("\n");
+            return;
+        }
+        if rhs.is_empty() {
+            return;
+        }
+        self.mapear(modos, lhs, rhs, recursivo);
     }
 
     fn ex_apagar(&mut self, a: usize, b: usize) {
@@ -300,7 +383,7 @@ impl Editor {
         let cmd: String = chars[fim.min(chars.len())..].iter().collect();
         let cmd = if cmd.trim().is_empty() { "p".to_string() } else { cmd };
         let pat = if pat.is_empty() { self.last_search.as_ref().map(|(p, _)| p.clone()).unwrap_or_default() } else { pat };
-        let Some(re) = search::compile(&pat) else {
+        let Some(re) = search::compile_opts(&pat, self.ignorecase, self.smartcase) else {
             self.failed = true;
             return;
         };
