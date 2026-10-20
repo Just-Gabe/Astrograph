@@ -96,8 +96,8 @@ fn vocabulario_marcas() -> Vec<&'static str> {
 
 fn vocabulario_vp() -> Vec<&'static str> {
     vec![
-        "yw", "yy", "yiw", "yj", "y$", "yG", "dw", "dd", "x", "D", "vp", "vP", "Vp", "VP", "viwp", "viwP", "vep", "vjp", "vlp", "V2jp", "vawp", "v$p", "vgp", "vip", "Vjp", "vp.", "p", "P",
-        "w", "e", "b", "j", "k", "$", "0", "G", "gg", "2w", "3j", "fo", "u", ".", "yyp", "ve<Esc>", "v<Esc>",
+        "yw", "yy", "yiw", "yj", "y$", "yG", "dw", "dd", "x", "D", "vp", "vP", "Vp", "VP", "viwp", "viwP", "vep", "vjp", "vlp", "V2jp", "vawp", "v$p", "vgp", "vip", "Vjp", "vgP", "p", "P",
+        "w", "e", "b", "j", "k", "$", "0", "G", "gg", "2w", "3j", "fo", "u", "yyp", "ve<Esc>", "v<Esc>",
     ]
 }
 

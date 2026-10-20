@@ -37,7 +37,8 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Busca (`/ ? n N * #`, realce animado, `:noh`) | pronto |
 | Marcas (`m a-z`, `'x`, `` `x ``, `''`, `'<` `'>`), com reajuste por linhas e desfazer | **99%** (195/200) |
 | Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
-| Visual em bloco (`<C-v>`), `p` no visual, `:s` `:g` | próximo |
+| `p`/`P`/`gp`/`gP` no visual (substitui a seleção; linha x caractere, registrador, um passo de desfazer) | **97%** (145/150) |
+| Visual em bloco (`<C-v>`), `:s` `:g` | próximo |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |

@@ -42,6 +42,8 @@ enum VCmd {
     Op(char, Option<usize>),
     Obj(bool, char, Option<usize>),
     Replace(char),
+    /// `p` / `P` sobre a seleção
+    Put(bool, Option<usize>, bool),
     Swap,
     Kind(VKind),
     Esc,
@@ -177,6 +179,8 @@ pub struct Editor {
     vmarks: Option<(Pos, Pos, VKind)>,
     /// marcas que o desfazer/refazer devolve (aplicadas depois do reajuste por linhas)
     marks_back: Option<HashMap<char, Pos>>,
+    /// onde o último `p` terminou: (por linhas?, posição logo depois do texto) — para `gp`
+    put_end: Option<(bool, Pos)>,
 }
 
 const MAXWANT: usize = usize::MAX;
@@ -218,6 +222,7 @@ impl Editor {
             pcmark: Some(Pos::new(0, 0)),
             vmarks: None,
             marks_back: None,
+            put_end: None,
         }
     }
 
@@ -1302,7 +1307,85 @@ impl Editor {
             _ => self.unnamed.clone(),
         };
         let Some(r) = r else { return };
+        self.put_reg(r, after, count);
+    }
+
+    /// `p`/`P` sobre a seleção visual (regras do `nv_put` do Vim). `replace_reg`: `p` leva o texto
+    /// apagado para o registrador; `P` o deixa como estava.
+    fn visual_put(&mut self, replace_reg: bool, count: usize, cursor_after: bool) {
+        let Some(vs) = self.vis else { return };
+        // registrador vazio: o Vim apaga a seleção mesmo assim e avisa que não há o que colar
+        let vazio = self.unnamed.is_none();
+        let r = self.unnamed.clone().unwrap_or(Reg { text: String::new(), linewise: false });
+        // `P` simples deixa o registrador; `p`, `gp` e `gP` o trocam pelo texto apagado
+        let keep = !replace_reg && !cursor_after;
+        let saved = keep.then(|| (self.regs.clone(), self.unnamed.clone()));
+        let undo_len = self.undo.len();
+        let (a, _, _) = self.visual_range();
+        let kind = vs.kind;
+        self.visual_operate('d', None);
+        let esvaziou = self.emptied;
+        if let Some((regs, un)) = saved {
+            self.regs = regs;
+            self.unnamed = un;
+        }
+        if vazio {
+            self.failed = true;
+        }
+        // depois de apagar, o cursor "voltou" para o fim da linha/arquivo? então põe depois
+        let after = if kind == VKind::Line { self.cursor.row < a.row } else { self.cursor.col < a.col && self.cursor.row == a.row };
+        let mut r = r;
+        let mut split = false;
+        if kind == VKind::Char && r.linewise {
+            split = true;
+        }
+        if kind == VKind::Line && !r.linewise {
+            r.linewise = true;
+        }
+        self.put_reg_opts(r, after, count, split);
+        if cursor_after && !vazio {
+            if let Some((linewise, end)) = self.put_end {
+                self.cursor = if linewise { Pos::new(end.row.min(self.last_row()), 0) } else { end };
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+        }
+        // todas as linhas foram apagadas: a linha vazia que sobrou depois do put sai
+        if esvaziou && self.buf.line_count() > 1 && self.buf.line_len(self.last_row()) == 0 {
+            let last = self.last_row();
+            self.buf.delete_lines(last, last);
+            if self.cursor.row > self.last_row() {
+                let r = self.last_row();
+                self.cursor = Pos::new(r, self.buf.line_len(r).saturating_sub(1));
+            }
+        }
+        // apagar e colar contam como um passo só no desfazer
+        self.undo.truncate(undo_len + 1);
+        self.mode = Mode::Normal;
+        self.vis = None;
+    }
+
+    fn put_reg(&mut self, r: Reg, after: bool, count: usize) {
+        self.put_reg_opts(r, after, count, false);
+    }
+
+    fn put_reg_opts(&mut self, r: Reg, after: bool, count: usize, split: bool) {
         self.checkpoint();
+        let mut after = after;
+        if split {
+            // `p` de linhas sobre uma seleção de caracteres: parte a linha e põe as linhas no meio
+            let row = self.cursor.row;
+            let line = self.buf.line(row);
+            let len = line.chars().count();
+            let col = if after && len > 0 { self.cursor.col + 1 } else { self.cursor.col }.min(len);
+            let (first, rest): (String, String) = (line.chars().take(col).collect(), line.chars().skip(col).collect());
+            let end = Pos::new(row, len);
+            self.buf.delete(Pos::new(row, 0), end);
+            self.buf.insert(Pos::new(row, 0), &first);
+            self.buf.insert_line(row + 1, &rest);
+            self.cursor = Pos::new(row, 0);
+            after = true;
+        }
         if r.linewise {
             let lines: Vec<&str> = r.text.split('\n').collect();
             let at = if after { self.cursor.row + 1 } else { self.cursor.row };
@@ -1313,6 +1396,7 @@ impl Editor {
                     row += 1;
                 }
             }
+            self.put_end = Some((true, Pos::new(row, 0)));
             self.cursor = Pos::new(at, self.buf.first_nonblank(at));
             self.fix_cursor();
             self.curswant = self.want_here();
@@ -1324,6 +1408,7 @@ impl Editor {
             self.buf.insert(at, &text);
             let n = text.chars().count();
             let end = self.buf.pos_of(self.buf.idx(at) + n);
+            self.put_end = Some((false, end));
             if text.contains('\n') {
                 self.cursor = at;
             } else {
@@ -1452,6 +1537,11 @@ impl Editor {
             Key::Char('v') => VParse::Done(VCmd::Kind(VKind::Char)),
             Key::Char('V') => VParse::Done(VCmd::Kind(VKind::Line)),
             Key::Char('o' | 'O') => VParse::Done(VCmd::Swap),
+            Key::Char(c @ ('p' | 'P')) => VParse::Done(VCmd::Put(c == 'p', count, false)),
+            Key::Char('g') if matches!(keys.get(i + 1), Some(Key::Char('p' | 'P'))) => {
+                let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
+                VParse::Done(VCmd::Put(*c == 'p', count, true))
+            }
             Key::Char(op @ ('d' | 'x' | 'X' | 'D' | 'y' | 'Y' | 'c' | 's' | 'S' | 'C' | 'R' | '<' | '>' | '~' | 'u' | 'U' | 'J')) => VParse::Done(VCmd::Op(op, count)),
             Key::Delete => VParse::Invalid,
             Key::Char('r') => match keys.get(i + 1) {
@@ -1521,6 +1611,7 @@ impl Editor {
             VCmd::Obj(include, ch, count) => self.visual_object(include, ch, count.unwrap_or(1)),
             VCmd::Replace(ch) => self.visual_replace(ch),
             VCmd::Op(op, count) => self.visual_operate(op, count),
+            VCmd::Put(replace, count, cursor_after) => self.visual_put(replace, count.unwrap_or(1), cursor_after),
         }
     }
 
