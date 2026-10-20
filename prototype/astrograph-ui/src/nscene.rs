@@ -435,7 +435,10 @@ impl Scene {
         let (w, h) = (c.w as f32, c.h as f32);
         let top_px = self.top.x - self.over.x;
         let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
-        c.set_clip(0, 0, c.w, clip_bottom);
+        // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
+        // sem invadir o título nem a base, mesmo quando a mola passa do alvo
+        let edit = (0, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
         let hl_y = lay.text_y + self.hl_y.x - top_px;
@@ -481,6 +484,8 @@ impl Scene {
             }
         }
 
+        // o texto rola por baixo do véu do título
+        c.set_clip(0, 0, c.w, clip_bottom);
         // linhas visíveis
         let pad = (self.shift.x.abs() / lay.line_h).ceil() as i64;
         let first = ((top_px / lay.line_h).floor() as i64 - 1 - pad).max(0) as usize;
@@ -565,8 +570,10 @@ impl Scene {
             }
         }
 
-        // cursor
+        // cursor: de volta à área do editor
+        c.set_clip(edit.0, edit.1, edit.2, edit.3);
         self.paint_cursor(c, vm, lay, top_px, now);
+        c.set_clip(0, 0, c.w, clip_bottom);
 
         // barra de rolagem
         if self.bar.v > 0.01 && vm.lines as f32 * lay.line_h > h {
@@ -653,8 +660,8 @@ impl Scene {
                     c.set_clip(x as i32, (y + 1.0) as i32, (x + wpx) as i32 + 1, (y + lay.line_h) as i32);
                     c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::BG, alpha);
                     c.reset_clip();
-                    // continua valendo o corte do conteúdo
-                    c.set_clip(0, 0, c.w, (c.h as f32 - d::M.bottom * s * 0.55) as i32);
+                    // continua valendo o corte do editor
+                    c.set_clip(0, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
                 }
             }
         }
@@ -1069,6 +1076,39 @@ mod testes {
         assert_eq!(match_bracket(&vm), Some((5, 0)));
         assert_eq!(indent_cols(&vm, 3), 8, "linha vazia herda a da próxima");
         assert_eq!(indent_cols(&vm, 1), 4);
+    }
+
+    #[test]
+    fn cursor_e_destaque_ficam_presos_a_area_do_texto() {
+        let Some(mut sc) = cena() else { return };
+        let texto: String = (0..300).map(|i| format!("linha numero {i}\n")).collect();
+        let mut s = Session::new(&texto, None);
+        let (w, h) = (640u32, 400u32);
+        let lay = sc.layout(w, h, 300);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, w, h, t0);
+        let mut n = 0u64;
+        for passo in ["G", "50k", "100k", "300j", "gg", "G"] {
+            s.feed(passo);
+            let vm = s.view_model();
+            for _ in 0..30 {
+                n += 1;
+                let buf = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(8 * n));
+                // faixa do título e faixa entre o texto e a pílula: sem a cor do cursor
+                let faixas = [(0u32, (lay.text_y as u32).saturating_sub(2)), ((h as f32 - d::M.bottom) as u32 + 1, h - 56)];
+                for (y0, y1) in faixas {
+                    for y in y0..y1 {
+                        for x in 0..w {
+                            let px = buf[(y * w + x) as usize];
+                            let azul = (px & 0xff) > 0xc0 && ((px >> 8) & 0xff) > 0x60 && ((px >> 16) & 0xff) < 0x40;
+                            assert!(!azul, "cursor invadiu a faixa y={y} no passo {passo}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`
