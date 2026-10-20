@@ -1,6 +1,6 @@
 -- `:Astrograph <subcomando>` — atalhos do dia a dia, em português.
 --
---   :Astrograph atualizar   baixa a versão nova do Astrograph e sincroniza os plugins
+--   :Astrograph atualizar   atualiza sem risco (guarda suas alterações, confere e desfaz se falhar)
 --   :Astrograph saude       abre o `:checkhealth astrograph`
 --   :Astrograph agentes     mostra os agentes de IA: instalado, login e chat (ACP)
 --   :Astrograph configurar  instala as pontes do chat e faz os logins que faltam
@@ -28,33 +28,7 @@ function M.root()
   if uv.fs_stat(root .. "/.git") then return root end
 end
 
-function M.atualizar()
-  local root = M.root()
-  if not root then
-    notify("Não achei o repositório do Astrograph (a config não aponta para um clone git).", vim.log.levels.WARN)
-    return
-  end
-  notify("Atualizando " .. root .. " …")
-  -- o `:Lazy update` reescreve o lazy-lock.json versionado; descarta antes do pull
-  vim.system({ "git", "-C", root, "checkout", "--", "template/lazy-lock.json" }, {}, function()
-    vim.system({ "git", "-C", root, "pull", "--ff-only" }, { text = true }, function(res)
-      vim.schedule(function()
-        if res.code ~= 0 then
-          notify("Falha no git pull:\n" .. (res.stderr or ""), vim.log.levels.ERROR)
-          return
-        end
-        local out = vim.trim(res.stdout or "")
-        if out:match "Already up to date" or out:match "Já está atualizado" then
-          notify "O Astrograph já está na última versão."
-          return
-        end
-        notify "Astrograph atualizado. Sincronizando plugins com o lazy-lock…"
-        require("lazy").restore { wait = false }
-        notify "Pronto. Reinicie o Neovim para carregar a versão nova."
-      end)
-    end)
-  end)
-end
+function M.atualizar() require("astrograph.update").atualizar() end
 
 function M.saude() vim.cmd "checkhealth astrograph" end
 
