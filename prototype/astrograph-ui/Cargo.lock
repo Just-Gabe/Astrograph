@@ -110,6 +110,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 
 [[package]]
+name = "astrograph-servicos"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "astrograph-syntax"
 version = "0.1.0"
 dependencies = [
@@ -135,12 +143,14 @@ version = "0.0.1"
 dependencies = [
  "ab_glyph",
  "arboard",
+ "astrograph-servicos",
  "astrograph-syntax",
  "async-trait",
  "embed-resource",
  "nvim-rs",
  "rustybuzz",
  "serde",
+ "serde_json",
  "softbuffer",
  "tokio",
  "toml",

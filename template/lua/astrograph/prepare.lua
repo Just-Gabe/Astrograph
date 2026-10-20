@@ -38,6 +38,7 @@ M.state = { langs = {}, done = {} }
 ---------------------------------------------------------------------------
 
 local busy = {} ---@type table<string, integer>
+local app_busy = {} ---@type table<string, integer> tarefas avisadas ao app
 local ind = { win = nil, buf = nil, frame = 1, timer = nil, show_timer = nil }
 
 local function has_busy() return next(busy) ~= nil end
@@ -118,20 +119,53 @@ local function refresh()
   end
 end
 
+---No app em Rust o indicador é desenhado por ele (um só, no renderer) e os
+---serviços (git, projeto, build) rodam lá: `vim.g.astrograph_app_chan` é o canal
+---do app. `ASTROGRAPH_SERVICOS=nvim` devolve tudo ao Lua.
+---@return integer?
+local function app_chan()
+  if vim.env.ASTROGRAPH_SERVICOS == "nvim" then return nil end
+  local ch = vim.g.astrograph_app_chan
+  if vim.g.astrograph_gui and type(ch) == "number" and ch > 0 then return ch end
+end
+M.app_chan = app_chan
+
+local function tell_app(name, on)
+  local ch = app_chan()
+  if ch then pcall(vim.rpcnotify, ch, "astrograph_busy", name, on) end
+  return ch ~= nil
+end
+
 ---Marca `name` como ocupado e devolve a função que libera (idempotente).
 ---Se ela não for chamada em `M.TIMEOUT`, libera sozinha.
 ---@param name string
 ---@return fun() done
 function M.track(name)
-  busy[name] = (busy[name] or 0) + 1
-  refresh()
+  -- no app, quem desenha é o renderer: avisa na 1ª tarefa de cada nome; as que
+  -- começaram antes de o canal existir ficam com o ícone do Lua
+  local in_app = app_chan() ~= nil
+  if in_app then
+    app_busy[name] = (app_busy[name] or 0) + 1
+    if app_busy[name] == 1 then tell_app(name, true) end
+  else
+    busy[name] = (busy[name] or 0) + 1
+    refresh()
+  end
   local released = false
   local function release()
     if released then return end
     released = true
-    busy[name] = (busy[name] or 1) - 1
-    if busy[name] <= 0 then busy[name] = nil end
-    refresh()
+    if in_app then
+      app_busy[name] = (app_busy[name] or 1) - 1
+      if app_busy[name] <= 0 then
+        app_busy[name] = nil
+        tell_app(name, false)
+      end
+    else
+      busy[name] = (busy[name] or 1) - 1
+      if busy[name] <= 0 then busy[name] = nil end
+      refresh()
+    end
   end
   vim.defer_fn(release, M.TIMEOUT)
   return release
@@ -140,6 +174,9 @@ end
 ---@return string[] nomes das tarefas em andamento
 function M.running()
   local out = vim.tbl_keys(busy)
+  for name in pairs(app_busy) do
+    if not busy[name] then out[#out + 1] = name end
+  end
   table.sort(out)
   return out
 end
@@ -406,8 +443,9 @@ function M.project(root, force, extra)
   if not broad then M.state.langs = langs end
   local is_repo = not broad and uv.fs_stat(vim.fs.joinpath(root, ".git")) ~= nil
 
-  -- git: sempre que entra na pasta (o estado muda), barato e sem travas
-  if not broad then M.git(root, M.track "git") end
+  -- git: sempre que entra na pasta (o estado muda), barato e sem travas. No app é
+  -- ele quem roda (g:astrograph_preparo); aqui só a reserva do terminal
+  if not broad and not app_chan() then M.git(root, M.track "git") end
 
   if not fresh then return end
   local all = vim.list_extend(vim.list_extend({}, extra or {}), langs)
@@ -424,8 +462,11 @@ function M.start()
   local ok, ts = pcall(require, "astrograph.treesitter")
   local base_ok, base = false, nil
   if ok then base_ok, base = pcall(ts.ensure_installed) end
-  local release_native = M.track "rust"
-  vim.defer_fn(function() M.native(release_native) end, 2000)
+  -- o build dos executáveis em Rust é do app quando ele está rodando
+  if not app_chan() then
+    local release_native = M.track "rust"
+    vim.defer_fn(function() M.native(release_native) end, 2000)
+  end
   M.project(nil, nil, base_ok and base or {})
 end
 
@@ -463,7 +504,19 @@ end
 ---@return string
 function M.report()
   local s = M.state
-  local lines = { "Preparo em segundo plano" }
+  -- no app, o projeto e o git vêm dele (g:astrograph_preparo, JSON)
+  if app_chan() and type(vim.g.astrograph_preparo) == "string" then
+    local ok, d = pcall(vim.json.decode, vim.g.astrograph_preparo)
+    if ok and type(d) == "table" then
+      s = { root = d.pasta, langs = d.linguagens or {}, git = nil }
+      if d.git_instalado == false then
+        s.git = false
+      elseif type(d.git) == "table" then
+        s.git = { branch = d.git.ramo, head = d.git.head, dirty = d.git.alteracoes, refs = d.git.refs }
+      end
+    end
+  end
+  local lines = { "Preparo em segundo plano" .. (app_chan() and " (app)" or "") }
   lines[#lines + 1] = "  pasta: " .. (s.root or "(ainda não preparada)")
   lines[#lines + 1] = "  linguagens: " .. (#s.langs > 0 and table.concat(s.langs, ", ") or "(nenhuma detectada)")
   if s.git == false then
