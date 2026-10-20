@@ -1,3 +1,10 @@
+> **Mudança de rumo (20/10).** O objetivo agora e um app unificado em Rust **sem o
+> Neovim como motor** (praticidade do Vim, todos os atalhos, mais rapido e sem
+> friccao). A decisao "UI em Rust + Neovim embutido" abaixo vale como transicao; o
+> motor nativo esta em `prototype/astrograph-core` e descrito em
+> `docs/motor-nativo.md`. O Neovim fica como referencia de comportamento (teste
+> diferencial) e como espelho para quem quiser usar so o terminal.
+
 # Roteiro: o Astrograph em Rust
 
 Decisao (2026-10-15): o Astrograph passa a ser a **UI em Rust**. O Neovim continua

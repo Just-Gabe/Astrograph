@@ -12,6 +12,12 @@ mod config;
 mod grid;
 mod realce;
 mod render;
+mod anim;
+mod design;
+mod native;
+mod nscene;
+mod nview;
+mod paint;
 mod servicos;
 
 use std::num::NonZeroU32;
@@ -56,6 +62,8 @@ enum UserEvent {
 enum UiCommand {
     Keys(String),
     Resize(i64, i64),
+    /// rolagem do editor nativo, em linhas (> 0 desce)
+    Scroll(f64),
     Focus(bool),
     Mouse {
         button: &'static str,
@@ -341,6 +349,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
+            UiCommand::Scroll(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -495,6 +504,10 @@ struct App {
     /// SPIKE_SCROLL: quadros com rolagem em andamento e maior deslocamento.
     scroll_frames: u32,
     scroll_max: f32,
+    /// Editor nativo: o que o motor publica e a cena que o anima
+    native: Option<nview::Shared>,
+    scene: Option<nscene::Scene>,
+    last_vm: Arc<nview::ViewModel>,
 }
 
 impl App {
@@ -503,6 +516,7 @@ impl App {
         tx: UnboundedSender<UiCommand>,
         proxy: EventLoopProxy<UserEvent>,
         cfg: Config,
+        native: Option<nview::Shared>,
     ) -> Self {
         let now = Instant::now();
         App {
@@ -540,6 +554,9 @@ impl App {
             last_redraw: now,
             scroll_frames: 0,
             scroll_max: 0.0,
+            native,
+            scene: None,
+            last_vm: Arc::new(nview::ViewModel::empty()),
         }
     }
 
@@ -586,6 +603,11 @@ impl App {
     }
 
     fn mouse_cell(&self) -> (i64, i64) {
+        if let (Some(scene), Some(window)) = (&self.scene, &self.window) {
+            let size = window.inner_size();
+            let (row, col) = scene.hit_test(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32, size.width, size.height, &self.last_vm);
+            return (row as i64, col as i64);
+        }
         let (renderer, window) = match (&self.renderer, &self.window) {
             (Some(r), Some(w)) => (r, w),
             _ => return (0, 0),
@@ -622,7 +644,54 @@ impl App {
         let _ = self.tx.send(UiCommand::Mouse { button, action, modifier, row, col });
     }
 
+    /// Quadro do editor nativo: a cena pinta pixels, sem grade de celulas.
+    fn draw_native(&mut self) {
+        let (Some(window), Some(shared)) = (self.window.clone(), self.native.clone()) else { return };
+        let size = window.inner_size();
+        let (w, h) = (size.width, size.height);
+        let (Some(nw), Some(nh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) else { return };
+        let Some(surface) = self.surface.as_mut() else { return };
+        if self.surface_size != (w, h) {
+            surface.resize(nw, nh).expect("resize");
+            self.surface_size = (w, h);
+        }
+        let now = Instant::now();
+        let vm = shared.lock().unwrap().clone();
+        let Some(scene) = self.scene.as_mut() else { return };
+        let mut buffer = surface.buffer_mut().expect("buffer_mut");
+        let frame = {
+            let mut canvas = paint::Canvas::new(&mut buffer, w, h);
+            scene.paint(&mut canvas, &vm, now)
+        };
+        buffer.present().expect("present");
+        self.anim_next = frame.animating.then(|| now + ANIM_FRAME);
+        if let Some(d) = frame.wake {
+            let t = now + d;
+            self.anim_next = Some(self.anim_next.map_or(t, |a| a.min(t)));
+        }
+        if !servicos::em_andamento().is_empty() {
+            let t = now + Duration::from_millis(servicos::PASSO_MS as u64);
+            self.anim_next = Some(self.anim_next.map_or(t, |a| a.min(t)));
+        }
+        if self.first_paint.is_none() {
+            let elapsed = self.start.elapsed();
+            self.first_paint = Some(elapsed);
+            println!("FIRST_PAINT: {} ms desde o inicio", elapsed.as_millis());
+        }
+        self.frames += 1;
+        self.last_vm = vm.clone();
+        let lay = scene.layout(w, h, vm.lines);
+        let dims = (lay.cols, lay.rows.floor() as usize);
+        if dims != self.last_grid {
+            self.last_grid = dims;
+            let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, dims.1 as i64));
+        }
+    }
+
     fn draw(&mut self) {
+        if self.native.is_some() {
+            return self.draw_native();
+        }
         let window = match &self.window {
             Some(window) => window.clone(),
             None => return,
@@ -859,6 +928,14 @@ impl ApplicationHandler<UserEvent> for App {
         let lay = renderer.layout(size.width, size.height);
         self.last_grid = (lay.cols, lay.rows);
         let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, lay.rows as i64));
+        if self.native.is_some() {
+            self.scene = nscene::Scene::new(self.base_font * scale, scale);
+            if let Some(scene) = &self.scene {
+                let lay = scene.layout(size.width, size.height, 1);
+                self.last_grid = (lay.cols, lay.rows.floor() as usize);
+                let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, lay.rows.floor() as i64));
+            }
+        }
         self.renderer = Some(renderer);
         window.set_cursor(CursorIcon::Text);
         self.window = Some(window);
@@ -905,7 +982,7 @@ impl ApplicationHandler<UserEvent> for App {
                 soonest(deadline);
             }
         }
-        if self.shown {
+        if self.shown && self.native.is_none() {
             let (alpha, next) = self.cursor_alpha(now);
             if (alpha - self.drawn_alpha).abs() > 0.004 {
                 self.request_redraw();
@@ -935,6 +1012,9 @@ impl ApplicationHandler<UserEvent> for App {
                     renderer.set_size(self.base_font * scale);
                     renderer.set_padding((self.cfg.window.padding.max(0.0) * scale_factor).round() as u32);
                 }
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_metrics(self.base_font * scale, scale);
+                }
                 self.request_redraw();
             }
             WindowEvent::Focused(focused) => {
@@ -955,6 +1035,16 @@ impl ApplicationHandler<UserEvent> for App {
                 // arrastar so manda evento quando muda de celula
                 if self.left_down && self.mouse_cell() != before {
                     self.send_mouse("left", "drag");
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } if self.scene.is_some() => {
+                let line_h = self.scene.as_ref().map_or(20.0, |s| s.line_height()) as f64;
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
+                    MouseScrollDelta::PixelDelta(p) => p.y / line_h,
+                };
+                if dy != 0.0 {
+                    let _ = self.tx.send(UiCommand::Scroll(-dy));
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1216,6 +1306,9 @@ fn main() {
         g
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
+    let native_on = std::env::var("ASTROGRAPH_ENGINE").is_ok_and(|v| v == "native");
+    let native_shared = nview::shared();
+    let app_native = native_on.then(|| native_shared.clone());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<UiCommand>();
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
@@ -1236,7 +1329,13 @@ fn main() {
             .enable_all()
             .build()
             .expect("runtime tokio");
-        runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
+        // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
+        if native_on {
+            let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file));
+        } else {
+            runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
+        }
     });
 
     if std::env::var("SPIKE_SMOKE").is_ok()
@@ -1251,7 +1350,7 @@ fn main() {
         spawn_smoke(Arc::clone(&grid), tx.clone(), event_loop.create_proxy());
     }
 
-    let mut app = App::new(grid, tx, event_loop.create_proxy(), cfg);
+    let mut app = App::new(grid, tx, event_loop.create_proxy(), cfg, app_native);
     event_loop.run_app(&mut app).expect("run_app");
     println!("SPIKE_DONE");
 }

@@ -73,3 +73,22 @@ jobs:
           workspaces: prototype/astrograph-servicos
       - name: Testes dos serviços
         run: cargo test
+
+  # nucleo do editor modal sem Neovim: unitarios + regressao com casos gerados do nvim real
+  rust-core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: prototype/astrograph-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-core
+      - name: Testes do nucleo
+        run: cargo test

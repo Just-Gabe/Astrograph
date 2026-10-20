@@ -110,6 +110,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 
 [[package]]
+name = "astrograph-core"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "ropey",
+ "unicode-width",
+]
+
+[[package]]
 name = "astrograph-servicos"
 version = "0.1.0"
 dependencies = [
@@ -143,11 +152,13 @@ version = "0.0.1"
 dependencies = [
  "ab_glyph",
  "arboard",
+ "astrograph-core",
  "astrograph-servicos",
  "astrograph-syntax",
  "async-trait",
  "embed-resource",
  "nvim-rs",
+ "ropey",
  "rustybuzz",
  "serde",
  "serde_json",
@@ -1624,6 +1635,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ropey"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
+dependencies = [
+ "smallvec",
+ "str_indices",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1901,6 +1922,12 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
 ]
+
+[[package]]
+name = "str_indices"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
 name = "streaming-iterator"

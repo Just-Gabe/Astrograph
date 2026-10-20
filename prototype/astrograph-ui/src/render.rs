@@ -1449,6 +1449,41 @@ fn font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Acha um arquivo de fonte pelo nome nas pastas de fontes (até 3 níveis, para
+/// `/usr/share/fonts/truetype/...`). Usado pelo editor nativo.
+pub(crate) fn find_font_file(names: &[&str]) -> Option<PathBuf> {
+    fn walk(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        if depth == 0 {
+            return None;
+        }
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(f) = walk(&p, name, depth - 1) {
+                    return Some(f);
+                }
+            }
+        }
+        None
+    }
+    for name in names {
+        let direct = Path::new(name);
+        if direct.is_absolute() && direct.is_file() {
+            return Some(direct.to_path_buf());
+        }
+        for dir in font_dirs() {
+            if let Some(f) = walk(&dir, name, 3) {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
+
 fn resolve_styles(cfg: &FontCfg) -> Result<Vec<FontEntry>, String> {
     let overrides = [cfg.regular.as_deref(), cfg.bold.as_deref(), cfg.italic.as_deref()];
     let mut styles = Vec::new();

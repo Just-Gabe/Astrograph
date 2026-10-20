@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 astrograph-syntax = { path = "../astrograph-syntax" }
 astrograph-servicos = { path = "../astrograph-servicos" }
+astrograph-core = { path = "../astrograph-core" }
+ropey = "1.6"
 serde_json = "1"
 winit = "0.30"
 softbuffer = "0.4"

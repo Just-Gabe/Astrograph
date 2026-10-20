@@ -1,0 +1,1200 @@
+["one two three","four five six","seven eight nine","ten"]	["daw"]	["two three","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	[",2$-"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["Jdk"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["3ww"]	["one two three","four five six","seven eight nine","ten"]	1	5
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["{jj"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	2	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["$"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	15
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["V2wrzVjjsX<Esc>ViwJ"]	["X","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d^"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2}+"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	8	0
+["a","","","b c","","d"]	["{daBci(X<Esc>"]	["a","","","b c","","d"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["jgE3w^"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dto2dw"]	["bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["k"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yapd2a\""]	["one two three","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ia<CR>b<Esc>l>j"]	["a","\tbif (x) {","\t  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	0
+["single line only"]	["yi\"di<wj"]	["single line only"]	0	7
+["a","","","b c","","d"]	["yiwdab"]	["a","","","b c","","d"]	0	0
+["single line only"]	["toywcWX<Esc>2>>"]	["single lineXonly"]	0	11
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ci\"X<Esc>yaw"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2sX<Esc>"]	["Xo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["}2ee"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	11
+["single line only"]	["EdjTo"]	["single line only"]	0	5
+["",""]	["2ge2k"]	["",""]	0	0
+["single line only"]	[","]	["single line only"]	0	0
+["",""]	["di("]	["",""]	0	0
+["a","","","b c","","d"]	["te3wto_"]	["a","","","b c","","d"]	3	0
+["a","","","b c","","d"]	["vw<Esc>V0y"]	["a","","","b c","","d"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["yfo-"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vwy"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2e"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	10
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["yGD"]	["","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["_3G"]	["a","","","b c","","d"]	2	0
+["a","","","b c","","d"]	["+2X"]	["a","","","b c","","d"]	1	0
+["a","","","b c","","d"]	["2>>2sX<Esc>dG2G"]	[""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["ybi<CR>x<Esc>A<CR><Esc>}"]	["","xsay \"hello world\" and 'x y' end","","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	4	13
+["",""]	["c$X<Esc>2yy"]	["X",""]	0	0
+["a","","","b c","","d"]	["dE>jye"]	["\t c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["V3jyVggJvip<"]	["foo(bar, baz) + qux x = y;","if (a && b) { c }","trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Vjw~"]	["FOO(BAR, BAZ) + QUX","\tX = Y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["0"]	["árvore é verde","日本語 text","x"]	0	0
+["a","","","b c","","d"]	["k"]	["a","","","b c","","d"]	0	0
+["single line only"]	["kVb<Esc>Vjolx"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["Gl"]	["árvore é verde","日本語 text","x"]	2	0
+["one two three","four five six","seven eight nine","ten"]	["v2wUVj$<Esc>"]	["ONE TWO Three","four five six","seven eight nine","ten"]	1	12
+["one two three","four five six","seven eight nine","ten"]	["yawdi[dabjj"]	["one two three","four five six","seven eight nine","ten"]	2	0
+["one two three","four five six","seven eight nine","ten"]	["jp2sX<Esc>w"]	["one two three","Xur five six","seven eight nine","ten"]	1	4
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["y2wfe2}"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["v^cX<Esc>Vaw2>"]	["\t\tXne two three","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ge"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["jj"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	2	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["A<CR><Esc>"]	["foo(bar, baz) + qux","","\tx = y;","if (a && b) { c }","  trailing  "]	1	0
+["",""]	["-kfo2k"]	["",""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2b2k2ge2fo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["yaw"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ggtob"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["BdW3JD"]	["(x) { foo(1, 2);","}","","para two","second line","","","last para"]	0	15
+["",""]	["dEO<Esc>$"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["yW2w"]	["árvore é verde","日本語 text","x"]	0	9
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Verzv^uva(S-<Esc>vi{J"]	["zzzzzzzz","  - bar;","}","","para two","second line","","","last para"]	1	3
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["To3G;gg"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["y}ohi<Esc>^yG"]	["if (x) {","hi","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["0."]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["2b2b"]	["árvore é verde","日本語 text","x"]	0	0
+["single line only"]	["vkXVjdv2wY"]	[""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["da\"da{cawX<Esc>"]	["Xtwo   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vw~Va{rz"]	["zzzzzzzzzzzzzzzz","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	[";3wtocWX<Esc>"]	["árvore é verde","X text","x"]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vi(>vjjUVggJ"]	["\tONE  TWO   THREE LEAD  WORD","TAIL ","","a.b-c d_e"]	0	17
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dggdd"]	["tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	[";x"]	["ne  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["",""]	["ahi<Esc>"]	["hi",""]	0	1
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2k"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2i(di<d2apd2aw"]	[""]	0	0
+["a","","","b c","","d"]	["fe2dd"]	["","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dG"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["v$jrz"]	["zzzzzzzzzzzzz","zzzzzzzzzzzzz","seven eight nine","ten"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["b"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["VawXvi(<v3jrzvggU"]	["leadZzzzzz","zzzzz","","zzzzz d_e"]	0	4
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["V2w<Esc>vapuvapS-<Esc>vjcX<Esc>"]	["X"]	0	0
+["árvore é verde","日本語 text","x"]	["gee3h"]	["árvore é verde","日本語 text","x"]	0	2
+["a","","","b c","","d"]	["d$eceX<Esc>"]	["","","","X","","d"]	3	0
+["árvore é verde","日本語 text","x"]	["gg2}"]	["árvore é verde","日本語 text","x"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["VjC-<Esc>vawcX<Esc>Vj2>"]	["\t\tX","\t\t  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["B"]	["a","","","b c","","d"]	0	0
+["",""]	["02Gyfo"]	["",""]	1	0
+["árvore é verde","日本語 text","x"]	["3lb"]	["árvore é verde","日本語 text","x"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2}"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	4	8
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["3dd2fo"]	["}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	[".2G2foD"]	["one  two   three","","tail ","","a.b-c d_e"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["da<d2ipd2ip0"]	["last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2${"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["gE3G2foe"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	2	3
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["teW2j{"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["single line only"]	["3Geto"]	["single line only"]	0	11
+["a","","","b c","","d"]	["3dd3P2pohi<Esc>"]	["a","a","hi","","","a","","","","","a","","","a","","","b c","","d"]	2	1
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vip<Esc>Va(S-<Esc>viwsX<Esc>"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  X"]	3	2
+["single line only"]	["v$X"]	[""]	0	0
+["single line only"]	["+fo"]	["single line only"]	0	12
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["B"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["di\"di\""]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["a","","","b c","","d"]	["Vl<Esc>va{D"]	["","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	[">jyej"]	["\tfoo(bar, baz) + qux","\t\tx = y;","if (a && b) { c }","  trailing  "]	1	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d2apdaBjj"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) ","  trailing  "]	3	11
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["VkcX<Esc>va(d"]	["X","f { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	1
+["single line only"]	["2G-{fo"]	["single line only"]	0	12
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yapyiwyawd2iw"]	["world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["single line only"]	["_gg2G2G"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["cWX<Esc>ye3ix<Esc>yb"]	["xxxX baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["d2i\"d2iwyipd2i{"]	["line only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["A  z<Esc>dgg-%"]	["f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	28
+["single line only"]	["2bh"]	["single line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["3h"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vwwerzVjwJ"]	["zzzzzzzzzz world\" and 'x y' end f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	31
+["",""]	["j2k{"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["va{y"]	["árvore é verde","日本語 text","x"]	0	0
+["",""]	["2dd2kFo2{"]	[""]	0	0
+["",""]	["VjjDvsX<Esc>"]	["X"]	0	0
+["single line only"]	["v3jxvwcX<Esc>v}YVggD"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["E2G"]	["árvore é verde","日本語 text","x"]	1	2
+["one two three","four five six","seven eight nine","ten"]	["2{"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vfo>vapcX<Esc>Vggyvi{Y"]	["\tX","para two","second line","","","last para"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["daw"]	["\"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3."]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["3l"]	["árvore é verde","日本語 text","x"]	0	3
+["single line only"]	["{e_To"]	["single line only"]	0	0
+["a","","","b c","","d"]	["h"]	["a","","","b c","","d"]	0	0
+["árvore é verde","日本語 text","x"]	["vi(2>Vi{S-<Esc>"]	["\t\t-","日本語 text","x"]	0	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2fo"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	2
+["single line only"]	["vS-<Esc>VcX<Esc>"]	["X"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["2dwgE2Xu"]	["three","four five six","seven eight nine","ten"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3hygg"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["b"]	["árvore é verde","日本語 text","x"]	0	0
+["single line only"]	["2jeb$"]	["single line only"]	0	15
+["",""]	["ctoX<Esc>3JYdG"]	[""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d2ipdaBf\"daw"]	[".b-c d_e"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["te"]	["one two three","four five six","seven eight nine","ten"]	0	1
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vfosX<Esc>Vw~"]	["xO(BAR, BAZ) + QUX","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yaw3j$"]	["one two three","four five six","seven eight nine","ten"]	3	2
+["",""]	["Vap>"]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vi{D"]	["say \"hello world\" and 'x y' end","  \"q1\"  \"q2\" z"]	1	13
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["3.d0-"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["single line only"]	["2}2$"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["di{cawX<Esc>ya\""]	["foo(bar, baz) + qux","\tx = y;","if (a && b)X","  trailing  "]	2	11
+["",""]	["{da\"di{di["]	["",""]	0	0
+["a","","","b c","","d"]	["2dw"]	["","b c","","d"]	0	0
+["árvore é verde","日本語 text","x"]	["ywdto"]	["ore é verde","日本語 text","x"]	0	0
+["árvore é verde","日本語 text","x"]	["<<3ix<Esc>~>>"]	["\txxXárvore é verde","日本語 text","x"]	0	0
+["árvore é verde","日本語 text","x"]	["to3h"]	["árvore é verde","日本語 text","x"]	0	0
+["árvore é verde","日本語 text","x"]	["dw2sX<Esc>cwX<Esc>2w"]	["X","日本語 text","x"]	1	4
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dBdb02u"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["te2fo2{"]	["single line only"]	0	4
+["single line only"]	["3P"]	["single line only"]	0	0
+["single line only"]	["%"]	["single line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2w2w}b"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	3	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["te}"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	13
+["single line only"]	["3x"]	["gle line only"]	0	0
+["árvore é verde","日本語 text","x"]	["vlDV}<Esc>VapdVi{d"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["teto2{W"]	["árvore é verde","日本語 text","x"]	0	7
+["a","","","b c","","d"]	["v$j~viWrzv0~"]	["Z","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["VggsX<Esc>"]	["X","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["yiw"]	["a","","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["to"]	["one two three","four five six","seven eight nine","ten"]	0	5
+["one two three","four five six","seven eight nine","ten"]	["ybsX<Esc>2$"]	["Xne two three","four five six","seven eight nine","ten"]	1	12
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["0di\"yap"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["dj"]	["x"]	0	0
+["",""]	["e"]	["",""]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["VbxvwwexVawcX<Esc>"]	["X2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["2ay<Esc>cjX<Esc>"]	["X","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["yG2k"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vi{xv2l~"]	["NE  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2k"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ywdTo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["w"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	4
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d2iw"]	["bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	[">j3rb"]	["bbbgle line only"]	0	2
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["$"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	7
+["one two three","four five six","seven eight nine","ten"]	["2GlcWX<Esc>2dd"]	["one two three","ten"]	1	1
+["",""]	["$2w"]	["",""]	1	0
+["árvore é verde","日本語 text","x"]	["yfoxA  z<Esc>3J"]	["rvore é verde  z 日本語 text x"]	0	25
+["",""]	["jj"]	["",""]	1	0
+["single line only"]	["d_"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["va\">"]	["\thello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["j"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["fe2fo{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["gg"]	["single line only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["da\"d3iw"]	["say x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	4
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v}2>vggd"]	["\thello world foo.bar baz","\t\t  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v$j<Esc>Vfo<Esc>"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	19
+["one two three","four five six","seven eight nine","ten"]	["$de2w2ge"]	["one two thre five six","seven eight nine","ten"]	0	11
+["one two three","four five six","seven eight nine","ten"]	["3dd"]	["ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["cjX<Esc>"]	["X","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["Vjw2>va{Dvi{Y"]	["","","b c","","d"]	0	0
+["",""]	["ia<CR>b<Esc>G"]	["a","b",""]	2	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["daW"]	["two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["yG2k"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["",""]	["+"]	["",""]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vgg<Vob>"]	["\thello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["ViW<"]	["árvore é verde","日本語 text","x"]	0	5
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["foda\""]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	1
+["",""]	["vwwe<Esc>"]	["",""]	1	0
+["a","","","b c","","d"]	["WW"]	["a","","","b c","","d"]	2	0
+["one two three","four five six","seven eight nine","ten"]	["rad{ccX<Esc>"]	["X","four five six","seven eight nine","ten"]	0	0
+["",""]	["vj$cX<Esc>"]	["X"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["gE2k2}"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	38
+["one two three","four five six","seven eight nine","ten"]	["yap"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vawrzVkd"]	["f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["v$Y"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["dapdaw"]	["c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["tod$"]	["say \"hel","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	7
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Vj$dVj>"]	["\t  \"q1\"  \"q2\" z"]	0	6
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["V0cX<Esc>"]	["X","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["da\""]	["árvore é verde","日本語 text","x"]	0	0
+["",""]	["d3l"]	["",""]	0	0
+["",""]	["2bsX<Esc>c$X<Esc>"]	["X",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["w$fo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	22
+["one two three","four five six","seven eight nine","ten"]	["geG"]	["one two three","four five six","seven eight nine","ten"]	3	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["ywB"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["_GW"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["kb"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vggxvbu"]	["  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["diB"]	["single line only"]	0	0
+["",""]	["{"]	["",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["bgeWb"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	7
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2ddd2wSX<Esc>"]	["X","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["va{S-<Esc>V3jC-<Esc>"]	["-","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vfoYVe<Esc>Vb<vi\"Y"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["cawX<Esc>yip"]	["Xtwo three","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2G2GG"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	9	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["yWG"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["da(d2i(di{"]	["foo + qux","\tx = y;","if (a && b) {}","  trailing  "]	2	13
+["árvore é verde","日本語 text","x"]	["-"]	["árvore é verde","日本語 text","x"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3~Jp3J"]	["HELlo world foo.bar baz indented line here last, line (with parens) [and] {braces}"]	0	42
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["pVGyv2wxV$jy"]	[") {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2$3Pfod}"]	["foo(bar, baz) + qux","\tx = y"]	1	5
+["",""]	["yawge$"]	["",""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["gg"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["v$JviWxvw<Esc>VapS-<Esc>"]	["-"]	0	0
+["árvore é verde","日本語 text","x"]	["2j2j"]	["árvore é verde","日本語 text","x"]	2	0
+["a","","","b c","","d"]	["Vi(J"]	["a","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["B"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["Vip<Esc>vjol2>"]	["a","","","\t\tb c","","d"]	2	0
+["a","","","b c","","d"]	["yiw2w"]	["a","","","b c","","d"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2G"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	0
+["a","","","b c","","d"]	["2{2$+2w"]	["a","","","b c","","d"]	3	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["hd0<<"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["3J"]	["if (x) { foo(1, 2); bar;","}","","para two","second line","","","last para"]	0	19
+["single line only"]	["d2awdi<ya\""]	["only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["^d{+W"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	5
+["",""]	["3l2X2Gge"]	["",""]	0	0
+["",""]	["p+"]	["",""]	1	0
+["",""]	["te2kte"]	["",""]	0	0
+["a","","","b c","","d"]	["ViwJ"]	["a","","b c","","d"]	0	0
+["a","","","b c","","d"]	["2fo"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vaw>"]	["\tone  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["a","","","b c","","d"]	["y2wP"]	["a","","a","","","b c","","d"]	0	0
+["single line only"]	["di{f(d2i("]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["ge"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["fo$d^b"]	["y"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["b"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2G"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	0
+["",""]	["x"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2i{da'cipX<Esc>"]	["X","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["vi{cX<Esc>V}xv^<Esc>"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Vjjxvi{cX<Esc>"]	["Xen"]	0	0
+["a","","","b c","","d"]	["3GfoSX<Esc>2w"]	["a","","X","b c","","d"]	3	2
+["single line only"]	["V<Va(S-<Esc>v2wuvbX"]	[""]	0	0
+["single line only"]	["f\""]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["folfol"]	["one two three","four five six","seven eight nine","ten"]	0	8
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["dfo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["to2{3l2j"]	["",""]	1	0
+["árvore é verde","日本語 text","x"]	["gg0Eb"]	["árvore é verde","日本語 text","x"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["geda\"da\""]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["2{"]	["árvore é verde","日本語 text","x"]	0	0
+["single line only"]	["VjDVi{DVl2>ViWcX<Esc>"]	["X"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vwwe~v0~v2lu"]	["helLO WORLD FOO.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["a","","","b c","","d"]	["yeE"]	["a","","","b c","","d"]	3	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["02foW"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	9
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["y2wlB"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2{w"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	5
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["V^rz"]	["zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["V0D"]	["four five six","seven eight nine","ten"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["v$<"]	["one two three","four five six","seven eight nine","ten"]	0	12
+["a","","","b c","","d"]	["jciwX<Esc>di("]	["a","X","","b c","","d"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["daWd3iw"]	[" {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["árvore é verde","日本語 text","x"]	["vlS-<Esc>vobcX<Esc>"]	["X","日本語 text","x"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["teohi<Esc>db"]	["foo(bar, baz) + qux","i","\tx = y;","if (a && b) { c }","  trailing  "]	1	0
+["single line only"]	["3rb<<d{"]	["bgle line only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vwwe2>vGrzVd"]	["zzzzzzzzzzzzzzzzzzzzzzzzzzzzz","zzzzzzzzzzzzzz"]	0	8
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["B,"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["di[b"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["pge"]	["árvore é verde","日本語 text","x"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2{"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dipda["]	["","a.b-c d_e"]	0	0
+["one two three","four five six","seven eight nine","ten"]	[",3wfeJ"]	["one two three","four five six seven eight nine","ten"]	1	13
+["single line only"]	["E2w"]	["single line only"]	0	12
+["a","","","b c","","d"]	["di<"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dwdBdggdW"]	["lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vbS-<Esc>"]	["-","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["to3lgE"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	1
+["single line only"]	["toGe_"]	["single line only"]	0	0
+["a","","","b c","","d"]	["dibdi[d2a(d2ip"]	["b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2e{^"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yj"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["single line only"]	["ccX<Esc>"]	["X"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Vj$cX<Esc>Vkxv2wS-<Esc>v^C-<Esc>"]	["-"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d2apf\"cipX<Esc>"]	["X"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3jya\"f("]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	3	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["k"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["VwweDV2lrzv0y"]	["","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vj$UVwrzVi\"C-<Esc>VjjcX<Esc>"]	["X","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["djyy3h"]	["if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["p3dd"]	[""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["VjxV$jX"]	[""]	0	0
+["single line only"]	["vb<Esc>"]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["ygg3xyfo"]	["  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yj"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d{w3G,"]	["one two three","four five six","seven eight nine","ten"]	2	4
+["single line only"]	["Dyy"]	[""]	0	0
+["single line only"]	["ceX<Esc>cwX<Esc>d^"]	["X line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Vbxvobxv}C-<Esc>vj<Esc>"]	[" -","para two","second line","","","last para"]	1	1
+["one two three","four five six","seven eight nine","ten"]	["d2i(da\"}cawX<Esc>"]	["one two three","four five six","seven eight nine","X"]	3	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["yggX"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["$"]	["single line only"]	0	15
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["w"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	3
+["single line only"]	["yj"]	["single line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["V$jJvfoS-<Esc>vi(<Esc>"]	["-","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Ytoye"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	6
+["single line only"]	["te"]	["single line only"]	0	4
+["one two three","four five six","seven eight nine","ten"]	["da\"ge"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["da("]	["",""]	0	0
+["single line only"]	["3ix<Esc>yG"]	["xxxsingle line only"]	0	2
+["one two three","four five six","seven eight nine","ten"]	["yip"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["a","","","b c","","d"]	["ggA  z<Esc>2wG"]	["a  z","","","b c","","d"]	5	0
+["",""]	["ya\"di\""]	["",""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dB2fob,"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d2wdd;"]	["\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Fo2ge,"]	["one two three","four five six","seven eight nine","ten"]	0	6
+["single line only"]	["di{"]	["single line only"]	0	0
+["single line only"]	["ggfe"]	["single line only"]	0	5
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["VjjDVapC-<Esc>vd"]	["  "]	0	1
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["to"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["single line only"]	["uOhi<Esc>Ei<CR>x<Esc>"]	["hi","singl","xe line only"]	2	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["VG<Esc>ViwxvwweDV0y"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>"]	1	0
+["single line only"]	["dabwda'dib"]	["single line only"]	0	7
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["u3ix<Esc>ia<CR>b<Esc>"]	["xxa","bxif (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["b"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["E2fo"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	7
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["dGctoX<Esc>yw2sX<Esc>"]	["X"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vj$sX<Esc>}v2w2>vkrz"]	["zzzzzz","","\t\ta.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["hywp;"]	["hhello ello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	6
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ox<BS><BS>y<Esc>2uctoX<Esc>d0"]	["Xoo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["efo2fo2$"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	19
+["one two three","four five six","seven eight nine","ten"]	["lto"]	["one two three","four five six","seven eight nine","ten"]	0	5
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Fofo>j"]	["\tfoo(bar, baz) + qux","\t\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["V2l<Esc>"]	["single line only"]	0	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2G"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	1	0
+["",""]	["}ygg"]	["",""]	0	0
+["single line only"]	["vw<Esc>vap>"]	["\tsingle line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["foyedBto"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3GccX<Esc>ygg"]	["one  two   three","  lead  word","X","","a.b-c d_e"]	0	0
+["a","","","b c","","d"]	["2G"]	["a","","","b c","","d"]	1	0
+["one two three","four five six","seven eight nine","ten"]	["c$X<Esc>"]	["X","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["tew"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	6
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["V$jsX<Esc>vjYv3jd"]	[" trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["%3wd0"]	[".bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["dipdi["]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["<<"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Y3.y}"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["foEW2e"]	["single line only"]	0	15
+["one two three","four five six","seven eight nine","ten"]	["V2lC-<Esc>"]	["-","four five six","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["geya\"e"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	2
+["",""]	["Vi\"yvkrz"]	["",""]	0	0
+["",""]	["2w"]	["",""]	1	0
+["single line only"]	["k2eW^"]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dap"]	["a.b-c d_e"]	0	0
+["",""]	["ciwX<Esc>0d2ipdi\""]	[""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["di(da{d2apd2ap"]	["last para"]	0	5
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["fe_"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["d2ip"]	["",""]	0	0
+["",""]	["daw"]	[""]	0	0
+["a","","","b c","","d"]	["dw2j"]	["","","","b c","","d"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["f\""]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["3Jtod{2p"]	[" say \"hello world\" and 'x y' end f(a, (b), c) { x } [1, 2] <t>say \"hello world\" and 'x y' end f(a, (b), c) { x } [1, 2] <t>\"q1\"  \"q2\" z"]	0	122
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Viwdvw~V$jC-<Esc>"]	["  -","tail ","","a.b-c d_e"]	0	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["yipd2i(dap"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["j2w"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	11
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["ViwY"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["ViwXvGJ"]	["  lead  word tail  a.b-c d_e"]	0	18
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dj"]	["if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2ge"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["i<CR>x<Esc>sX<Esc>ohi<Esc>to"]	["","Xsay \"hello world\" and 'x y' end","hi","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	1
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["{Fo"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Ve~vi(<V$2>vi\"<Esc>"]	["HELLO WORLD FOO.BAR BAZ","  indented line here","","\t\tlast, line (with parens) [and] {braces}"]	3	40
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["da{"]	["say \"hello world\" and 'x y' end","f(a, (b), c)  [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	13
+["árvore é verde","日本語 text","x"]	["ci(X<Esc>"]	["árvore é verde","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["$h"]	["one two three","four five six","seven eight nine","ten"]	0	11
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["cawX<Esc>yipjdab"]	["Xworld foo.bar baz","  indented line here","","last, line  [and] {braces}"]	3	11
+["single line only"]	["2G_{0"]	["single line only"]	0	0
+["árvore é verde","日本語 text","x"]	["3J"]	["árvore é verde 日本語 text x"]	0	23
+["",""]	["d2i{yi\"daBd2a\""]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vjol<Vl<Esc>"]	["hello world foo.bar baz","indented line here","","last, line (with parens) [and] {braces}"]	0	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["yfoAhi<Esc>gg"]	["one  two   threehi","  lead  word","tail ","","a.b-c d_e"]	0	17
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["e}"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	4	0
+["a","","","b c","","d"]	["%0"]	["a","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dBcwX<Esc>"]	["X(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["yb"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Vi\"yvggdVi\"u"]	["oo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2{G"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	4	0
+["one two three","four five six","seven eight nine","ten"]	["G2bgefe"]	["one two three","four five six","seven eight nine","ten"]	2	6
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["~ybd02dd"]	["  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["di'd2aw"]	["b c","","d"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2bdb"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["V2w2>"]	["\t\tfoo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dTo"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2sX<Esc>"]	["Xe  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2fo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["dwDE2j"]	["","","","b c","","d"]	5	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["c$X<Esc>"]	["X","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["To$2e"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	11
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Vk>V0cX<Esc>"]	["\tX","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	1
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["X"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["",""]	["cjX<Esc>"]	["X"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2{{2p2w"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	12
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2j3hEW"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	3	0
+["árvore é verde","日本語 text","x"]	["G2kcjX<Esc>."]	["X"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["da\""]	["one two three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["fo"]	["árvore é verde","日本語 text","x"]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["_3l"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	3
+["árvore é verde","日本語 text","x"]	["d2iwd2i{"]	["é verde","日本語 text","x"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["b,teyG"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["cawX<Esc>dawd2i{"]	[""]	0	0
+["a","","","b c","","d"]	["Vj<ViWXviW<vjjrz"]	["","","z c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["diwdap"]	[""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["d^"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["3lfe;"]	["a","","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d$3hW"]	["","four five six","seven eight nine","ten"]	1	0
+["",""]	["yj"]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Vi(S-<Esc>va(<Esc>v$D"]	["say \"hello world\" and 'x y' end","  \"q1\"  \"q2\" z"]	1	13
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["f{"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["dtoyjY"]	["a","","","b c","","d"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["di[ge"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dGy02e"]	[""]	0	0
+["single line only"]	["ge"]	["single line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Vi{yvjol~vl2>VeS-<Esc>"]	["if (x) {","\t\t  -","  bar;","}","","para two","second line","","","last para"]	1	4
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["v^>vbDv2lxv$C-<Esc>"]	["  -","tail ","","a.b-c d_e"]	0	2
+["a","","","b c","","d"]	["p"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d2apda[d2i\"da{"]	[""]	0	0
+["",""]	["B"]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["{"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["w3P2wd_"]	["  indented line here","","last, line (with parens) [and] {braces}"]	0	15
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["3ix<Esc>cWX<Esc>yW"]	["xxX \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2sX<Esc>"]	["Xllo world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3l2bgETo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["jd2i("]	["árvore é verde","日本語 text","x"]	1	0
+["",""]	["ohi<Esc>"]	["","hi",""]	1	1
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["}2{"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	11
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d_"]	["  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["J"]	["say \"hello world\" and 'x y' end f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	31
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2${;"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dToyy"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ygg"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["2}h"]	["a","","","b c","","d"]	4	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["dWdto"]	["(x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d2awjjdiwdi["]	["x) {","  foo(1, 2);","bar;","}","","para two","second line","","","last para"]	2	0
+["single line only"]	["ci(X<Esc>bdabdiw"]	[" line only"]	0	0
+["single line only"]	["viwU"]	["SINGLE line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vj2>VbDvjol~"]	["\t\t  LEAD  WORD","TAIL ","","a.b-c d_e"]	0	1
+["one two three","four five six","seven eight nine","ten"]	["jj"]	["one two three","four five six","seven eight nine","ten"]	2	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vip>vjw<Vjjx"]	["\t  trailing  "]	0	9
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["cWX<Esc>Ec2wX<Esc>"]	["X (xX","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	4
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["di'da\"yi\""]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yydj"]	["","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["veY"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Dd^dB"]	["","four five six","seven eight nine","ten"]	0	0
+["a","","","b c","","d"]	["VawsX<Esc>vggJV3jrz"]	["z","","zzz","","d"]	0	0
+["",""]	["$"]	["",""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["da<di<"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3~y2wd_Y"]	["  lead  word","tail ","","a.b-c d_e"]	0	3
+["árvore é verde","日本語 text","x"]	["dToBxA  z<Esc>"]	["rvore é verde  z","日本語 text","x"]	0	15
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dipfx"]	["","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2{"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d{dk"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	[","]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["VjwUV^cX<Esc>"]	["X","日本語 TEXT","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yedE"]	[" two three","four five six","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["yiw"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["dFodkctoX<Esc>"]	["a","","","b c","","d"]	0	0
+["a","","","b c","","d"]	["3l2gegE"]	["a","","","b c","","d"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["P3J"]	["hello world foo.bar baz indented line here","last, line (with parens) [and] {braces}"]	0	41
+["árvore é verde","日本語 text","x"]	["f(d2i{"]	["árvore é verde","日本語 text","x"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["V2wrz"]	["zzzzzzzzzzzzzzzzzzz","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["i<CR>x<Esc>"]	["","xsay \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	0
+["single line only"]	["2Xh"]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["2sX<Esc>u3J"]	["one two three four five six seven eight nine","ten"]	0	27
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["feo<Esc>"]	["if (x) {","","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	0
+["",""]	["sX<Esc>dG2$u"]	["X",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["te"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["da'd3iw"]	["x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["-"]	["a","","","b c","","d"]	0	0
+["",""]	["}j"]	["",""]	1	0
+["one two three","four five six","seven eight nine","ten"]	["viW<Esc>VawuVkUviwX"]	["four five six","seven eight nine","ten"]	0	2
+["single line only"]	["~feTod$"]	["Singl"]	0	4
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ceX<Esc>y$Ohi<Esc>"]	["hi","X world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	1
+["single line only"]	["vggxViw~V0sX<Esc>vkrz"]	["z"]	0	0
+["árvore é verde","日本語 text","x"]	["2b"]	["árvore é verde","日本語 text","x"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["v$2>Vi{XviWuv$2>"]	["\t\tfoo(bar, baz) + qux","\tx = y;","\t\t  trailing  "]	2	13
+["",""]	["bte2{"]	["",""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["di'di["]	["one two three","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["pdB"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["p-dFo0"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["foia<BS><Esc>"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	3
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Foeyb,"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	1
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2wdiw$$"]	["one  two   ","  lead  word","tail ","","a.b-c d_e"]	0	10
+["one two three","four five six","seven eight nine","ten"]	["Vj$C-<Esc>vb2>Va{J"]	["\t\t- seven eight nine","ten"]	0	3
+["",""]	["d$ldfo2{"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["jcipX<Esc>d2i\"d2a("]	["X","","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dG2p3xge"]	["","lo world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}","hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2fo2$"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	11
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vjoly"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	1
+["árvore é verde","日本語 text","x"]	["dfo3Pxy0"]	["árvoárvoárvre é verde","日本語 text","x"]	0	0
+["",""]	["V^D"]	[""]	0	0
+["",""]	["yw2X"]	["",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["W2fo3l"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	12
+["a","","","b c","","d"]	["fodggd_"]	["","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["_"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["+,;fo"]	["one two three","four five six","seven eight nine","ten"]	1	1
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["<<y}"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["",""]	["ygg"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["}W"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	0
+["",""]	["W"]	["",""]	1	0
+["a","","","b c","","d"]	["yG2G"]	["a","","","b c","","d"]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d},gedb"]	["","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2fo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	7
+["",""]	["v$d"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yw"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["dE"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["VapUva\"U"]	["ÁRVORE É VERDE","日本語 TEXT","X"]	0	0
+["árvore é verde","日本語 text","x"]	["{Wgge"]	["árvore é verde","日本語 text","x"]	0	13
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["To0>>y}"]	["\thello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["single line only"]	["cipX<Esc>d2i\"$"]	["X"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d_gE"]	["  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["árvore é verde","日本語 text","x"]	["ci\"X<Esc>di{"]	["árvore é verde","日本語 text","x"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["}"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	13
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["<<"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["cfoX<Esc>"]	["X world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["c2wX<Esc>O<Esc>"]	["","Xx) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d3ldB2p"]	[" oneonetwo three","four five six","seven eight nine","ten"]	0	6
+["single line only"]	["di{foyiw{"]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["2G"]	["one two three","four five six","seven eight nine","ten"]	1	0
+["single line only"]	["dw"]	["line only"]	0	0
+["árvore é verde","日本語 text","x"]	["vob2>vbrz"]	["z\tárvore é verde","日本語 text","x"]	0	0
+["árvore é verde","日本語 text","x"]	["+jh}"]	["árvore é verde","日本語 text","x"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3jjj"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["C-<Esc>o<Esc>y}"]	["-","","\tx = y;","if (a && b) { c }","  trailing  "]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2jwW"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	4	0
+["one two three","four five six","seven eight nine","ten"]	["2yyddTo"]	["four five six","seven eight nine","ten"]	0	0
+["",""]	["dE2dd2>>"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["cWX<Esc>uB>j"]	["\tone two three","\tfour five six","seven eight nine","ten"]	0	0
+["single line only"]	["V2>v3j2>Vj$U"]	["\t\t\t\tSINGLE LINE ONLY"]	0	0
+["single line only"]	["dGdBge"]	[""]	0	0
+["a","","","b c","","d"]	["b3lh"]	["a","","","b c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2$"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	28
+["árvore é verde","日本語 text","x"]	["da(ci{X<Esc>di<d2a\""]	["árvore é verde","日本語 text","x"]	0	0
+["",""]	["eB"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["jgE"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	22
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2w2j"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ykwpE"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	10
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["VipsX<Esc>"]	["X","","para two","second line","","","last para"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d0dTocbX<Esc>"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["%2G"]	["single line only"]	0	0
+["",""]	["_Fo0j"]	["",""]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["V$u"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["V}>v}x"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Vi{C-<Esc>vawuV0rzVwS-<Esc>"]	["hello world foo.bar baz","  indented line here","","-"]	3	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["te2$2e"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	4
+["árvore é verde","日本語 text","x"]	["<<ia<BS><Esc>"]	["árvore é verde","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["yiwya\"d2a("]	["one two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["v0JVaw>v2l<"]	[""]	0	0
+["",""]	["Vjw<vi{XV2wd"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["$Tolfo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	16
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["VjolxV0Y"]	["  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["d2i{}dip"]	["a","b c","","d"]	1	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["C-<Esc>d_;ygg"]	["\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["<<u+"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["diwda{"]	["(bar, baz) + qux","\tx = y;","if (a && b) ","  trailing  "]	2	11
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["f(cawX<Esc>"]	["ifXx) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	2
+["a","","","b c","","d"]	["diB"]	["a","","","b c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["%"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["",""]	["VobyVa{X"]	[""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vlDVgg~"]	["  FOO(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2jW^+"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	0
+["single line only"]	["vj<ve<VbY"]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["l"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	1
+["árvore é verde","日本語 text","x"]	["bl"]	["árvore é verde","日本語 text","x"]	0	1
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["V02>vwwedvapD"]	["a.b-c d_e"]	0	0
+["",""]	["<<~dfo"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["E3w"]	["árvore é verde","日本語 text","x"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2$"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	11
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["gE"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2wyap"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["eyw2$h"]	["árvore é verde","日本語 text","x"]	1	6
+["árvore é verde","日本語 text","x"]	["v^cX<Esc>vi(x"]	["rvore é verde","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["%"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["ViW~"]	["ÁRVORE é verde","日本語 text","x"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["{W{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["cwX<Esc>"]	["X é verde","日本語 text","x"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ci{X<Esc>"]	["if (x) {","  X","}","","para two","second line","","","last para"]	1	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["$"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	18
+["single line only"]	["~d2wdB"]	["only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vi{U"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { X } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	14
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vggcX<Esc>Vob~Vggdv^J"]	["  foo(1, 2); bar;","}","","para two","second line","","","last para"]	0	12
+["one two three","four five six","seven eight nine","ten"]	["3rbdWdW"]	["bbthree","four five six","seven eight nine","ten"]	0	2
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["yWYb"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["JccX<Esc>k"]	["X","seven eight nine","ten"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d2apdawfx"]	[""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["diB"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) {}","  trailing  "]	2	13
+["a","","","b c","","d"]	["djdfod2w"]	["c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["te+To3h"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	0
+["árvore é verde","日本語 text","x"]	["w"]	["árvore é verde","日本語 text","x"]	0	7
+["árvore é verde","日本語 text","x"]	["$>j"]	["\tárvore é verde","\t日本語 text","x"]	0	14
+["",""]	["dk"]	["",""]	0	0
+["single line only"]	["3jda\""]	["single line only"]	0	0
+["árvore é verde","日本語 text","x"]	["ciwX<Esc>yaw"]	["X é verde","日本語 text","x"]	0	0
+["",""]	["fo"]	["",""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vkrzv2ly"]	["zne  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["V<Esc>vfo<"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	9
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ccX<Esc>~2fo"]	["x","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["_tejE"]	["a","","","b c","","d"]	3	0
+["one two three","four five six","seven eight nine","ten"]	["ciwX<Esc>di\"yawdi{"]	["X two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["wvjwyv}<Esc>"]	["",""]	1	0
+["a","","","b c","","d"]	["gEdtoY"]	["a","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["V$jXvj$sX<Esc>VapC-<Esc>"]	["-"]	0	0
+["árvore é verde","日本語 text","x"]	["ed3l2dwJ"]	["árvor 日本語 text","x"]	0	5
+["a","","","b c","","d"]	["dtodj"]	["","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["{ppcbX<Esc>"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2X"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["di["]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vjjJVw>vGu"]	["\tone two three four five six seven eight nine","ten"]	0	21
+["a","","","b c","","d"]	["f\"2wyiwdiB"]	["a","","","b c","","d"]	2	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2{$3lgg"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	18
+["one two three","four five six","seven eight nine","ten"]	["d0dw"]	["two three","four five six","seven eight nine","ten"]	0	0
+["single line only"]	["ViWJvkrz"]	["zingle line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Fo"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vi\"uVggu"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["+,dd"]	["say \"hello world\" and 'x y' end","  \"q1\"  \"q2\" z"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["3wy2wy$k"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	5
+["one two three","four five six","seven eight nine","ten"]	["fefowh"]	["one two three","four five six","seven eight nine","ten"]	0	7
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["da{da(f{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["cbX<Esc>2ddfo"]	["tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["fo2e"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	5
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ge"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["fotefofe"]	["",""]	0	0
+["single line only"]	["2G"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["%2e}"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	11
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2$cWX<Esc>dTod^"]	["hello world foo.bar baz","  X","","last, line (with parens) [and] {braces}"]	1	2
+["árvore é verde","日本語 text","x"]	["viWXvi\"C-<Esc>vwweYVjj>"]	["\t-","\tx"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["VGrz"]	["zzzzzzzzzzzzzzzzzzzzzzz","zzzzzzzzzzzzzzzzzzzz","","zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vjwuVwcX<Esc>vUVe<"]	["X","x = y;","if (a && b) { c }","  trailing  "]	0	0
+["",""]	["vi(u"]	["",""]	0	0
+["single line only"]	["2fodFodkgE"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2Gc2wX<Esc>3dd3w"]	["foo(bar, baz) + qux"]	0	7
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dapd2i\"yi\""]	["a.b-c d_e"]	0	0
+["a","","","b c","","d"]	["O<Esc>"]	["","a","","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vl<kV2wS-<Esc>Vi(u"]	["-","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["da<"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v2l>v0sX<Esc>VwweJVfox"]	["","last, line (with parens) [and] {braces}"]	0	0
+["",""]	["2$"]	["",""]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d2wceX<Esc>}2k"]	["X","  lead  word","tail ","","a.b-c d_e"]	1	0
+["a","","","b c","","d"]	["3l"]	["a","","","b c","","d"]	0	0
+["",""]	["2k"]	["",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["-+"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	1	1
+["one two three","four five six","seven eight nine","ten"]	["d2aw"]	["three","four five six","seven eight nine","ten"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["d2ap"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["v$U"]	["FOO(BAR, BAZ) + QUX","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["h}fo"]	["árvore é verde","日本語 text","x"]	2	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2$2ge"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	26
+["single line only"]	["2dw3x2dd+"]	["y"]	0	0
+["single line only"]	["edi[d2ap"]	["single line only"]	0	5
+["",""]	["2yydToy}"]	["",""]	0	0
+["single line only"]	["c2wX<Esc>3l2X"]	["Xnly"]	0	1
+["",""]	["VlcX<Esc>Va{dVipX"]	[""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2}cbX<Esc>yy3P"]	["say \"hello world\" and 'x y' end","say \"hello world\" and 'x y' end","say \"hello world\" and 'x y' end","say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dawda({yip"]	["two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dGj2b"]	[""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["lE"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	2
+["árvore é verde","日本語 text","x"]	["2}2dd"]	["x"]	0	0
+["",""]	["2dw"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vb>vjol<Esc>vjw2>"]	["\t\t\thello world foo.bar baz","\t\t  indented line here","","last, line (with parens) [and] {braces}"]	0	1
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["c$X<Esc>3J"]	["X f(a, (b), c) { x } [1, 2] <t> \"q1\"  \"q2\" z"]	0	31
+["árvore é verde","日本語 text","x"]	["di[cipX<Esc>dibfo"]	["X"]	0	0
+["single line only"]	["d}+dk"]	[""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["dibd2i(di\"ciwX<Esc>"]	["say \"hello world\" and 'x y' end","fX { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	1
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ywSX<Esc>"]	["X","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ToybA  z<Esc>>>"]	["\tif (x) {  z","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	3
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["3h"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["diBdaBdabyap"]	["if (x) ","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["b2ge{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["to2wB"]	["single line only"]	0	12
+["single line only"]	["d2apd2a\""]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dFoyb"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["a","","","b c","","d"]	["vw~vawUb"]	["A","","","b c","","d"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["VeYVobS-<Esc>Vob~vj$<Esc>"]	["-","  indented line here","","last, line (with parens) [and] {braces}"]	1	19
+["one two three","four five six","seven eight nine","ten"]	["dipd2iw"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["<<yggjd{"]	["four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Vj<Esc>v2lcX<Esc>vi\"<Esc>vwC-<Esc>"]	["hello world foo.bar baz","-","","last, line (with parens) [and] {braces}"]	1	0
+["árvore é verde","日本語 text","x"]	["va\"U"]	["Árvore é verde","日本語 text","x"]	0	0
+["",""]	["d3iw{di\""]	["",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Vj$D"]	["if (a && b) { c }","  trailing  "]	0	16
+["a","","","b c","","d"]	["vbuVbu"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vlDvGuV$2>"]	["\t\t  lead  word","tail ","","a.b-c d_e"]	0	13
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2jTo"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	0
+["single line only"]	["dToC-<Esc>"]	["-"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vipuvjwS-<Esc>Vjold"]	["}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["rak2X"]	["ane  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["te"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["",""]	["dgg"]	[""]	0	0
+["single line only"]	["c2wX<Esc>"]	["X only"]	0	0
+["árvore é verde","日本語 text","x"]	["Va\"C-<Esc>VaprzViW2>VjjcX<Esc>"]	["\t\tX"]	0	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dWdFod2wctoX<Esc>"]	["","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["geE"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["yi\"d2i\"dib"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ctoX<Esc>3xdFoia<CR>b<Esc>"]	["a","bworld foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dfo2>>"]	["\to(bar, baz) + qux","\t\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d{to^"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["^ke3w"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	2
+["single line only"]	["dFo"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["lTol"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	2
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2fok}"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	4	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["racWX<Esc>w,"]	["X (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	2
+["",""]	["}"]	["",""]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dawyip"]	["two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["B"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["vj>viwcX<Esc>v2l<"]	["X"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vwwedVjw<VggYVrz"]	["zzzzzzzzzzzz","x = y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["cfoX<Esc>d0"]	["Xre é verde","日本語 text","x"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["yip}fxdiW"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	4	0
+["single line only"]	["vfosX<Esc>VkX"]	[""]	0	0
+["single line only"]	["2ay<Esc>.ywia<BS><Esc>"]	["syyyyingle line only"]	0	3
+["",""]	["cwX<Esc>kBctoX<Esc>"]	["X",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["yW"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["bOhi<Esc>2p"]	["hi","single line only"]	0	1
+["a","","","b c","","d"]	["To"]	["a","","","b c","","d"]	0	0
+["",""]	["2k{"]	["",""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Va{<Esc>v2w<Esc>"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	5	0
+["",""]	[";3lccX<Esc>"]	["X",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d2i\""]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["y$2b3xb"]	["lo world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["d3lyj"]	[" \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["k2k3l"]	["one two three","four five six","seven eight nine","ten"]	0	3
+["a","","","b c","","d"]	["2Ge2geb"]	["a","","","b c","","d"]	0	0
+["árvore é verde","日本語 text","x"]	["2bdw2sX<Esc>d{"]	["Xverde","日本語 text","x"]	0	0
+["",""]	["VfoXV^<Esc>"]	[""]	0	0
+["single line only"]	["fo"]	["single line only"]	0	12
+["a","","","b c","","d"]	["dW"]	["","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3rb"]	["bbb  two   three","  lead  word","tail ","","a.b-c d_e"]	0	2
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2e"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vi(>V^Xvi{rz"]	["hello world foo.bar baz","  indented line here",""]	2	0
+["one two three","four five six","seven eight nine","ten"]	["wraceX<Esc>de"]	["one ","four five six","seven eight nine","ten"]	0	3
+["",""]	["f\""]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["vi(Xv3jX"]	["say \"hello world\" and 'x y' end"]	0	10
+["single line only"]	["V$UvfoC-<Esc>VjjC-<Esc>"]	["-"]	0	0
+["a","","","b c","","d"]	["vipsX<Esc>"]	["X","","","b c","","d"]	0	0
+["a","","","b c","","d"]	["Vob<fo"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vggrzVobrzVggrzVgg<"]	["zzzzzzzzzzzzzzzz","  lead  word","tail ","","a.b-c d_e"]	0	0
+["a","","","b c","","d"]	["2k"]	["a","","","b c","","d"]	0	0
+["",""]	["3Ge+ge"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["V~Vw2>"]	["\t\tHELLO WORLD FOO.BAR BAZ","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["2w"]	["árvore é verde","日本語 text","x"]	0	9
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["VlDv$jrzV02>"]	["\t\t zzzzzzzzzzz","zzzzz","","a.b-c d_e"]	0	0
+["a","","","b c","","d"]	[",to2{"]	["a","","","b c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["3l"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["diBdabd2i{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["W"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	9
+["one two three","four five six","seven eight nine","ten"]	["va\"2>Va(S-<Esc>"]	["\t\t-","four five six","seven eight nine","ten"]	0	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["%"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["A  z<Esc>fe"]	["single line only  z"]	0	18
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["di[dab"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [] <t>","  \"q1\"  \"q2\" z"]	1	20
+["single line only"]	["d2ipdawdaWw"]	["only"]	0	3
+["a","","","b c","","d"]	["2dd"]	["","b c","","d"]	0	0
+["",""]	["cipX<Esc>dabfo"]	["X"]	0	0
+["a","","","b c","","d"]	["fo3jdi["]	["a","","","b c","","d"]	3	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["fefe"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	28
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["VjjsX<Esc>"]	["X"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["%0k,"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2a(jci(X<Esc>0"]	["hello world foo.bar baz","  indented line here","","last, line (X) [and] {braces}"]	3	0
+["",""]	["vGcX<Esc>Va\"2>Vk<"]	["\tX"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["daBfo"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	7
+["a","","","b c","","d"]	["Ohi<Esc>dj3l"]	["","","b c","","d"]	0	0
+["árvore é verde","日本語 text","x"]	["Vwrz"]	["zzzzzzzzzzzzzz","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Vi\"Jv$jS-<Esc>"]	["-","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["v$j~V3ju"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["3jd2iw0"]	["line only"]	0	0
+["single line only"]	["d2i{ci(X<Esc>"]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["da<{"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["e$2jb"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	2	14
+["a","","","b c","","d"]	["gE"]	["a","","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["di\"{yi\""]	["one two three","four five six","seven eight nine","ten"]	0	0
+["single line only"]	["dawda("]	["line only"]	0	0
+["árvore é verde","日本語 text","x"]	["dG"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["v<Esc>vlJVjD"]	["ten"]	0	2
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["-3l"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	3
+["one two three","four five six","seven eight nine","ten"]	["h2X3h2dw"]	["three","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["daweci\"X<Esc>diB"]	["word foo.bar baz","  indented line here","","last, line (with parens) [and] {}"]	3	32
+["single line only"]	["vipXVi(sX<Esc>"]	["X"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["0"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["árvore é verde","日本語 text","x"]	["2b"]	["árvore é verde","日本語 text","x"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["To-3w"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	2
+["one two three","four five six","seven eight nine","ten"]	["3Pp"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["single line only"]	["b3G"]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["f{fxw"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	5
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["d2iwya\""]	["bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["va(uViWS-<Esc>vb>"]	["\t-","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	[";+"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2awdab"]	["foo.bar baz","  indented line here","","last, line  [and] {braces}"]	3	11
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3GyydwceX<Esc>"]	["hello world foo.bar baz","  indented line here","X, line (with parens) [and] {braces}"]	2	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d$2$dFo"]	["","  fo;","  bar;","}","","para two","second line","","","last para"]	1	4
+["",""]	["di'di\"dabw"]	["",""]	1	0
+["single line only"]	["^2wW"]	["single line only"]	0	15
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vfoy"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["",""]	["3h2{"]	["",""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["Va\"XVGx"]	[""]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["w"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["a","","","b c","","d"]	["-2w"]	["a","","","b c","","d"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yj"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["geyawciwX<Esc>daw"]	["(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vapUV^Yvl>"]	["\tONE TWO THREE","FOUR FIVE SIX","SEVEN EIGHT NINE","TEN"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ggYFo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["yi\"yi\"ciwX<Esc>"]	["X","","","b c","","d"]	0	0
+["",""]	["yggd2w"]	[""]	0	0
+["",""]	["^2GTo"]	["",""]	1	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["dj"]	["  \"q1\"  \"q2\" z"]	0	0
+["árvore é verde","日本語 text","x"]	["2p^j"]	["árvore é verde","日本語 text","x"]	1	0
+["single line only"]	["y$Ihi<Esc>Xd0"]	["isingle line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["VbU"]	["FOO(BAR, BAZ) + QUX","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["",""]	["fx"]	["",""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["f{d3iwdi<b"]	["if (x) (1, 2);","  bar;","}","","para two","second line","","","last para"]	0	5
+["árvore é verde","日本語 text","x"]	["{0f("]	["árvore é verde","日本語 text","x"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Todd2jcWX<Esc>"]	["  indented line here","","X line (with parens) [and] {braces}"]	2	0
+["",""]	["v$<Esc>v2>Vggyvfou"]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Vwwe<vipy"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["y$<<"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["",""]	["3ddd03Pp"]	["","","","","","","","",""]	1	0
+["single line only"]	["2k"]	["single line only"]	0	0
+["",""]	["yip"]	["",""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["feeh3l"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["di("]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["yb"]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["tex"]	["oe two three","four five six","seven eight nine","ten"]	0	1
+["a","","","b c","","d"]	["2w_2sX<Esc>"]	["a","","X","b c","","d"]	2	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["f\"da["]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["ceX<Esc>d2wctoX<Esc>yk"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["ctoX<Esc>XcwX<Esc>w"]	["X é verde","日本語 text","x"]	0	2
+["",""]	["he3rb"]	["",""]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d3iwdi{"]	["   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["}Wb0"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	0
+["one two three","four five six","seven eight nine","ten"]	["To3we"]	["one two three","four five six","seven eight nine","ten"]	1	3
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ya\"d2iwyi\"diB"]	["world foo.bar baz","  indented line here","","last, line (with parens) [and] {}"]	3	32
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2jG"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	9	0
+["a","","","b c","","d"]	["2$"]	["a","","","b c","","d"]	1	0
+["",""]	["2yy"]	["",""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["2b;2G2w"]	["one two three","four five six","seven eight nine","ten"]	1	10
+["single line only"]	["P2dd"]	["single line only"]	0	0
+["",""]	["v}cX<Esc>"]	["X"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["l"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	1
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3wk"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dapd2iw"]	[" line (with parens) [and] {braces}"]	0	0
+["single line only"]	["o<Esc>2ddcbX<Esc>i<CR>x<Esc>"]	["single line ","xX",""]	1	0
+["árvore é verde","日本語 text","x"]	["dggsX<Esc>{2e"]	["X本語 text","x"]	0	7
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["f(fo"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	9
+["árvore é verde","日本語 text","x"]	["d2iw"]	["é verde","日本語 text","x"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["feGj"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	1
+["one two three","four five six","seven eight nine","ten"]	["Vj$xV$Xvgg<Vob<"]	["ten"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["VbS-<Esc>vforzVip2>VbJ"]	["\t\tz lead  word","\t\ttail ","","a.b-c d_e"]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["ww"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	11
+["a","","","b c","","d"]	["w"]	["a","","","b c","","d"]	1	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ve>VGsX<Esc>"]	["\tX"]	0	1
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["vwxVkYV}S-<Esc>viWrz"]	["z","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["y0dFo"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Vggx"]	["f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v^J"]	["hello world foo.bar baz indented line here","","last, line (with parens) [and] {braces}"]	0	23
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["da{"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) ","  trailing  "]	2	11
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dd2>>"]	["\t  lead  word","\ttail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2}2>>"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	3	38
+["one two three","four five six","seven eight nine","ten"]	["V$jyV2wC-<Esc>"]	["-","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["3j2wd2awdi\""]	["árvore é verde","日本語 text","x"]	2	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Va{y"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	7
+["single line only"]	["dj<C-r>uSX<Esc>"]	["X"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["E2ge_"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2ip"]	["last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["V$sX<Esc>V0>VjoluV3jS-<Esc>"]	["\t-"]	0	1
+["single line only"]	["Vluvj$2>"]	["\t\tsingle line only"]	0	17
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d_dW{3w"]	["indented line here","","last, line (with parens) [and] {braces}"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d$x3GsX<Esc>"]	["","  foo(1, 2);","X bar;","}","","para two","second line","","","last para"]	2	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2$d}yGohi<Esc>"]	["if (x) {","  foo(1, 2)","  hi","","para two","second line","","","last para"]	2	3
+["single line only"]	["ebda{"]	["single line only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["te$j"]	["one two three","four five six","seven eight nine","ten"]	1	12
+["árvore é verde","日本語 text","x"]	["ia<BS><Esc>gecjX<Esc>c2wX<Esc>"]	["X"]	0	0
+["árvore é verde","日本語 text","x"]	["d3iwcawX<Esc>d3iwd2i\""]	["text","x"]	0	0
+["single line only"]	["d2i(ya\"jjdi("]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ye"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ywd$to"]	["","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["d}.yGy2w"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ViW~"]	["HELLO world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["",""]	["Ohi<Esc>cjX<Esc>d}"]	[""]	0	0
+["single line only"]	["VkUv0YvjwJV0<Esc>"]	["SINGLE LINE ONLY"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["di'diWda'"]	[" baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["VwweY"]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Vj$<v$rz"]	["hello world foo.bar baz","indented line here","","last, line (with parens) [and] {braces}"]	0	22
+["árvore é verde","日本語 text","x"]	["v$jsX<Esc>vfocX<Esc>vGcX<Esc>"]	["Xx"]	0	0
+["single line only"]	["3x"]	["gle line only"]	0	0
+["",""]	["yG2>>3dd"]	[""]	0	0
+["single line only"]	["ya\"da<"]	["single line only"]	0	0
+["árvore é verde","日本語 text","x"]	["fx"]	["árvore é verde","日本語 text","x"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["db"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["a","","","b c","","d"]	["xC-<Esc>"]	["-","","","b c","","d"]	0	0
+["single line only"]	["A<CR><Esc>y2wdWohi<Esc>"]	["single line only","","hi"]	2	1
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["3ix<Esc>"]	["xxxfoo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	2
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2{c2wX<Esc>dFo"]	["Xhello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["d2apf\""]	["d"]	0	0
+["a","","","b c","","d"]	["va(>V}S-<Esc>Vawd"]	["\t","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["VYv$jC-<Esc>"]	["-","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["2kl"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	1
+["single line only"]	["3G2b2b"]	["single line only"]	0	0
+["árvore é verde","日本語 text","x"]	["2k"]	["árvore é verde","日本語 text","x"]	0	0
+["",""]	["yGcfoX<Esc>"]	["",""]	0	0
+["single line only"]	["dabdibdibda{"]	["single line only"]	0	0
+["",""]	["rahted}"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["c2wX<Esc>dgg"]	["four five six","seven eight nine","ten"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["geWl"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	6
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["dB3PctoX<Esc>"]	["Xoo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["3hjB"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	16
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["di(d3iwdi[daB"]	["if ","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	[";"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2i\"d2iwgedi<"]	["world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["<<d^"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["viWUVjwS-<Esc>vawrz"]	["z","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vi\"<Esc>vjwsX<Esc>vi(<Esc>"]	["Xead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["va\"<Esc>vlC-<Esc>"]	["-","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["2fo"]	["árvore é verde","日本語 text","x"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["k^2b^"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["single line only"]	["dEfo"]	[" line only"]	0	6
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["fxci\"X<Esc>"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["single line only"]	["3dd2ge2kj"]	["single line only"]	0	0
+["a","","","b c","","d"]	["d2apdapdab"]	[""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dGOhi<Esc>"]	["hi",""]	0	1
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["d3lD"]	["","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["VwC-<Esc>vbxV}rz"]	["","zzzzzzzzzzzzzzzzzzzz","","last, line (with parens) [and] {braces}"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["<<e"]	["one two three","four five six","seven eight nine","ten"]	0	2
+["",""]	["w"]	["",""]	1	0
+["single line only"]	["vjolrzVggsX<Esc>v$j2>Va\"C-<Esc>"]	["\t\t-"]	0	2
+["single line only"]	["V0S-<Esc>VluVJvfox"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["d2apdiWf(}"]	[" é verde","日本語 text","x"]	2	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vwweu"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["VbX"]	["f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["}2dd"]	["one two three","four five six","seven eight nine","ten"]	3	2
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["di<"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d2a\"ci(X<Esc>yap"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vjolUvXv0rz"]	["zzlead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["v3jrzVa(rzV2w<"]	["zzzzzzzzzzzzzzzzzzz","zzzzzzz","zzzzzzzzzzzzzzzzz","z trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["cjX<Esc>"]	["X","","last, line (with parens) [and] {braces}"]	0	0
+["single line only"]	["3.3GC-<Esc>"]	["-"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["VjjX"]	["last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["wte"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	13
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["dibciwX<Esc>jjda["]	["say \"hello world\" and 'x y' end","fX { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	2	1
+["one two three","four five six","seven eight nine","ten"]	[";^fe"]	["one two three","four five six","seven eight nine","ten"]	0	2
+["",""]	["va\"D"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d3iw"]	[" three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["2e;2b2ge"]	["árvore é verde","日本語 text","x"]	0	0
+["single line only"]	["cbX<Esc>dFo^d2w"]	["only"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vi{yvipX"]	[""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vjj2>Va\"X"]	["\t\t  foo(1, 2);","\t\t  bar;","}","","para two","second line","","","last para"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["u"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["",""]	["Vwwe>"]	["",""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["d2apf\""]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	4
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2k$l"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	15
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["$B"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	20
+["one two three","four five six","seven eight nine","ten"]	["A<CR><Esc>dbA  z<Esc>dFo"]	["one twz","","four five six","seven eight nine","ten"]	0	6
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["cbX<Esc>d^dtoJ"]	["o world foo.bar baz indented line here","","last, line (with parens) [and] {braces}"]	0	19
+["one two three","four five six","seven eight nine","ten"]	["2jXra"]	["one two three","four five six","aeven eight nine","ten"]	2	0
+["árvore é verde","日本語 text","x"]	["ceX<Esc>fo"]	["X é verde","日本語 text","x"]	0	0
+["",""]	["dToJ+"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["v$jxv}C-<Esc>"]	["-"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["y}d_ox<BS><BS>y<Esc>"]	["  foo(1, 2);","y","  bar;","}","","para two","second line","","","last para"]	1	0
+["",""]	["}E"]	["",""]	1	0
+["a","","","b c","","d"]	["gE2foe"]	["a","","","b c","","d"]	3	0
+["one two three","four five six","seven eight nine","ten"]	["cawX<Esc>f\"diWya\""]	[" three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["3G"]	["árvore é verde","日本語 text","x"]	2	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["P"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["kYgE"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["vjwD"]	[""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vobS-<Esc>VawYVi(Y"]	["-","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["cawX<Esc>dipfo"]	["","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["ek"]	["a","","","b c","","d"]	2	0
+["árvore é verde","日本語 text","x"]	["SX<Esc>3Pyk"]	["árvore é verde","árvore é verde","árvore é verde","X","日本語 text","x"]	0	0
+["single line only"]	["ya\""]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["0_3hgE"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2b{_"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["single line only"]	["dipd3iwf("]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["2{"]	["árvore é verde","日本語 text","x"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["ete2}"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	4	8
+["árvore é verde","日本語 text","x"]	["V$jx"]	["x"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["lToTo}"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	11
+["a","","","b c","","d"]	["lB"]	["a","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["y2ww"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["",""]	["VwdVggS-<Esc>vi{<vjS-<Esc>"]	["-"]	0	0
+["single line only"]	["Va(DViWyv3jcX<Esc>"]	["X"]	0	0
+["",""]	[";"]	["",""]	0	0
+["single line only"]	["SX<Esc>^2ay<Esc>J"]	["Xyy"]	0	2
+["",""]	["da<daW"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v$C-<Esc>ViWC-<Esc>viWuVjsX<Esc>"]	["X","","last, line (with parens) [and] {braces}"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Vi\"<v$jXV0<Esc>vwu"]	["","last, line (with parens) [and] {braces}"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["d}"]	[""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ywceX<Esc>"]	["X (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["diB"]	["if (x) {","}","","para two","second line","","","last para"]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v$j<Esc>v^C-<Esc>vjwJVjd"]	["hello world foo.bar baz"]	0	3
+["",""]	["de2b"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2ipd3iwd2ipw"]	["line (with parens) [and] {braces}"]	0	5
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["ci(X<Esc>dipdawe"]	[""]	0	0
+["a","","","b c","","d"]	["vwweC-<Esc>Vggu"]	["-","","d"]	0	0
+["a","","","b c","","d"]	["w2e"]	["a","","","b c","","d"]	3	2
+["single line only"]	["d2apci{X<Esc>dib"]	["single line only"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["vi\"Y"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ya\"da'd2i\"yip"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ci{X<Esc>da[daW"]	["if (x) {","  ","}","","para two","second line","","","last para"]	1	1
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["-$,,"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	7
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Jo<Esc>3Py2w"]	["hello world foo.bar baz indented line here","","","last, line (with parens) [and] {braces}"]	1	0
+["single line only"]	["v^Dvj$Y"]	[""]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2}G2ge"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	27
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["diw0ciwX<Esc>d2iw"]	[" baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2k3wb2e"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	15
+["árvore é verde","日本語 text","x"]	["jf{di("]	["árvore é verde","日本語 text","x"]	1	0
+["single line only"]	["3l2w"]	["single line only"]	0	12
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["To"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["single line only"]	["2ek2b,"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ctoX<Esc>2ddyj"]	["if (a && b) { c }","  trailing  "]	0	0
+["",""]	["d$"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["fxd2i\"{d2iw"]	["é verde","日本語 text","x"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["di["]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2{cbX<Esc>to2b"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["árvore é verde","日本語 text","x"]	["dToccX<Esc>3Gd3l"]	["X","日本語 text",""]	2	0
+["single line only"]	["dETo~"]	[" line only"]	0	1
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["2e"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	7
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["k2e"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["",""]	["3P"]	["",""]	0	0
+["single line only"]	["cfoX<Esc>"]	["Xnly"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["w"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	4
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["0d^"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["single line only"]	["2yyksX<Esc>b"]	["Xingle line only"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vaw>va\"dVkC-<Esc>"]	["-","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["single line only"]	["d2i{"]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["-2wTo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	8
+["árvore é verde","日本語 text","x"]	["ohi<Esc>"]	["árvore é verde","hi","日本語 text","x"]	1	1
+["a","","","b c","","d"]	["to3lia<BS><Esc>"]	["a","","","b c","","d"]	0	0
+["a","","","b c","","d"]	["VbUve<viwD"]	["","","b c","","d"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ToW"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["GB{G"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	4	0
+["a","","","b c","","d"]	["Vi\"C-<Esc>VeC-<Esc>Va{Xvi{<"]	["","d"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["vkYV$C-<Esc>ViWC-<Esc>VjsX<Esc>"]	["X","  bar;","}","","para two","second line","","","last para"]	0	0
+["a","","","b c","","d"]	["G0W"]	["a","","","b c","","d"]	5	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["k"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["árvore é verde","日本語 text","x"]	[">j"]	["\tárvore é verde","\t日本語 text","x"]	0	0
+["",""]	["2wf{"]	["",""]	1	0
+["a","","","b c","","d"]	["2kdj"]	["","b c","","d"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Bfo"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	9
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["da[diw$"]	["(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	15
+["",""]	["VwS-<Esc>"]	["-"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Vwweuvj$U"]	["IF (X) {","  FOO(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["",""]	["d{2b"]	["",""]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["gE;"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["hd}dtocbX<Esc>"]	["","a.b-c d_e"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["di("]	["say \"hello world\" and 'x y' end","f() { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	2
+["",""]	["ccX<Esc>~2p"]	["x","","",""]	1	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d$"]	["","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["cjX<Esc>"]	["X","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["d$2j"]	["","","","b c","","d"]	2	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["j"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	1	0
+["one two three","four five six","seven eight nine","ten"]	["cWX<Esc>2fodk"]	["X two three","four five six","seven eight nine","ten"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ywdBdd"]	["\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["$di\""]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	15
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["fedB"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["dipda'di("]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	[",to2e3l"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	13
+["",""]	["2fo"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["Wu"]	["árvore é verde","日本語 text","x"]	0	7
+["a","","","b c","","d"]	["da'f{di["]	["a","","","b c","","d"]	0	0
+["single line only"]	["A<CR><Esc>y2wk"]	["single line only",""]	0	0
+["single line only"]	["_+,"]	["single line only"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ciwX<Esc>da\"yipd3iw"]	[", baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["a","","","b c","","d"]	["$d2i{"]	["a","","","b c","","d"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["i<CR>x<Esc>"]	["","xone  two   three","  lead  word","tail ","","a.b-c d_e"]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["E"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	1
+["",""]	["va{cX<Esc>"]	["X"]	0	0
+["árvore é verde","日本語 text","x"]	["sX<Esc>d^3x"]	["ore é verde","日本語 text","x"]	0	0
+["single line only"]	["C-<Esc>"]	["-"]	0	0
+["",""]	["vjxvwJViWC-<Esc>va\"u"]	["-"]	0	0
+["a","","","b c","","d"]	["dW"]	["","","","b c","","d"]	0	0
+["a","","","b c","","d"]	["d2i{"]	["a","","","b c","","d"]	0	0
+["single line only"]	["cbX<Esc>C-<Esc>Y"]	["-"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["0ge"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["single line only"]	["VwsX<Esc>va{Jvj$U"]	["X"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["gedi["]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["v2wsX<Esc>Vfo>"]	["\tXhree","  lead  word","tail ","","a.b-c d_e"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["^2wdTo"]	["foobar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Va{D"]	["  lead  word","tail ","","a.b-c d_e"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["fo2fopd}"]	["hello world f","","last, line (with parens) [and] {braces}"]	0	12
+["one two three","four five six","seven eight nine","ten"]	["h"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["",""]	["dto"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["ci{X<Esc>"]	["árvore é verde","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["gEcWX<Esc>"]	["X two three","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dab"]	["hello world foo.bar baz","  indented line here","","last, line  [and] {braces}"]	3	11
+["a","","","b c","","d"]	["3h}2G"]	["a","","","b c","","d"]	1	0
+["",""]	["vob<Esc>VGdVk<"]	[""]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d{"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["ViwJvawsX<Esc>v2wsX<Esc>"]	["if (x) {X, 2);","  bar;","}","","para two","second line","","","last para"]	0	8
+["a","","","b c","","d"]	["2dd_d$"]	["","b c","","d"]	0	0
+["",""]	["di'ejj"]	["",""]	1	0
+["",""]	["fod2apdaW"]	[""]	0	0
+["one two three","four five six","seven eight nine","ten"]	["vGuviWyViw<VobC-<Esc>"]	["-","four five six","seven eight nine","ten"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["2G2jFoTo"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	3	0
+["",""]	["V2l<Vi{dVjwdVeD"]	[""]	0	0
+["árvore é verde","日本語 text","x"]	["da("]	["árvore é verde","日本語 text","x"]	0	0
+["single line only"]	["gEd^2ge"]	["single line only"]	0	0
+["a","","","b c","","d"]	["2p-"]	["a","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["}$2j"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	3	11
+["single line only"]	["vl~VjcX<Esc>viWxVeC-<Esc>"]	["-"]	0	0
+["",""]	["dFo3ix<Esc>2j"]	["xxx",""]	1	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["vjjC-<Esc>v}~ViWd"]	["","  TRAILING  "]	0	0
+["single line only"]	["3jci(X<Esc>bci(X<Esc>"]	["single line only"]	0	0
+["árvore é verde","日本語 text","x"]	["Vlxvobx"]	["本語 text","x"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["gE"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["árvore é verde","日本語 text","x"]	["W3rb"]	["árvore bbberde","日本語 text","x"]	0	9
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["yG2j2k"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["te2>>"]	["\thello world foo.bar baz","\t  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["dbd$2foOhi<Esc>"]	["hi","","  lead  word","tail ","","a.b-c d_e"]	0	1
+["single line only"]	["2{"]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["d2w3hFo2fo"]	["foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["3h^gE"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["",""]	["VjjJVawuVawXva(~"]	[""]	0	0
+["single line only"]	["viWu"]	["single line only"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["v$Uvjj<"]	["HELLO WORLD FOO.BAR BAZ","indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["árvore é verde","日本語 text","x"]	["vaw<Esc>vap<Esc>"]	["árvore é verde","日本語 text","x"]	2	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["bgefxdip"]	[""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yawda[0di["]	["hello world foo.bar baz","  indented line here","","last, line (with parens)  {braces}"]	3	0
+["árvore é verde","日本語 text","x"]	["%"]	["árvore é verde","日本語 text","x"]	0	0
+["a","","","b c","","d"]	["de"]	[" c","","d"]	0	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["Ohi<Esc>"]	["hi","if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	1
+["",""]	["di{jj"]	["",""]	1	0
+["one two three","four five six","seven eight nine","ten"]	["3h"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["árvore é verde","日本語 text","x"]	["ye3ix<Esc>"]	["xxxárvore é verde","日本語 text","x"]	0	2
+["single line only"]	["daw"]	["line only"]	0	0
+["",""]	["y$"]	["",""]	0	0
+["árvore é verde","日本語 text","x"]	["diWd2i\""]	[" é verde","日本語 text","x"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["3ddB"]	["","a.b-c d_e"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["fe"]	["one  two   three","  lead  word","tail ","","a.b-c d_e"]	0	2
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["yG"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["cawX<Esc>fo"]	["X\"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	6
+["one two three","four five six","seven eight nine","ten"]	["~3wuu"]	["one two three","four five six","seven eight nine","ten"]	0	0
+["single line only"]	["0Fo_"]	["single line only"]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["$"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	30
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["da[e"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x }  <t>","  \"q1\"  \"q2\" z"]	1	20
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["bc$X<Esc>"]	["X","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["a","","","b c","","d"]	["VlxVi(cX<Esc>vi\"rz"]	["z","","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Xi<CR>x<Esc>yyA  z<Esc>"]	["","xone two three  z","four five six","seven eight nine","ten"]	1	16
+["a","","","b c","","d"]	["d2w"]	["","b c","","d"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["V3jU"]	["ONE TWO THREE","FOUR FIVE SIX","SEVEN EIGHT NINE","TEN"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["3h2}"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["diW"]	[" \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["edBJ"]	["e  two   three lead  word","tail ","","a.b-c d_e"]	0	14
+["",""]	["teh+h"]	["",""]	1	0
+["",""]	["yk2yy"]	["",""]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["ciwX<Esc>d2i\"dip"]	["","last, line (with parens) [and] {braces}"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["B2j"]	["one two three","four five six","seven eight nine","ten"]	2	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["dFoia<CR>b<Esc>dj2}"]	["a","","last, line (with parens) [and] {braces}"]	1	0
+["single line only"]	["to2{>j"]	["single line only"]	0	11
+["árvore é verde","日本語 text","x"]	["e"]	["árvore é verde","日本語 text","x"]	0	5
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vwwe>"]	["\tone  two   three","  lead  word","tail ","","a.b-c d_e"]	0	8
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["2{3l$"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	22
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["2e"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	4
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	[";2yywia<CR>b<Esc>"]	["say a","b\"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	0
+["",""]	["ykGyfoyw"]	["",""]	1	0
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["Vwwe2>"]	["\t\tone  two   three","  lead  word","tail ","","a.b-c d_e"]	0	1
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["ceX<Esc>"]	["X(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	0
+["one two three","four five six","seven eight nine","ten"]	["2j;E2fo"]	["one two three","four five six","seven eight nine","ten"]	2	4
+["a","","","b c","","d"]	["di\"d2i{cawX<Esc>di<"]	["X","","","b c","","d"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["fo"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	0	4
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d$ey$"]	["","  lead  word","tail ","","a.b-c d_e"]	1	5
+["one  two   three","  lead  word","tail ","","a.b-c d_e"]	["d2a\"jjyiwdiw"]	["one  two   three","  lead  word"," ","","a.b-c d_e"]	2	0
+["",""]	["diWed2a\""]	["",""]	1	0
+["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	["d^"]	["if (x) {","  foo(1, 2);","  bar;","}","","para two","second line","","","last para"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["-3h2G2w"]	["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	1	11
+["",""]	["vawuvj$sX<Esc>"]	["X"]	0	0
+["a","","","b c","","d"]	["O<Esc>gE,"]	["","a","","","b c","","d"]	0	0
+["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	["te3l"]	["foo(bar, baz) + qux","\tx = y;","if (a && b) { c }","  trailing  "]	0	3
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["Vgg>V$xvl2>v3j<Esc>"]	["\t\tf(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	1	13
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["de2wwyw"]	[" \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	8
+["one two three","four five six","seven eight nine","ten"]	["C-<Esc>"]	["-","four five six","seven eight nine","ten"]	0	0
+["hello world foo.bar baz","  indented line here","","last, line (with parens) [and] {braces}"]	["Va{DVGYv0~"]	["hello world foo.bar baz","  indented line here",""]	2	0
+["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	["yaw"]	["say \"hello world\" and 'x y' end","f(a, (b), c) { x } [1, 2] <t>","  \"q1\"  \"q2\" z"]	0	0
+["árvore é verde","日本語 text","x"]	["Fo{To"]	["árvore é verde","日本語 text","x"]	0	0
+["one two three","four five six","seven eight nine","ten"]	["Jpb"]	["one two three four five six","seven eight nine","ten"]	0	8
