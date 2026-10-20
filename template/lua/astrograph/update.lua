@@ -350,16 +350,54 @@ function M._run(opts)
   return result
 end
 
+---Executável do serviço em Rust (`<clone>/bin/astrograph-servicos`), se instalado.
+---@param root string
+---@return string?
+function M.servicos(root)
+  local p = vim.fs.joinpath(root, "bin", "astrograph-servicos" .. (vim.fn.has "win32" == 1 and ".exe" or ""))
+  if vim.env.ASTROGRAPH_ATUALIZAR ~= "lua" and vim.fn.executable(p) == 1 then return p end
+end
+
+---Atualiza pelo serviço em Rust (a lógica de verdade; este arquivo é o espelho
+---para quando o executável não está instalado).
+---@param bin string
+---@param root string
+---@param done fun(result: AstrographUpdateResult)
+function M.run_rust(bin, root, done)
+  local started = pcall(vim.system, { bin, "atualizar", "--raiz", root, "--nvim", vim.v.progpath }, {
+    text = true,
+    timeout = 60 * 60 * 1000,
+  }, function(r)
+    vim.schedule(function()
+      local line
+      for l in (r.stdout or ""):gmatch "[^\r\n]+" do
+        line = l -- a última linha é o resultado
+      end
+      local ok, data = pcall(vim.json.decode, line or "")
+      if ok and type(data) == "table" and data.status then
+        done { status = data.status, message = data.mensagem or "", old = data.antes, new = data.depois, stash = data.stash, backup = data.backup, rebuilt = data.recompilados }
+      else
+        done { status = "erro", message = "O serviço de atualização terminou sem resultado:\n" .. vim.trim(r.stderr or ""):sub(1, 600) }
+      end
+    end)
+  end)
+  if not started then done { status = "erro", message = "Não consegui iniciar " .. bin } end
+end
+
 ---`:Astrograph atualizar`
 function M.atualizar()
   notify "Atualizando o Astrograph em segundo plano…"
   local release = require("astrograph.prepare").track "atualizando"
-  M.run({}, function(r)
+  local function finish(r)
     release()
     local level = (r.status == "atualizado" or r.status == "ja-atualizado") and vim.log.levels.INFO or vim.log.levels.WARN
     if r.status == "erro" then level = vim.log.levels.ERROR end
     notify(r.message, level)
-  end)
+  end
+  local root = require("astrograph.commands").root()
+  local bin = root and M.servicos(root)
+  if bin then return M.run_rust(bin, root, finish) end
+  M.run({}, finish)
 end
 
 return M

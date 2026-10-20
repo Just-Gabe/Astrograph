@@ -360,6 +360,8 @@ if [ "${ASTROGRAPH_SEM_COMPILAR:-}" = "1" ]; then
 else
   # ponte com os agentes (Claude Code, opencode...): usada por <Leader>Ae no editor
   build_binary "agente nativo" astrograph-agent astrograph-agent || true
+  # projeto, git e atualização (o :Astrograph atualizar usa este)
+  build_binary "serviços" astrograph-servicos astrograph-servicos || true
   if build_binary "app Astrograph" astrograph-ui astrograph; then
     ln -sfn "$APP_BIN/astrograph" "$BIN_DIR/astrograph"
     info "Comando \"astrograph\" em $BIN_DIR"
