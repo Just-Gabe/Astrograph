@@ -6,6 +6,7 @@ description = "Astrograph: editor com agentes de IA, UI em Rust sobre o Neovim"
 publish = false
 
 [dependencies]
+astrograph-syntax = { path = "../astrograph-syntax" }
 winit = "0.30"
 softbuffer = "0.4"
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
@@ -27,3 +28,7 @@ embed-resource = "2.5"
 strip = true
 lto = "thin"
 codegen-units = 4
+
+[dev-dependencies]
+tree-sitter = "0.27.1"
+tree-sitter-lua = "0.5.0"

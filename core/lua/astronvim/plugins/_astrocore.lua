@@ -92,8 +92,11 @@ return {
         },
         treesitter = {
           enabled = function(_, bufnr) return not require("astrocore.buffer").is_large(bufnr) end,
-          highlight = true,
-          indent = true,
+          -- o realce em Rust do app Astrograph (ligado por padrao) marca o buffer;
+          -- sem isto, a instalacao assincrona de um parser religaria o nativo
+          highlight = function(_, bufnr) return not vim.b[bufnr].astrograph_realce end,
+          -- idem para o indent em Rust (ASTROGRAPH_INDENT=rust): b:astrograph_indent
+          indent = function(_, bufnr) return not vim.b[bufnr].astrograph_indent end,
           auto_install = true,
           ensure_installed = { "bash", "c", "lua", "markdown", "markdown_inline", "python", "query", "vim", "vimdoc" },
           textobjects = {
