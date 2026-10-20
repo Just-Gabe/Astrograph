@@ -85,6 +85,16 @@ struct Picker {
     achados: Vec<busca::Achado>,
     total: usize,
     sel: usize,
+    /// lista de arquivos sendo montada em segundo plano
+    listando: Option<busca::Bg<String>>,
+    /// busca de texto em andamento (uma tecla nova solta esta e começa outra)
+    buscando: Option<busca::Bg<busca::Achado>>,
+    /// a base veio do cache: os lotes parciais não entram, só a lista nova inteira
+    base_do_cache: bool,
+    /// consulta anterior e os itens que casaram (a próxima letra só olha esses)
+    prev: Option<(String, Vec<usize>)>,
+    /// apertou Enter antes de chegar resultado: aceita o primeiro quando chegar
+    aceitar_depois: bool,
 }
 
 const PICK_LINHAS: usize = 10;
@@ -178,7 +188,11 @@ pub struct Session {
     def_wait: Option<i64>,
     git_branch: Option<String>,
     /// o arquivo em `HEAD` (None: fora de um repositório)
-    git_base: Option<Vec<String>>,
+    git_base: Option<std::sync::Arc<Vec<String>>>,
+    /// branch e base do `HEAD` sendo lidos em segundo plano (o `git` é um processo: não trava a tela)
+    git_rx: Option<std::sync::mpsc::Receiver<(Option<String>, Option<Vec<String>>)>>,
+    /// sinais de um arquivo grande sendo calculados em segundo plano: (rev do texto, resultado)
+    sinais_job: Option<(u64, std::sync::mpsc::Receiver<Vec<(usize, git::Sign)>>)>,
     git_rev: u64,
     git_signs: std::sync::Arc<Vec<(usize, git::Sign)>>,
     /// apertou <C-\\>: o próximo <C-n> devolve o teclado ao editor
@@ -220,6 +234,9 @@ pub struct Session {
     /// outro painel da aba mostra o mesmo arquivo (o buffer é compartilhado)
     pub irmao: bool,
 }
+
+/// arquivos até esta quantidade de linhas têm os sinais do git calculados na hora; maiores, em segundo plano
+const SINAIS_SINCRONOS: usize = 5000;
 
 const SCROLLOFF: f32 = 3.0;
 /// linhas de realce calculadas além da tela, para a rolagem suave não ficar sem cor
@@ -274,6 +291,8 @@ impl Session {
             def_wait: None,
             git_branch: None,
             git_base: None,
+            git_rx: None,
+            sinais_job: None,
             git_rev: u64::MAX,
             git_signs: std::sync::Arc::new(Vec::new()),
             term_esc: false,
@@ -908,7 +927,7 @@ impl Session {
     /// Abre o buscador com uma lista pronta.
     fn pick_lista(&mut self, titulo: &str, itens: Vec<ListaItem>) {
         let base: Vec<String> = itens.iter().map(|i| i.texto.clone()).collect();
-        self.picker = Some(Picker { kind: PickKind::Lista, titulo: titulo.into(), lista: itens, mapa: Vec::new(), query: String::new(), total: base.len(), base, items: Vec::new(), achados: Vec::new(), sel: 0 });
+        self.picker = Some(Picker { kind: PickKind::Lista, titulo: titulo.into(), lista: itens, mapa: Vec::new(), query: String::new(), total: base.len(), base, items: Vec::new(), achados: Vec::new(), sel: 0, listando: None, buscando: None, base_do_cache: false, prev: None, aceitar_depois: false });
         self.pick_refresh();
     }
 
@@ -1138,22 +1157,65 @@ impl Session {
     /// Lê o branch e o arquivo em `HEAD` (de novo depois de salvar, de um commit no terminal...).
     pub fn git_load(&mut self) {
         let dir = self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)).filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| self.root.clone());
-        self.git_branch = git::branch(&dir);
-        self.git_base = match (&self.git_branch, &self.path) {
-            (Some(_), Some(p)) => git::base(p),
-            _ => None,
-        };
-        self.git_rev = u64::MAX;
+        let caminho = self.path.clone();
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // o `git` é um processo (dezenas de ms, mais no Windows): roda fora da thread do editor
+        std::thread::spawn(move || {
+            let branch = git::branch(&dir);
+            let base = match (&branch, &caminho) {
+                (Some(_), Some(p)) => git::base(p),
+                _ => None,
+            };
+            let _ = tx.send((branch, base));
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.git_rx = Some(rx);
+    }
+
+    /// Pega o branch e a base que a thread do git acabou de ler.
+    fn git_poll(&mut self) {
+        let Some(rx) = self.git_rx.as_ref() else { return };
+        if let Ok((branch, base)) = rx.try_recv() {
+            self.git_branch = branch;
+            self.git_base = base.map(std::sync::Arc::new);
+            self.git_rev = u64::MAX;
+            self.git_rx = None;
+        }
     }
 
     /// Sinais da margem para o texto atual (recalculados só quando o texto muda).
     fn git_signs(&mut self) -> std::sync::Arc<Vec<(usize, git::Sign)>> {
-        if self.git_rev != self.ed.buf.rev {
+        // resultado do cálculo em segundo plano, se chegou
+        if let Some((_, rx)) = &self.sinais_job {
+            if let Ok(v) = rx.try_recv() {
+                self.git_signs = std::sync::Arc::new(v);
+                self.sinais_job = None;
+            }
+        }
+        if self.git_rev != self.ed.buf.rev && self.sinais_job.is_none() {
             self.git_rev = self.ed.buf.rev;
-            self.git_signs = std::sync::Arc::new(match &self.git_base {
-                Some(base) => git::sinais(base, &self.ed.lines()),
-                None => Vec::new(),
-            });
+            match self.git_base.clone() {
+                None => self.git_signs = std::sync::Arc::new(Vec::new()),
+                // arquivo pequeno: o diff é instantâneo e os sinais acompanham cada tecla
+                Some(base) if self.ed.buf.line_count() <= SINAIS_SINCRONOS => self.git_signs = std::sync::Arc::new(git::sinais(&base, &self.ed.lines())),
+                // arquivo grande: o diff roda em outra thread; enquanto ele anda, os sinais antigos ficam
+                Some(base) => {
+                    let rope = self.ed.buf.rope.clone();
+                    let notify = self.notify.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let linhas: Vec<String> = rope.lines().map(|l| l.to_string().trim_end_matches(['\n', '\r']).to_string()).collect();
+                        let _ = tx.send(git::sinais(&base, &linhas));
+                        if let Some(n) = notify {
+                            n();
+                        }
+                    });
+                    self.sinais_job = Some((self.ed.buf.rev, rx));
+                }
+            }
         }
         self.git_signs.clone()
     }
@@ -1425,22 +1487,43 @@ impl Session {
     // ------------------------------------------------------------------
 
     fn pick_open(&mut self, kind: PickKind) {
-        let base = match kind {
-            PickKind::Arquivos => busca::listar(&self.root),
-            PickKind::Recentes => busca::recentes(),
-            PickKind::Texto | PickKind::Lista => Vec::new(),
+        let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
+        let (base, listando, base_do_cache) = match kind {
+            PickKind::Arquivos => {
+                // a lista guardada aparece já; a nova (do disco) chega em segundo plano
+                let cache = busca::lista_em_cache(&self.root);
+                let fresca = cache.as_ref().is_some_and(|(idade, _)| *idade < std::time::Duration::from_secs(5));
+                let do_cache = cache.is_some();
+                let base = cache.map(|(_, v)| v).unwrap_or_default();
+                let bg = (!fresca).then(|| busca::listar_bg(self.root.clone(), notify));
+                (base, bg, do_cache)
+            }
+            PickKind::Recentes => (busca::recentes(), None, false),
+            PickKind::Texto | PickKind::Lista => (Vec::new(), None, false),
         };
-        self.picker = Some(Picker { kind, titulo: String::new(), lista: Vec::new(), mapa: Vec::new(), query: String::new(), total: base.len(), base, items: Vec::new(), achados: Vec::new(), sel: 0 });
+        self.picker = Some(Picker { kind, titulo: String::new(), lista: Vec::new(), mapa: Vec::new(), query: String::new(), total: base.len(), base, items: Vec::new(), achados: Vec::new(), sel: 0, listando, buscando: None, base_do_cache, prev: None, aceitar_depois: false });
         self.pick_refresh();
     }
 
     fn pick_refresh(&mut self) {
+        self.pick_atualizar(false);
+    }
+
+    /// Refaz os itens mostrados. `manter_sel`: chegou novidade em segundo plano, não volta ao topo.
+    fn pick_atualizar(&mut self, manter_sel: bool) {
         let root = self.root.clone();
+        let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
         let Some(p) = self.picker.as_mut() else { return };
-        p.sel = 0;
+        if !manter_sel {
+            p.sel = 0;
+        }
         match p.kind {
             PickKind::Arquivos | PickKind::Recentes => {
-                let r = busca::fuzzy(&p.query, &p.base, 200);
+                // a letra a mais só procura entre os que já casaram
+                let entre = p.prev.as_ref().filter(|(q, _)| !q.is_empty() && p.query.starts_with(q.as_str()) && p.query != *q).map(|(_, v)| v.clone());
+                let entre = if manter_sel { None } else { entre };
+                let (r, todos) = busca::fuzzy_sub(&p.query, &p.base, entre.as_deref(), 200);
+                p.prev = Some((p.query.clone(), todos));
                 p.total = if p.query.is_empty() { p.base.len() } else { r.len() };
                 p.items = r
                     .into_iter()
@@ -1460,9 +1543,69 @@ impl Session {
                 p.items = r.into_iter().map(|c| PickItem { text: p.base[c.item].clone(), hits: c.pos, detail: p.lista[c.item].detalhe.clone() }).collect();
             }
             PickKind::Texto => {
-                p.achados = busca::buscar_texto(&root, &p.query, 200, std::time::Duration::from_millis(150));
+                if !manter_sel {
+                    // consulta nova: pára a busca anterior e começa outra, sem esperar o disco
+                    p.achados.clear();
+                    p.buscando = (!p.query.is_empty()).then(|| busca::buscar_texto_bg(root.clone(), p.query.clone(), 200, notify));
+                }
                 p.total = p.achados.len();
                 p.items = p.achados.iter().map(|a| PickItem { text: format!("{}:{}", a.arquivo, a.linha + 1), hits: Vec::new(), detail: a.texto.clone() }).collect();
+            }
+        }
+        p.sel = p.sel.min(p.items.len().saturating_sub(1));
+    }
+
+    /// Pega o que as buscas em segundo plano já acharam.
+    fn pick_poll(&mut self) {
+        use busca::Parcial;
+        let Some(p) = self.picker.as_mut() else { return };
+        let mut mudou = false;
+        if let Some(bg) = p.listando.as_mut() {
+            for m in bg.novidades() {
+                match m {
+                    Parcial::Itens(v) if !p.base_do_cache => {
+                        p.base.extend(v);
+                        mudou = true;
+                    }
+                    Parcial::Completa(v) => {
+                        p.base = v;
+                        p.base_do_cache = false;
+                        mudou = true;
+                    }
+                    _ => {}
+                }
+            }
+            if bg.feita {
+                p.listando = None;
+            }
+        }
+        if let Some(bg) = p.buscando.as_mut() {
+            for m in bg.novidades() {
+                if let Parcial::Itens(v) = m {
+                    p.achados.extend(v);
+                    mudou = true;
+                }
+            }
+            if bg.feita {
+                p.buscando = None;
+            }
+        }
+        if mudou {
+            // só depois de novos itens na base o conjunto anterior deixa de valer
+            if let Some(p) = self.picker.as_mut() {
+                p.prev = None;
+            }
+            self.pick_atualizar(true);
+        }
+        // Enter já apertado: aceita assim que houver o que aceitar (ou desiste se a busca acabou vazia)
+        if let Some(p) = self.picker.as_mut() {
+            if p.aceitar_depois {
+                if !p.items.is_empty() {
+                    p.aceitar_depois = false;
+                    self.pick_accept();
+                } else if p.listando.is_none() && p.buscando.is_none() {
+                    p.aceitar_depois = false;
+                }
             }
         }
     }
@@ -1505,6 +1648,13 @@ impl Session {
     }
 
     fn pick_accept(&mut self) {
+        // Enter antes de a busca em segundo plano trazer algo: espera chegar
+        if let Some(p) = self.picker.as_mut() {
+            if p.items.is_empty() && (p.listando.is_some() || p.buscando.is_some()) {
+                p.aceitar_depois = true;
+                return;
+            }
+        }
         let Some(p) = self.picker.take() else { return };
         let Some(item) = p.items.get(p.sel) else { return };
         let (path, goto) = match p.kind {
@@ -1834,6 +1984,8 @@ impl Session {
     }
 
     pub fn view_model(&mut self) -> ViewModel {
+        self.pick_poll();
+        self.git_poll();
         self.term_refresh();
         self.lsp_sync();
         self.follow_cursor();
@@ -1974,6 +2126,7 @@ impl Session {
                 items: p.items.iter().skip(p.sel.saturating_sub(PICK_LINHAS - 1)).take(PICK_LINHAS).cloned().collect(),
                 sel: p.sel.min(PICK_LINHAS - 1),
                 total: p.total,
+                buscando: p.listando.is_some() || p.buscando.is_some(),
             }),
             hits,
             hits_id,
@@ -2658,7 +2811,8 @@ mod testes {
         s.root = d.clone();
         s.resize(80, 20.0);
         s.feed(" ff");
-        let m = modelo(&mut s);
+        // a lista de arquivos vem de uma thread: espera chegar
+        let m = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| p.items.len() == 3 && !p.buscando));
         let pv = m.picker.expect("buscador aberto");
         assert_eq!(pv.title, "Buscar arquivo");
         assert_eq!(pv.items.len(), 3);
@@ -2674,13 +2828,45 @@ mod testes {
     }
 
     #[test]
+    fn enter_antes_da_lista_chegar_abre_o_arquivo_quando_ela_chega() {
+        let d = projeto("ff-enter");
+        let mut s = Session::new("x\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        // tudo numa tecla só: o Enter vem antes de a thread trazer a lista
+        s.feed(" ffbeta<CR>");
+        let m = espera_term(&mut s, |m| m.name == "beta.rs");
+        assert_eq!(m.name, "beta.rs");
+        assert!(m.picker.is_none());
+    }
+
+    #[test]
+    fn sinais_do_git_de_arquivo_grande_vem_de_outra_thread_e_nao_travam() {
+        let linhas: Vec<String> = (0..8000).map(|i| format!("linha {i}")).collect();
+        let mut s = Session::new(&linhas.join("\n"), None);
+        s.resize(80, 20.0);
+        s.git_branch = Some("main".into());
+        s.git_base = Some(std::sync::Arc::new(linhas.clone()));
+        s.git_rev = u64::MAX;
+        assert!(modelo(&mut s).git.unwrap().signs.is_empty(), "igual ao HEAD: sem sinais");
+        s.feed("ggAX<Esc>");
+        // o cálculo é em segundo plano: os sinais aparecem pouco depois
+        let m = espera_term(&mut s, |m| m.git.as_ref().is_some_and(|g| !g.signs.is_empty()));
+        assert!(m.git.unwrap().signs.contains(&(0, git::Sign::Changed)));
+        // desfazer: voltam a ficar vazios
+        s.feed("u");
+        let m = espera_term(&mut s, |m| m.git.as_ref().is_some_and(|g| g.signs.is_empty()));
+        assert!(m.git.unwrap().signs.is_empty());
+    }
+
+    #[test]
     fn espaco_fw_busca_texto_e_pula_para_a_linha() {
         let d = projeto("fw");
         let mut s = Session::new("x\n", None);
         s.root = d;
         s.resize(80, 20.0);
         s.feed(" fwagulha");
-        let pv = modelo(&mut s).picker.unwrap();
+        let pv = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| p.items.len() == 1 && !p.buscando)).picker.unwrap();
         assert_eq!(pv.items.len(), 1);
         assert_eq!(pv.items[0].text, "src/alfa.rs:2");
         s.feed("<CR>");
@@ -2901,7 +3087,8 @@ mod testes {
         run(&["commit", "-q", "-m", "x"]);
         let mut s = Session::open(&d.join("src/alfa.rs"));
         s.resize(80, 20.0);
-        let g = modelo(&mut s).git.expect("dentro de um repositório");
+        // o git é lido em segundo plano
+        let g = espera_term(&mut s, |m| m.git.is_some()).git.expect("dentro de um repositório");
         assert_eq!(g.branch, "principal");
         assert!(g.signs.is_empty(), "arquivo igual ao HEAD: sem sinais");
         // editar sem salvar já aparece: linha nova no fim e a primeira alterada
@@ -3311,9 +3498,16 @@ mod testes {
         // o buscador abre numa aba nova; o mesmo arquivo de novo só troca para ela
         w.feed(" ff");
         w.feed("LEIA<CR>");
+        // o Enter vem antes da lista de arquivos: a sessão espera e abre quando ela chega
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while w.n_abas() < 3 && std::time::Instant::now() < fim {
+            w.view_model();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!(w.n_abas(), 3);
         assert_eq!(w.view_model().name, "LEIA.md");
         w.feed(" ffalfa<CR>");
+        espera_ws(&mut w, |m| m.name == "alfa.rs");
         assert_eq!(w.n_abas(), 3, "alfa.rs já estava aberto");
         assert_eq!(w.view_model().name, "alfa.rs");
         // alteração não salva protege o :q; :q! fecha a aba (as outras continuam)
