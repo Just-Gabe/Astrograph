@@ -106,7 +106,9 @@ com animações próprias, todas em mola:
 - paleta de comandos com fade, avisos que deslizam, pílula de modo na base;
 - guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
 - buscador com fade, trecho que casou em destaque e seleção que desliza;
-- explorador que desliza da esquerda e empurra o texto.
+- explorador que desliza da esquerda e empurra o texto;
+- relógio pequeno no canto inferior direito (também no app com Neovim), útil em tela
+  cheia; `[clock] enabled = false` desliga e `hour12 = true` mostra `3:07 PM`.
 
 Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.
 

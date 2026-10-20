@@ -35,7 +35,9 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Objetos de texto `iw aw iW aW ip ap i( a( ib i[ i{ iB i< i\" i' i\``, com contagem | **99,9%** (2500 casos) |
 | Visual `v` e `V` (movimentos, objetos, `d y c x X D Y C s S < > ~ u U J r o`), com as regras do Vim (cursor sobre a quebra de linha, `ip` que estende) | 99,2% (2500 casos) |
 | Busca (`/ ? n N * #`, realce animado, `:noh`) | pronto |
-| Visual em bloco (`<C-v>`), `p` no visual, marcas, macros (`q @`), `:s` `:g` | próximo |
+| Marcas (`m a-z`, `'x`, `` `x ``, `''`, `'<` `'>`), com reajuste por linhas e desfazer | **99%** (195/200) |
+| Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
+| Visual em bloco (`<C-v>`), `p` no visual, `:s` `:g` | próximo |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
 | Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
