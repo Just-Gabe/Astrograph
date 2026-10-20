@@ -160,6 +160,11 @@ pub struct Session {
     term: Option<Term>,
     term_focus: bool,
     term_zen: bool,
+    /// seleção do terminal com o mouse (pontas em linha, coluna da tela) e se o botão está apertado
+    term_sel: Option<((usize, usize), (usize, usize))>,
+    term_arrasto: bool,
+    /// último texto copiado para o clipboard do sistema (id, texto)
+    clip: Option<(u64, String)>,
     lsp: Option<LspRef>,
     lsp_pool: LspPool,
     comp: Option<Comp>,
@@ -254,6 +259,9 @@ impl Session {
             term: None,
             term_focus: false,
             term_zen: false,
+            term_sel: None,
+            term_arrasto: false,
+            clip: None,
             lsp: None,
             lsp_pool: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             comp: None,
@@ -1209,6 +1217,8 @@ impl Session {
         self.term_focus = false;
         self.term_zen = false;
         self.term_esc = false;
+        self.term_sel = None;
+        self.term_arrasto = false;
         self.term_screen = None;
     }
 
@@ -1222,6 +1232,20 @@ impl Session {
 
     /// Teclas com o terminal em foco: vão para o pty; `<C-\><C-n>` devolve o teclado ao editor.
     fn term_feed(&mut self, keys: &str) {
+        // processo terminado: qualquer tecla fecha o painel
+        if self.term_screen.as_ref().is_some_and(|s| s.exited) {
+            self.term_close();
+            return;
+        }
+        // Shift+PageUp/PageDown percorrem o histórico
+        let k = keys.to_lowercase();
+        if k == "<s-pageup>" || k == "<s-pagedown>" {
+            let d = if k == "<s-pageup>" { self.term_dims.0 as isize - 1 } else { -(self.term_dims.0 as isize - 1) };
+            if let Some(t) = self.term.as_mut() {
+                t.rolar(d);
+            }
+            return;
+        }
         let esc = |k: &str| matches!(k.to_lowercase().as_str(), "<c-bslash>" | "<c-\\>");
         if self.term_esc {
             self.term_esc = false;
@@ -1251,11 +1275,100 @@ impl Session {
             return;
         }
         let sc = t.snapshot();
-        if sc.exited {
-            self.term_close();
-            self.say("Terminal encerrado.".into(), ToastKind::Info);
-        } else {
-            self.term_screen = Some(std::sync::Arc::new(sc));
+        // o processo terminou: o painel fica com o que sobrou na tela e avisa; uma tecla fecha
+        self.term_screen = Some(std::sync::Arc::new(sc));
+    }
+
+    /// Texto selecionado no terminal, se houver.
+    fn term_texto_selecionado(&self) -> Option<String> {
+        let (a, b) = self.term_sel?;
+        let sc = self.term_screen.as_ref()?;
+        let t = sc.texto(a, b);
+        (!t.trim().is_empty()).then_some(t)
+    }
+
+    fn copiar_clip(&mut self, texto: String) {
+        let id = self.clip.as_ref().map_or(1, |(i, _)| i + 1);
+        self.clip = Some((id, texto));
+    }
+
+    /// `Ctrl+Shift+C`: copia a seleção do terminal para o clipboard do sistema.
+    pub fn term_copiar(&mut self) {
+        match self.term_texto_selecionado() {
+            Some(t) => {
+                let n = t.lines().count();
+                self.copiar_clip(t);
+                self.say(format!("{n} linha(s) copiada(s)"), ToastKind::Done);
+            }
+            None => self.say("Nada selecionado no terminal.".into(), ToastKind::Info),
+        }
+    }
+
+    /// `Ctrl+Shift+V` / `Shift+Insert`: cola no terminal (com `bracketed paste` se o programa pede) ou no
+    /// modo de inserção do editor.
+    pub fn colar(&mut self, texto: &str) {
+        if self.term_focus {
+            if let Some(t) = self.term.as_mut() {
+                t.colar(texto);
+            }
+            self.term_sel = None;
+        } else if self.ed.mode() == Mode::Insert {
+            let teclas: Vec<Key> = texto.replace("\r\n", "\n").chars().map(|c| if c == '\n' { Key::Enter } else { Key::Char(c) }).collect();
+            self.ed.feed(&teclas);
+        }
+    }
+
+    /// Mouse sobre o terminal: o programa recebe os eventos se pediu (e `shift` não está apertado);
+    /// senão seleciona (copia ao soltar) e a roda rola o histórico.
+    /// `acao`: press, drag, release, wheel (`botao` 64 sobe, 65 desce).
+    pub fn term_mouse(&mut self, acao: &str, botao: u8, row: usize, col: usize, shift: bool) {
+        let Some(sc) = self.term_screen.clone() else { return };
+        let (row, col) = (row.min(sc.rows.len().saturating_sub(1)), col.min(sc.rows.first().map_or(0, |r| r.len()).saturating_sub(1)));
+        let repassa = sc.mouse.modo != term::ModoMouse::Nenhum && !shift && sc.scroll == 0;
+        if repassa {
+            let (solta, mov) = (acao == "release", acao == "drag");
+            let ok = match sc.mouse.modo {
+                term::ModoMouse::Nenhum => false,
+                term::ModoMouse::Cliques => !mov,
+                _ => true,
+            };
+            if ok {
+                if let Some(t) = self.term.as_mut() {
+                    t.escrever_cru(&term::mouse_bytes(sc.mouse, botao, col, row, solta, mov));
+                }
+            }
+            if acao == "press" {
+                self.term_focus = true;
+            }
+            return;
+        }
+        match acao {
+            "wheel" => {
+                let d = if botao == 64 { 3 } else { -3 };
+                if let Some(t) = self.term.as_mut() {
+                    t.rolar(d);
+                }
+            }
+            "press" if botao == 0 => {
+                self.term_focus = true;
+                self.term_sel = Some(((row, col), (row, col)));
+                self.term_arrasto = true;
+            }
+            "drag" if self.term_arrasto => {
+                if let Some((a, _)) = self.term_sel {
+                    self.term_sel = Some((a, (row, col)));
+                }
+            }
+            "release" if self.term_arrasto => {
+                self.term_arrasto = false;
+                // um clique sem arrastar não seleciona nada
+                if self.term_sel.is_some_and(|(a, b)| a == b) {
+                    self.term_sel = None;
+                } else if let Some(t) = self.term_texto_selecionado() {
+                    self.copiar_clip(t);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1517,6 +1630,9 @@ impl Session {
         if self.dash || self.picker.is_some() {
             return;
         }
+        // clicar no texto tira o teclado do terminal
+        self.term_focus = false;
+        self.term_zen = false;
         let r = row.min(self.ed.buf.line_count() - 1);
         let line = self.ed.buf.line(r);
         let len = line.chars().count();
@@ -1834,7 +1950,7 @@ impl Session {
                 }
             }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
-            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen }),
+            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen, sel: self.term_sel }),
             tree: self.tree.as_ref().map(|t| {
                 let first = t.sel.saturating_sub(100);
                 TreeView {
@@ -1865,6 +1981,7 @@ impl Session {
                 let (id, a, b, _) = self.ed.last_yank;
                 ((a.row, a.col), (b.row, b.col), id)
             }),
+            clip: self.clip.clone(),
             layout: None,
             pane: self.pane_id,
             panes: Vec::new(),
@@ -2436,6 +2553,9 @@ pub async fn native_task(
             UiCommand::TermOut => {}
             UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
+            UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
+            UiCommand::Paste(t) => w.atual().colar(&t),
+            UiCommand::TermCopy => w.atual().term_copiar(),
             UiCommand::Panes(t) => {
                 let t: Vec<(PaneId, usize, f32)> = t.into_iter().map(|(id, c, r)| (id, c.max(1) as usize, r.max(1) as f32)).collect();
                 w.tamanhos_paineis(&t);
@@ -2621,6 +2741,94 @@ mod testes {
     }
 
     #[cfg(unix)]
+    fn linhas_do_terminal(m: &ViewModel) -> Vec<String> {
+        m.term.as_ref().map(|t| t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>().trim_end().to_string()).collect()).unwrap_or_default()
+    }
+
+    fn espera_term(s: &mut Session, ok: impl Fn(&ViewModel) -> bool) -> ViewModel {
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let m = modelo(s);
+            if ok(&m) || std::time::Instant::now() > fim {
+                return m;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_seleciona_copia_cola_rola_e_avisa_quando_termina() {
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.term_resize(14, 60);
+        s.feed(" t");
+        s.feed("echo ola mundo<CR>");
+        // a saída do echo é a linha (com ou sem o prompt na frente) que termina em "ola mundo" e não é o comando
+        let saida = |m: &ViewModel| linhas_do_terminal(m).iter().position(|l| l.ends_with("ola mundo") && !l.starts_with("echo"));
+        let m = espera_term(&mut s, |m| saida(m).is_some());
+        let r = saida(&m).unwrap_or_else(|| panic!("saída do echo: {:?}", linhas_do_terminal(&m)));
+        let c0 = linhas_do_terminal(&m)[r].find("ola mundo").unwrap();
+        // arrastar o mouse seleciona e copia ao soltar
+        s.term_mouse("press", 0, r, c0, false);
+        s.term_mouse("drag", 0, r, c0 + 7, false);
+        assert_eq!(modelo(&mut s).term.unwrap().sel, Some(((r, c0), (r, c0 + 7))));
+        s.term_mouse("release", 0, r, c0 + 7, false);
+        let m = modelo(&mut s);
+        assert_eq!(m.clip, Some((1, "ola mund".to_string())));
+        // um clique sem arrastar não seleciona nem copia
+        s.term_mouse("press", 0, r, c0 + 2, false);
+        s.term_mouse("release", 0, r, c0 + 2, false);
+        let m = modelo(&mut s);
+        assert_eq!((m.term.unwrap().sel, m.clip.map(|c| c.0)), (None, Some(1)));
+        // Ctrl+Shift+C sem seleção avisa; com seleção copia de novo
+        s.term_copiar();
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.2 == ToastKind::Info));
+        s.term_mouse("press", 0, r, c0, false);
+        s.term_mouse("drag", 0, r, c0 + 2, false);
+        s.term_copiar();
+        assert_eq!(modelo(&mut s).clip, Some((2, "ola".to_string())));
+        s.term_mouse("release", 0, r, c0 + 2, false);
+        // colar: o shell recebe a linha inteira
+        s.term_mouse("release", 0, r, 2, false);
+        s.colar("echo $((6*7))\n");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l == "42"));
+        assert!(linhas_do_terminal(&m).iter().any(|l| l == "42"), "{:?}", linhas_do_terminal(&m));
+        // histórico: a roda sobe, Shift+PageUp também, digitar volta ao fim
+        s.feed("seq 1 90<CR>");
+        espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l == "90"));
+        s.term_mouse("wheel", 64, 3, 3, false);
+        assert_eq!(modelo(&mut s).term.unwrap().screen.scroll, 3);
+        s.term_mouse("wheel", 65, 3, 3, false);
+        assert_eq!(modelo(&mut s).term.unwrap().screen.scroll, 0);
+        s.feed("<S-PageUp>");
+        assert!(modelo(&mut s).term.unwrap().screen.scroll >= 10, "uma página para cima");
+        s.feed("echo fim<CR>");
+        assert_eq!(modelo(&mut s).term.unwrap().screen.scroll, 0, "digitar volta ao fim");
+        // o processo termina: o painel fica com um aviso e uma tecla fecha
+        s.feed("exit<CR>");
+        let m = espera_term(&mut s, |m| m.term.as_ref().is_some_and(|t| t.screen.exited));
+        assert!(m.term.as_ref().is_some_and(|t| t.screen.exited), "painel continua, marcado como terminado");
+        s.feed("q");
+        assert!(modelo(&mut s).term.is_none(), "uma tecla fecha");
+        assert_eq!(s.ed.lines()[0], "x", "a tecla não foi para o texto");
+    }
+
+    #[test]
+    fn clicar_no_texto_tira_o_teclado_do_terminal() {
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("abc\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.feed(" t");
+        assert!(modelo(&mut s).term.is_some_and(|t| t.focus));
+        s.click(0, 1);
+        assert!(modelo(&mut s).term.is_some_and(|t| !t.focus), "o painel segue aberto, sem o teclado");
+        s.term_close();
+    }
+
     #[test]
     fn zen_alterna_e_ctrl_barra_ctrl_n_sai() {
         std::env::set_var("SHELL", "/bin/sh");

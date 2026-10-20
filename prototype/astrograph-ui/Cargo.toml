@@ -42,3 +42,8 @@ codegen-units = 4
 [dev-dependencies]
 tree-sitter = "0.27.1"
 tree-sitter-lua = "0.5.0"
+
+# vt100 0.15 subtrai sem cuidado ao rolar o histórico além da altura da tela (estoura em debug,
+# funciona com a aritmética de release); só essa dependência perde a checagem
+[profile.dev.package.vt100]
+overflow-checks = false

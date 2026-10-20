@@ -67,6 +67,8 @@ pub struct TermView {
     pub focus: bool,
     /// modo zen: o terminal (agente) ocupa a janela, numa coluna centralizada
     pub zen: bool,
+    /// trecho selecionado com o mouse: (linha, coluna) de cada ponta
+    pub sel: Option<((usize, usize), (usize, usize))>,
 }
 
 /// Git do arquivo aberto: branch e sinais da margem (ordenados por linha).
@@ -152,6 +154,8 @@ pub struct ViewModel {
     /// muda ao trocar de arquivo/aba: a cena zera as animações
     pub doc_id: u64,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
+    /// texto que o app deve pôr no clipboard do sistema: (id, texto); o id sobe a cada cópia
+    pub clip: Option<(u64, String)>,
     /// janelas divididas: o layout da aba, o painel focado (este modelo) e os outros painéis
     pub layout: Option<crate::janelas::Layout>,
     pub pane: crate::janelas::PaneId,
@@ -209,6 +213,7 @@ impl ViewModel {
             tab_active: 0,
             doc_id: 0,
             flash: None,
+            clip: None,
             layout: None,
             pane: 0,
             panes: Vec::new(),

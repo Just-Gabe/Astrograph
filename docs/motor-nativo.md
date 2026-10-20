@@ -45,7 +45,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
 | Tecla líder configurável (`[keys] leader` no `config.toml` da UI; padrão `<Espaço>`); as menções a ela mostram o nome da tecla escolhida | pronto |
 | Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
-| Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele; `<Espaço>Az` abre o **modo zen**: o agente em tela cheia, coluna centrada num cartão, com fade) | **funcionando** |
+| Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha; **seleção com o mouse** (copia ao soltar) e `Ctrl+Shift+C`; **colar** com `Ctrl+Shift+V`/`Shift+Insert` (bracketed paste); **histórico** com a roda e `Shift+PageUp/PageDown`; mouse repassado a programas TUI (vim, htop...), com `Shift` para selecionar; aviso quando o processo termina) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele; `<Espaço>Az` abre o **modo zen**: o agente em tela cheia, coluna centrada num cartão, com fade) | **funcionando** |
 | Git: branch na pílula e sinais de margem (nova/alterada/removida) comparando o buffer ao `HEAD`, ao vivo (`similar`; só lê o `HEAD` com o `git` instalado) | **funcionando** |
 | LSP nativo (cliente JSON-RPC próprio; servidores do PATH ou do Mason): diagnósticos, hover `K`, definição `gd`, completar (popup com filtro local; `Tab`/`<C-y>` aceita, `<C-n>`/`<C-p>` navegam), **renomear** (`<Espaço>rn` / `:Rename`, em vários arquivos), **ações de código** (`<Espaço>ca`, lista), **formatar** (`<Espaço>lf` / `:Format`; `[lsp] format_on_save = true` formata ao `:w`), **assinatura** ao digitar `(` e `,`, **referências** (`gr`), tipo (`gy`), implementação (`<Espaço>li`), **símbolos** do arquivo (`<Espaço>ls`), **lista de diagnósticos** (`<Espaço>xx`) e `]d`/`[d` | **funcionando** (verificado com um servidor falso e o pyright real) |
 | Abas: uma sessão por aba (`:tabnew [arquivo]`, `gt`/`gT`, `:tabc[!]`, `:tabo`, `:q` fecha a aba), barra de abas clicável, servidor LSP compartilhado, explorador e terminal acompanham a aba ativa | **funcionando** |
@@ -65,6 +65,9 @@ objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`
 motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 
 ## Divergências conhecidas
+
+- Terminal: um terminal por aba (ainda sem lista de vários), `<Espaço>Al` abre o primeiro agente instalado
+  (sem escolher), links OSC 8 não são tratados.
 
 - LSP: o `didChange` manda o texto inteiro (sem sincronização incremental), a raiz do projeto vem do primeiro
   arquivo de cada servidor, e snippets/`additionalTextEdits` do completar ainda não são aplicados. Renomear em

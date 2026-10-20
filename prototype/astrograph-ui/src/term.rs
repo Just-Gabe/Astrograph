@@ -32,6 +32,63 @@ pub struct TermScreen {
     pub cursor: (usize, usize),
     pub cursor_visible: bool,
     pub exited: bool,
+    /// linhas de histórico acima da tela que estão à mostra (0 = no fim)
+    pub scroll: usize,
+    /// o programa pediu eventos de mouse (vim, htop...)
+    pub mouse: Mouse,
+    /// o programa aceita colar entre `\e[200~` e `\e[201~`
+    pub bracketed: bool,
+    /// tela alternativa (vim, less...): sem histórico
+    pub alternada: bool,
+}
+
+/// O que o programa no terminal quer receber do mouse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Mouse {
+    pub modo: ModoMouse,
+    pub sgr: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ModoMouse {
+    #[default]
+    Nenhum,
+    /// só cliques (`?1000`)
+    Cliques,
+    /// cliques e arrasto com botão (`?1002`)
+    Arrasto,
+    /// qualquer movimento (`?1003`)
+    Tudo,
+}
+
+impl TermScreen {
+    /// Texto entre dois pontos (linha, coluna) da tela, na ordem de leitura; o fim de cada linha
+    /// sem espaços sobrando, linhas separadas por `\n`.
+    pub fn texto(&self, a: (usize, usize), b: (usize, usize)) -> String {
+        let (ini, fim) = if a <= b { (a, b) } else { (b, a) };
+        let mut out = Vec::new();
+        for r in ini.0..=fim.0.min(self.rows.len().saturating_sub(1)) {
+            let linha = &self.rows[r];
+            let c0 = if r == ini.0 { ini.1 } else { 0 };
+            let c1 = if r == fim.0 { (fim.1 + 1).min(linha.len()) } else { linha.len() };
+            let t: String = linha.get(c0..c1.max(c0)).unwrap_or(&[]).iter().filter(|c| !c.cont).map(|c| c.ch).collect();
+            out.push(t.trim_end().to_string());
+        }
+        out.join("\n")
+    }
+}
+
+/// Bytes de um evento de mouse para o programa. `botao`: 0 esquerdo, 1 meio, 2 direito, 64 roda
+/// para cima, 65 roda para baixo; `solta`: soltou o botão; `mov`: movimento com botão apertado.
+/// Colunas e linhas contam a partir de 0.
+pub fn mouse_bytes(m: Mouse, botao: u8, col: usize, row: usize, solta: bool, mov: bool) -> Vec<u8> {
+    let b = botao + if mov { 32 } else { 0 };
+    if m.sgr {
+        return format!("\x1b[<{};{};{}{}", b, col + 1, row + 1, if solta { 'm' } else { 'M' }).into_bytes();
+    }
+    // formato antigo: só até a coluna/linha 222; soltar vira botão 3
+    let (b, c, r) = (if solta { 3 } else { b }, col.min(222) as u8 + 33, row.min(222) as u8 + 33);
+    vec![0x1b, b'[', b'M', 32 + b, c, r]
 }
 
 pub struct Term {
@@ -114,8 +171,50 @@ impl Term {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        // digitar leva de volta ao fim do histórico
+        {
+            let mut p = self.parser.lock().unwrap();
+            if p.screen().scrollback() > 0 {
+                p.set_scrollback(0);
+                self.pending.store(true, Ordering::Release);
+            }
+        }
         let _ = self.writer.write_all(bytes);
         let _ = self.writer.flush();
+    }
+
+    /// Escreve sem mexer na rolagem (eventos de mouse).
+    pub fn escrever_cru(&mut self, bytes: &[u8]) {
+        let _ = self.writer.write_all(bytes);
+        let _ = self.writer.flush();
+        self.pending.store(true, Ordering::Release);
+    }
+
+    /// Cola texto: com `bracketed paste` o programa recebe tudo de uma vez, sem executar linhas.
+    pub fn colar(&mut self, texto: &str) {
+        let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
+        let t = texto.replace("\r\n", "\n").replace('\n', "\r");
+        let mut b = Vec::new();
+        if bracketed {
+            b.extend_from_slice(b"\x1b[200~");
+        }
+        b.extend_from_slice(t.as_bytes());
+        if bracketed {
+            b.extend_from_slice(b"\x1b[201~");
+        }
+        self.write(&b);
+    }
+
+    /// Rola o histórico: `d > 0` sobe (para o passado). Devolve o deslocamento atual.
+    pub fn rolar(&mut self, d: isize) -> usize {
+        let mut p = self.parser.lock().unwrap();
+        let atual = p.screen().scrollback() as isize;
+        // pede mais do que existe; o `vt100` limita ao tamanho do histórico
+        p.set_scrollback((atual + d).max(0) as usize);
+        let novo = p.screen().scrollback();
+        drop(p);
+        self.pending.store(true, Ordering::Release);
+        novo
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -172,7 +271,27 @@ impl Term {
             out.push(linha);
         }
         let (cr, cc) = s.cursor_position();
-        TermScreen { rows: out, cursor: (cr as usize, cc as usize), cursor_visible: !s.hide_cursor(), exited: self.terminou() }
+        let scroll = s.scrollback();
+        let mouse = Mouse {
+            modo: match s.mouse_protocol_mode() {
+                vt100::MouseProtocolMode::None => ModoMouse::Nenhum,
+                vt100::MouseProtocolMode::Press | vt100::MouseProtocolMode::PressRelease => ModoMouse::Cliques,
+                vt100::MouseProtocolMode::ButtonMotion => ModoMouse::Arrasto,
+                vt100::MouseProtocolMode::AnyMotion => ModoMouse::Tudo,
+            },
+            sgr: s.mouse_protocol_encoding() == vt100::MouseProtocolEncoding::Sgr,
+        };
+        TermScreen {
+            rows: out,
+            cursor: (cr as usize, cc as usize),
+            // com o histórico à mostra o cursor não está na tela
+            cursor_visible: !s.hide_cursor() && scroll == 0,
+            exited: self.terminou(),
+            scroll,
+            mouse,
+            bracketed: s.bracketed_paste(),
+            alternada: s.alternate_screen(),
+        }
     }
 }
 
@@ -325,6 +444,87 @@ mod testes {
         let c = s.rows[0][4];
         assert_eq!((c.ch, c.fg), ('v', Some(0xff453a)));
         assert_eq!(s.rows[0][0].fg, None);
+    }
+
+    fn tela(linhas: &[&str]) -> TermScreen {
+        let rows = linhas
+            .iter()
+            .map(|l| {
+                let mut v: Vec<TCell> = l.chars().map(|ch| TCell { ch, ..TCell::VAZIA }).collect();
+                v.resize(12, TCell::VAZIA);
+                v
+            })
+            .collect();
+        TermScreen { rows, cursor: (0, 0), cursor_visible: true, exited: false, scroll: 0, mouse: Mouse::default(), bracketed: false, alternada: false }
+    }
+
+    #[test]
+    fn texto_da_selecao_vai_em_ordem_de_leitura_sem_espacos_no_fim() {
+        let s = tela(&["abcdef", "ghi", "jklmno"]);
+        // uma linha: colunas 1..=3
+        assert_eq!(s.texto((0, 1), (0, 3)), "bcd");
+        // várias linhas: resto da primeira, a do meio inteira (sem o espaço do fim), começo da última
+        assert_eq!(s.texto((0, 4), (2, 1)), "ef\nghi\njk");
+        // pontas trocadas dão o mesmo texto
+        assert_eq!(s.texto((2, 1), (0, 4)), "ef\nghi\njk");
+        // além da última linha: limita
+        assert_eq!(s.texto((2, 0), (9, 99)), "jklmno");
+    }
+
+    #[test]
+    fn eventos_de_mouse_em_sgr_e_no_formato_antigo() {
+        let sgr = Mouse { modo: ModoMouse::Cliques, sgr: true };
+        assert_eq!(mouse_bytes(sgr, 0, 4, 9, false, false), b"\x1b[<0;5;10M");
+        assert_eq!(mouse_bytes(sgr, 0, 4, 9, true, false), b"\x1b[<0;5;10m", "soltar usa m minúsculo");
+        assert_eq!(mouse_bytes(sgr, 0, 0, 0, false, true), b"\x1b[<32;1;1M", "arrasto soma 32");
+        assert_eq!(mouse_bytes(sgr, 64, 1, 1, false, false), b"\x1b[<64;2;2M", "roda para cima");
+        let antigo = Mouse { modo: ModoMouse::Cliques, sgr: false };
+        assert_eq!(mouse_bytes(antigo, 0, 0, 0, false, false), vec![0x1b, b'[', b'M', 32, 33, 33]);
+        assert_eq!(mouse_bytes(antigo, 0, 0, 0, true, false), vec![0x1b, b'[', b'M', 35, 33, 33], "soltar é o botão 3");
+        assert_eq!(mouse_bytes(antigo, 0, 999, 0, false, false)[4], 222 + 33, "coluna limitada");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn historico_rola_e_digitar_volta_ao_fim() {
+        let mut c = CommandBuilder::new("sh");
+        c.args(["-c", "i=1; while [ $i -le 60 ]; do echo linha$i; i=$((i+1)); done; cat"]);
+        let mut t = Term::spawn(c, 10, 30, None, Arc::new(|| {})).unwrap();
+        let s = esperar(&t, |s| texto(s).contains("linha60"));
+        assert_eq!(s.scroll, 0);
+        let n = t.rolar(20);
+        assert_eq!(n, 20);
+        let s = t.snapshot();
+        assert_eq!(s.scroll, 20);
+        assert!(!s.cursor_visible, "com o histórico à mostra o cursor some");
+        let primeira: String = s.rows[0].iter().map(|c| c.ch).collect();
+        let num: usize = primeira.trim().trim_start_matches("linha").parse().expect("uma linha do histórico");
+        assert!(num < 51, "subiu ao passado: {primeira}");
+        // não passa do começo do histórico
+        let max = t.rolar(100_000);
+        assert!(max >= 50 && max < 100_000, "{max}");
+        assert_eq!(t.rolar(-100_000), 0, "desce até o fim");
+        // digitar leva ao fim
+        t.rolar(10);
+        t.write(b"x");
+        assert_eq!(t.snapshot().scroll, 0);
+        t.write(&[3]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn programa_pede_mouse_e_colar_protegido() {
+        let mut c = CommandBuilder::new("sh");
+        c.args(["-c", "printf '\\033[?1000h\\033[?1006h\\033[?2004h'; cat"]);
+        let mut t = Term::spawn(c, 8, 40, None, Arc::new(|| {})).unwrap();
+        let s = esperar(&t, |s| s.bracketed);
+        assert!(s.bracketed);
+        assert_eq!(s.mouse, Mouse { modo: ModoMouse::Cliques, sgr: true });
+        // colar protegido: as quebras de linha viram \r e vem entre \e[200~ e \e[201~
+        t.colar("a\nb");
+        let s = esperar(&t, |s| texto(s).contains("200~"));
+        assert!(texto(&s).contains("200~a") && texto(&s).contains("201~"), "{}", texto(&s));
+        t.write(&[3]);
     }
 
     #[cfg(unix)]

@@ -83,6 +83,12 @@ enum UiCommand {
     PaneClick { id: u32, row: i64, col: i64 },
     /// roda a rolagem sobre um painel, em linhas
     PaneScroll(u32, f64),
+    /// mouse sobre o terminal nativo: ação (press, drag, release, wheel), botão (0 esq, 1 meio, 2 dir, 64/65 roda), célula, shift
+    TermMouse { acao: &'static str, botao: u8, row: i64, col: i64, shift: bool },
+    /// colar texto (do clipboard do sistema) no terminal ou na inserção
+    Paste(String),
+    /// copiar a seleção do terminal
+    TermCopy,
     /// arrasta um divisor: índice, área (x, y, w, h), espaço entre painéis, posição em pixels
     Divisor { idx: usize, area: (f32, f32, f32, f32), gap: f32, pos: f32 },
     Focus(bool),
@@ -447,7 +453,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -617,6 +623,11 @@ struct App {
     pane_sizes: Vec<(u32, i64, i64)>,
     /// divisor sendo arrastado (índice em `Layout::divisores`)
     drag_div: Option<usize>,
+    /// botão apertado sobre o terminal (a seleção continua mesmo se o ponteiro sair dele)
+    term_down: Option<u8>,
+    /// último id de cópia já enviado ao clipboard do sistema, e o clipboard (mantido vivo)
+    clip_visto: u64,
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
@@ -674,6 +685,9 @@ impl App {
             pane_gap: 2.0,
             pane_sizes: Vec::new(),
             drag_div: None,
+            term_down: None,
+            clip_visto: 0,
+            clipboard: None,
         }
     }
 
@@ -840,6 +854,17 @@ impl App {
         }
         self.clock_next = now + relogio::ate_proximo_minuto();
         self.frames += 1;
+        if let Some((id, texto)) = &vm.clip {
+            if *id > self.clip_visto {
+                self.clip_visto = *id;
+                if self.clipboard.is_none() {
+                    self.clipboard = arboard::Clipboard::new().ok();
+                }
+                if let Some(c) = self.clipboard.as_mut() {
+                    let _ = c.set_text(texto.clone());
+                }
+            }
+        }
         self.last_vm = vm.clone();
         let lay = scene.layout(w, h, vm.lines);
         let (tr, tc) = scene.term_dims(w, h);
@@ -1233,6 +1258,14 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(window) = &self.window {
                     window.set_cursor_visible(true);
                 }
+                // seleção no terminal: o arrasto continua mesmo fora dele
+                if let Some(b) = self.term_down {
+                    if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(position.x as f32, position.y as f32, true)) {
+                        let shift = self.modifiers.shift_key();
+                        let _ = self.tx.send(UiCommand::TermMouse { acao: "drag", botao: b, row: r as i64, col: c as i64, shift });
+                    }
+                    return;
+                }
                 // janelas divididas: arrastar o divisor, ou mostrar que ele pode ser arrastado
                 if !self.pane_rects.is_empty() {
                     if let Some(idx) = self.drag_div {
@@ -1264,6 +1297,13 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseScrollDelta::PixelDelta(p) => p.y / line_h,
                 };
                 if dy != 0.0 {
+                    // terminal: a roda rola o histórico (ou vai ao programa, se ele pede o mouse)
+                    let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                    if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(mx, my, false)) {
+                        let shift = self.modifiers.shift_key();
+                        let _ = self.tx.send(UiCommand::TermMouse { acao: "wheel", botao: if dy > 0.0 { 64 } else { 65 }, row: r as i64, col: c as i64, shift });
+                        return;
+                    }
                     // janelas divididas: a roda age sobre o painel sob o ponteiro
                     match self.painel_sob_mouse() {
                         Some((id, _)) => {
@@ -1303,6 +1343,31 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                // terminal: pressionar começa seleção (ou vai ao programa); soltar termina
+                {
+                    let botao = match button {
+                        MouseButton::Left => 0u8,
+                        MouseButton::Middle => 1,
+                        MouseButton::Right => 2,
+                        _ => 255,
+                    };
+                    let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                    let shift = self.modifiers.shift_key();
+                    if state == ElementState::Released && self.term_down == Some(botao) {
+                        self.term_down = None;
+                        if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(mx, my, true)) {
+                            let _ = self.tx.send(UiCommand::TermMouse { acao: "release", botao, row: r as i64, col: c as i64, shift });
+                        }
+                        return;
+                    }
+                    if state == ElementState::Pressed && botao != 255 {
+                        if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(mx, my, false)) {
+                            self.term_down = Some(botao);
+                            let _ = self.tx.send(UiCommand::TermMouse { acao: "press", botao, row: r as i64, col: c as i64, shift });
+                            return;
+                        }
+                    }
+                }
                 if !self.pane_rects.is_empty() {
                     // janelas divididas: o clique é da casca (abas, explorador), de um divisor ou de um painel
                     if button != MouseButton::Left {
@@ -1385,6 +1450,20 @@ impl ApplicationHandler<UserEvent> for App {
 impl App {
     /// Retorna true se o atalho foi consumido pela UI (nao vai para o Neovim).
     fn handle_shortcut(&mut self, event: &KeyEvent) -> bool {
+        // copiar e colar: Ctrl+Shift+C/V (e Shift+Insert) no terminal; colar também na inserção
+        let (ctrl, shift) = (self.modifiers.control_key(), self.modifiers.shift_key());
+        let colar = (ctrl && shift && matches!(&event.logical_key, Key::Character(t) if t.eq_ignore_ascii_case("v")))
+            || (shift && !ctrl && matches!(event.logical_key, Key::Named(NamedKey::Insert)));
+        if colar && self.native.is_some() {
+            if let Ok(t) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+                let _ = self.tx.send(UiCommand::Paste(t));
+            }
+            return true;
+        }
+        if ctrl && shift && matches!(&event.logical_key, Key::Character(t) if t.eq_ignore_ascii_case("c")) && self.last_vm.term.as_ref().is_some_and(|t| t.focus) {
+            let _ = self.tx.send(UiCommand::TermCopy);
+            return true;
+        }
         if matches!(event.logical_key, Key::Named(NamedKey::F11)) {
             self.toggle_fullscreen();
             return true;
