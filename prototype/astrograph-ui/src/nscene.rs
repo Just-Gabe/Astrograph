@@ -145,15 +145,27 @@ pub struct Scene {
     pub paint_ms: f32,
 }
 
+/// Fontes pedidas no `[font]` do config (normal, negrito, itálico): tentadas antes das padrão.
+static FONTES_CFG: std::sync::OnceLock<[Option<String>; 3]> = std::sync::OnceLock::new();
+
+pub fn set_fontes(regular: Option<String>, bold: Option<String>, italic: Option<String>) {
+    let _ = FONTES_CFG.set([regular, bold, italic]);
+}
+
 impl Scene {
     pub fn new(font_px: f32, scale: f32) -> Option<Scene> {
-        let load = |names: &[&str]| crate::render::find_font_file(names).and_then(|p| Font::from_path(&p));
-        let mono = load(MONO_NAMES).or_else(|| Font::from_bytes(INTER_REGULAR.to_vec()))?;
+        let pedidas = FONTES_CFG.get().cloned().unwrap_or_default();
+        let load = |estilo: usize, names: &[&str]| {
+            let mut v: Vec<&str> = pedidas[estilo].iter().map(String::as_str).collect();
+            v.extend_from_slice(names);
+            crate::render::find_font_file(&v).and_then(|p| Font::from_path(&p))
+        };
+        let mono = load(0, MONO_NAMES).or_else(|| Font::from_bytes(INTER_REGULAR.to_vec()))?;
         let now = Instant::now();
         let mut s = Scene {
             mono,
-            mono_italic: load(MONO_ITALIC),
-            mono_bold: load(MONO_BOLD),
+            mono_italic: load(2, MONO_ITALIC),
+            mono_bold: load(1, MONO_BOLD),
             ui: Font::from_bytes(INTER_REGULAR.to_vec())?,
             ui_semi: Font::from_bytes(INTER_SEMIBOLD.to_vec())?,
             scale,

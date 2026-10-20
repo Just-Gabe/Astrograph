@@ -272,6 +272,12 @@ impl Editor {
 
     /// `:set opção`, `:set noopção`, `:set opção!`, `:set opção=valor` (vários na mesma linha). As que o
     /// núcleo não conhece (`number`, `scrolloff`, `clipboard`...) voltam para quem hospeda (`take_host_cmd`).
+    /// `:set` vindo de fora (`.editorconfig`): só as opções que o núcleo conhece; as outras são ignoradas.
+    pub fn set_option(&mut self, args: &str) {
+        self.ex_set(args);
+        self.host_cmd = None;
+    }
+
     fn ex_set(&mut self, args: &str) {
         let mut fora: Vec<&str> = Vec::new();
         for t in args.split_whitespace() {

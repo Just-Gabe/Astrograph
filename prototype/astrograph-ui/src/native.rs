@@ -194,6 +194,9 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// `.editorconfig`: limpar o espaço do fim das linhas e o que fazer com a última quebra ao gravar
+    ec_trim: bool,
+    ec_final_nl: Option<bool>,
     /// pergunta aberta no explorador (`a`, `r`, `d`) e o que foi digitado
     tree_prompt: Option<(TreeOp, String)>,
     /// `y`/`x` no explorador: o que `p` cola e se é para mover
@@ -320,6 +323,8 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            ec_trim: false,
+            ec_final_nl: None,
             tree_prompt: None,
             tree_clip: None,
             term: None,
@@ -404,12 +409,33 @@ impl Session {
     pub fn open(path: &Path) -> Self {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
+        s.aplicar_editorconfig(path);
         s.git_load();
         s.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if !path.exists() {
             s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
         s
+    }
+
+    /// Recuo e limpeza ao gravar do `.editorconfig` que vale para o arquivo.
+    fn aplicar_editorconfig(&mut self, path: &Path) {
+        let o = crate::editorconfig::para(path);
+        let mut set = String::new();
+        if let Some(e) = o.expandtab {
+            set.push_str(if e { " expandtab" } else { " noexpandtab" });
+        }
+        if let Some(n) = o.shiftwidth {
+            set.push_str(&format!(" shiftwidth={n}"));
+        }
+        if let Some(n) = o.tabstop {
+            set.push_str(&format!(" tabstop={n}"));
+        }
+        if !set.is_empty() {
+            self.ed.set_option(&set);
+        }
+        self.ec_trim = o.trim == Some(true);
+        self.ec_final_nl = o.final_newline;
     }
 
     /// Tamanho da área de texto em colunas e linhas (a cena informa).
@@ -2444,7 +2470,31 @@ impl Session {
             self.say("Sem nome de arquivo. Use :w nome".into(), ToastKind::Error);
             return;
         };
-        let text = self.ed.to_file_text();
+        if self.ec_trim {
+            // `trim_trailing_whitespace`: tira o espaço do fim das linhas (um passo só no desfazer)
+            let mut ed_edicoes = Vec::new();
+            for r in 0..self.ed.buf.line_count() {
+                let l = self.ed.buf.line(r);
+                let n = l.chars().count();
+                let t = l.trim_end_matches([' ', '\t']).chars().count();
+                if t < n {
+                    ed_edicoes.push((Pos::new(r, t), Pos::new(r, n), String::new()));
+                }
+            }
+            if !ed_edicoes.is_empty() {
+                self.ed.aplicar_edicoes(&ed_edicoes);
+            }
+        }
+        let mut text = self.ed.to_file_text();
+        match self.ec_final_nl {
+            Some(true) if !text.is_empty() && !text.ends_with('\n') => text.push('\n'),
+            Some(false) => {
+                while text.ends_with('\n') {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
         match std::fs::write(&p, &text) {
             Ok(()) => {
                 let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -3500,6 +3550,22 @@ mod testes {
         assert!(modelo(&mut s).tree.unwrap().focus);
         s.feed(" e");
         assert!(modelo(&mut s).tree.is_none());
+    }
+
+    #[test]
+    fn editorconfig_define_o_recuo_e_limpa_ao_gravar() {
+        let d = projeto("ec");
+        std::fs::write(d.join(".editorconfig"), "root = true\n[*.rs]\nindent_style = space\nindent_size = 3\ntrim_trailing_whitespace = true\ninsert_final_newline = true\n").unwrap();
+        let arq = d.join("src/ec.rs");
+        std::fs::write(&arq, "fn a() {   \nx\n}").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        // `>>` recua 3 espaços (shiftwidth e expandtab do .editorconfig)
+        s.feed("j>>");
+        assert_eq!(s.ed.buf.line(1), "   x");
+        s.feed(":w<CR>");
+        let gravado = std::fs::read_to_string(&arq).unwrap();
+        assert_eq!(gravado, "fn a() {\n   x\n}\n", "sem espaço no fim das linhas e com a quebra final");
     }
 
     #[test]

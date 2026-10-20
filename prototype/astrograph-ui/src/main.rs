@@ -18,6 +18,7 @@ mod anim;
 mod arvore;
 mod busca;
 mod design;
+mod editorconfig;
 mod native;
 mod lsp;
 mod agentes;
@@ -1696,6 +1697,7 @@ fn main() {
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     design::set_light(cfg.theme.mode == "light");
+    nscene::set_fontes(cfg.font.regular.clone(), cfg.font.bold.clone(), cfg.font.italic.clone());
     let leader_key = cfg.keys.leader_char();
     let format_on_save = cfg.lsp.format_on_save;
     let mapeamentos = cfg.keys.mapeamentos();
