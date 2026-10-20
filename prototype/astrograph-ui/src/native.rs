@@ -57,6 +57,8 @@ pub struct Session {
     tree: Option<Arvore>,
     tree_focus: bool,
     leader: Vec<Key>,
+    /// tecla líder (padrão Espaço)
+    leader_key: char,
     root: PathBuf,
     bump: Option<(u64, f32)>,
     hl_pat: String,
@@ -91,6 +93,7 @@ impl Session {
             tree: None,
             tree_focus: false,
             leader: Vec::new(),
+            leader_key: ' ',
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             bump: None,
             hl_pat: String::new(),
@@ -101,6 +104,11 @@ impl Session {
             seq: 0,
             quit: false,
         }
+    }
+
+    /// Define a tecla líder (as menções a ela mostram o nome da tecla escolhida).
+    pub fn set_leader(&mut self, c: char) {
+        self.leader_key = c;
     }
 
     /// Sem arquivo: abre na tela inicial (some ao editar, ao `n` ou ao abrir um arquivo).
@@ -231,7 +239,7 @@ impl Session {
         }
         let livre = self.cmdline.is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
         // <Espaço> é o líder: `ff` arquivos, `fw` texto, `fo` recentes
-        if livre && self.leader.is_empty() && k == Key::Char(' ') {
+        if livre && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
             return;
         }
@@ -440,9 +448,10 @@ impl Session {
             return;
         }
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
-        let (tree, foco) = (self.tree.take(), self.tree_focus);
+        let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
         *self = Session::open(path);
         self.root = root;
+        self.leader_key = lider;
         self.tree = tree;
         self.tree_focus = foco;
         self.resize(cols, rows);
@@ -715,7 +724,14 @@ impl Session {
             modified: self.modified(),
             cmd,
             toast: self.toast.clone(),
-            showcmd: if self.ed.search_line().is_some() { String::new() } else { self.ed.showcmd() },
+            showcmd: if !self.leader.is_empty() {
+                // <Espaço>f...: mostra a líder pelo nome da tecla e o que já foi digitado
+                std::iter::once(tecla_nome(self.leader_key)).chain(self.leader[1..].iter().filter_map(|k| k.as_char().map(String::from))).collect()
+            } else if self.ed.search_line().is_some() {
+                String::new()
+            } else {
+                self.ed.showcmd()
+            },
             bump: self.bump,
             dash: self.dash,
             tree: self.tree.as_ref().map(|t| {
@@ -757,12 +773,14 @@ pub async fn native_task(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::UiCommand>,
     proxy: winit::event_loop::EventLoopProxy<crate::UserEvent>,
     file: Option<PathBuf>,
+    leader: char,
 ) {
     use crate::UiCommand;
     let mut s = match &file {
         Some(p) => Session::open(p),
         None => Session::welcome(),
     };
+    s.set_leader(leader);
     while let Some(cmd) = rx.recv().await {
         match cmd {
             UiCommand::Keys(k) => s.feed(&k),
@@ -814,6 +832,15 @@ fn nav_name(name: &str) -> Option<Option<Nav>> {
     };
     // com Ctrl/Alt/Shift o comportamento seria outro: por ora, ignora
     Some(if modificada { None } else { Some(nav) })
+}
+
+/// Nome da tecla para mostrar ao usuário: `<Espaço>`, `<Tab>` ou `<,>`.
+pub fn tecla_nome(c: char) -> String {
+    match c {
+        ' ' => "<Espaço>".into(),
+        '\t' => "<Tab>".into(),
+        c => format!("<{c}>"),
+    }
 }
 
 /// Caminho absoluto em relação à raiz (se estiver dentro dela).
@@ -903,6 +930,30 @@ mod testes {
         assert!(modelo(&mut s).tree.unwrap().focus);
         s.feed(" e");
         assert!(modelo(&mut s).tree.is_none());
+    }
+
+    #[test]
+    fn lider_configuravel_e_mostrada_pelo_nome_da_tecla() {
+        let d = projeto("lider");
+        let mut s = Session::new("abc\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        // padrão: <Espaço>
+        s.feed(" f");
+        assert_eq!(modelo(&mut s).showcmd, "<Espaço>f");
+        s.feed("<Esc>");
+        assert_eq!(modelo(&mut s).showcmd, "");
+        // outra líder: a vírgula abre o buscador e o Espaço volta a ser movimento
+        s.set_leader(',');
+        s.feed(",f");
+        assert_eq!(modelo(&mut s).showcmd, "<,>f");
+        s.feed("f");
+        assert!(modelo(&mut s).picker.is_some());
+        s.feed("<Esc>");
+        s.feed(" ");
+        assert!(modelo(&mut s).picker.is_none());
+        assert_eq!(modelo(&mut s).cursor, (0, 1), "Espaço anda como `l`");
+        assert_eq!(tecla_nome('\t'), "<Tab>");
     }
 
     #[test]
