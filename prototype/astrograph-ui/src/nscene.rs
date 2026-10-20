@@ -91,6 +91,7 @@ pub struct Scene {
     pick: Chase,
     pick_sel: Spring,
     pick_cache: Option<PickerView>,
+    clock: Option<String>,
     dash_at: Option<Instant>,
     ready_ms: u32,
     hit_id: u64,
@@ -161,6 +162,7 @@ impl Scene {
             pick: Chase::new(0.0, 18.0),
             pick_sel: Spring::new(0.0, 36.0, 1.0),
             pick_cache: None,
+            clock: None,
             dash_at: None,
             ready_ms: 0,
             hit_id: 0,
@@ -215,6 +217,11 @@ impl Scene {
         let area_h = h as f32 - text_y - d::M.bottom * s;
         let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
+    }
+
+    /// Hora para o canto inferior direito (`None` desliga o relógio).
+    pub fn set_clock(&mut self, text: Option<String>) {
+        self.clock = text;
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -486,6 +493,10 @@ impl Scene {
         }
         let flash = self.flash_at.is_some();
         let intro = vm.dash && self.dash_at.is_some_and(|t| now.saturating_duration_since(t).as_millis() < 700);
+        if self.clock.is_some() {
+            let d = crate::relogio::ate_proximo_minuto();
+            wake = Some(wake.map_or(d, |w| w.min(d)));
+        }
         Frame { animating: springs || chases || mode_anim || flash || intro, wake }
     }
 
@@ -746,6 +757,7 @@ impl Scene {
     }
 
     fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        self.paint_clock(c, (w, h, s));
         // escurece o fundo atrás da paleta
         let veil = self.cmd.v.max(self.pick.v);
         if veil > 0.01 {
@@ -854,6 +866,17 @@ impl Scene {
         let foot = format!("pronto em {} ms", self.ready_ms);
         let fw = self.mono.measure(&foot, px);
         c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
+    }
+
+    /// Relógio pequeno e discreto no canto inferior direito, alinhado à pílula.
+    fn paint_clock(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let Some(text) = self.clock.clone() else { return };
+        let px = 12.5 * s;
+        let tw = self.ui.measure(&text, px);
+        let x = (w - d::M.pad_x * s - tw).round();
+        // mesma linha da pílula: centro a 37 px (em escala 1) da borda de baixo
+        let mid = h - 20.0 * s - 17.0 * s;
+        c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::DIM, 0.85);
     }
 
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
@@ -1510,6 +1533,36 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!((sc.layout(800, 600, 1).text_x - x0).abs() < 1.0, "e volta ao fechar");
+    }
+
+    #[test]
+    fn relogio_aparece_no_canto_inferior_direito() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("abc\n", None);
+        let (w, h) = (800u32, 600u32);
+        let lay = sc.layout(w, h, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let vm = s.view_model();
+        let t0 = Instant::now();
+        sc.set_clock(None);
+        let sem = quadro(&mut sc, &vm, w, h, t0);
+        sc.set_clock(Some("14:32".into()));
+        let com = quadro(&mut sc, &vm, w, h, t0);
+        let mut dentro = 0;
+        let mut fora = 0;
+        for y in 0..h {
+            for x in 0..w {
+                if sem[(y * w + x) as usize] != com[(y * w + x) as usize] {
+                    if x > w - 160 && y > h - 70 {
+                        dentro += 1;
+                    } else {
+                        fora += 1;
+                    }
+                }
+            }
+        }
+        assert!(dentro > 40, "o relógio foi desenhado no canto: {dentro}");
+        assert_eq!(fora, 0, "e só ali");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

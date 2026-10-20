@@ -11,6 +11,7 @@
 mod config;
 mod grid;
 mod realce;
+mod relogio;
 mod render;
 mod anim;
 mod arvore;
@@ -510,6 +511,8 @@ struct App {
     native: Option<nview::Shared>,
     scene: Option<nscene::Scene>,
     last_vm: Arc<nview::ViewModel>,
+    /// quando o relógio precisa ser redesenhado (virada do minuto)
+    clock_next: Instant,
 }
 
 impl App {
@@ -559,6 +562,7 @@ impl App {
             native,
             scene: None,
             last_vm: Arc::new(nview::ViewModel::empty()),
+            clock_next: now,
         }
     }
 
@@ -646,6 +650,11 @@ impl App {
         let _ = self.tx.send(UiCommand::Mouse { button, action, modifier, row, col });
     }
 
+    /// Texto do relógio, se ligado na config.
+    fn clock_text(&self) -> Option<String> {
+        self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12))
+    }
+
     /// Quadro do editor nativo: a cena pinta pixels, sem grade de celulas.
     fn draw_native(&mut self) {
         let (Some(window), Some(shared)) = (self.window.clone(), self.native.clone()) else { return };
@@ -659,7 +668,9 @@ impl App {
         }
         let now = Instant::now();
         let vm = shared.lock().unwrap().clone();
+        let clock = self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12));
         let Some(scene) = self.scene.as_mut() else { return };
+        scene.set_clock(clock);
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
         let frame = {
             let mut canvas = paint::Canvas::new(&mut buffer, w, h);
@@ -680,6 +691,7 @@ impl App {
             self.first_paint = Some(elapsed);
             println!("FIRST_PAINT: {} ms desde o inicio", elapsed.as_millis());
         }
+        self.clock_next = now + relogio::ate_proximo_minuto();
         self.frames += 1;
         self.last_vm = vm.clone();
         let lay = scene.layout(w, h, vm.lines);
@@ -704,6 +716,7 @@ impl App {
             return;
         };
         let pre_alpha = self.cursor_alpha(Instant::now()).0;
+        let clock = self.clock_text();
         let (Some(surface), Some(renderer)) = (self.surface.as_mut(), self.renderer.as_mut()) else {
             return;
         };
@@ -751,6 +764,7 @@ impl App {
             let alpha = if grid.generation < 2 { 0.0 } else { alpha };
             self.drawn_alpha = alpha;
             renderer.set_spinner(servicos::quadro(now));
+            renderer.set_clock(clock);
             renderer.render(&mut buffer, w, h, &mut grid, alpha, self.focused, now, full)
         };
         if !spans.is_empty() {
@@ -770,6 +784,7 @@ impl App {
         } else {
             self.render_partial += elapsed;
         }
+        self.clock_next = now + relogio::ate_proximo_minuto();
         self.anim_next = renderer.animating(now).then(|| now + ANIM_FRAME);
         // trabalho em segundo plano: o anel gira no ritmo dele, sem forcar 140 quadros por segundo
         if !servicos::em_andamento().is_empty() {
@@ -991,6 +1006,14 @@ impl ApplicationHandler<UserEvent> for App {
             }
             if let Some(next) = next {
                 soonest(next);
+            }
+        }
+        if self.shown && self.cfg.clock.enabled {
+            if now >= self.clock_next {
+                self.clock_next = now + relogio::ate_proximo_minuto();
+                self.request_redraw();
+            } else {
+                soonest(self.clock_next);
             }
         }
         if let Some(t) = self.anim_next {
