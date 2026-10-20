@@ -90,8 +90,12 @@ com dois motores: o Neovim (padrão) e o **motor nativo em Rust, sem Neovim**
 (`ASTROGRAPH_ENGINE=native astrograph-ui [arquivo]`), que reproduz os atalhos do
 Vim e é testado contra o Neovim de verdade (mais de 1000 sequências de teclas).
 Cobre movimentos, operadores, objetos de texto, modo visual, busca, registradores,
-desfazer/refazer e comandos `:w :q :wq :e`; o restante (visual em bloco, marcas,
-macros, `:s`) ainda é do Neovim.
+desfazer/refazer, comandos `:w :q :wq :e`, macros (`q`, `@`), um **buscador próprio** (com a tecla líder,
+`<Espaço>` por padrão: `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, sem `fd`/`ripgrep`) e um
+**explorador de arquivos** (`<Espaço>e`); o restante (visual em bloco, marcas,
+`:s`, git, LSP) ainda é do Neovim. A tecla líder é configurável
+(`[keys] leader = ","` no `config.toml` da UI); o app mostra o nome da tecla
+escolhida (por exemplo `<Espaço>f` ou `<,>f` enquanto você digita o atalho).
 
 No motor nativo o visual deixa de ser uma grade de terminal e vira uma cena de
 pixels no estilo Apple (fonte Inter na interface, cantos arredondados, sombras)
@@ -100,7 +104,9 @@ com animações próprias, todas em mola:
 - rolagem suave com overscroll elástico; cursor que desliza e pisca com fade;
 - clarão ao copiar, realce da busca com fade, linhas apagadas/coladas que deslizam;
 - paleta de comandos com fade, avisos que deslizam, pílula de modo na base;
-- guias de recuo, destaque do par de colchetes e tela de boas-vindas.
+- guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
+- buscador com fade, trecho que casou em destaque e seleção que desliza;
+- explorador que desliza da esquerda e empurra o texto.
 
 Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.
 

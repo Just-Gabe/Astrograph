@@ -11,6 +11,37 @@ pub struct Config {
     pub font: FontCfg,
     pub cursor: CursorCfg,
     pub scroll: ScrollCfg,
+    pub keys: KeysCfg,
+}
+
+/// Teclas do editor nativo.
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct KeysCfg {
+    /// Tecla líder: `"space"` (padrão), `"\\"`, `","`... Um caractere ou o nome `space`/`espaço`.
+    pub leader: String,
+}
+
+impl Default for KeysCfg {
+    fn default() -> Self {
+        KeysCfg { leader: "space".into() }
+    }
+}
+
+impl KeysCfg {
+    /// A líder como caractere (`space`, `<Space>`, `espaço` ou um único caractere); inválida volta a Espaço.
+    pub fn leader_char(&self) -> char {
+        let t = self.leader.trim();
+        let low = t.trim_matches(['<', '>']).to_lowercase();
+        if matches!(low.as_str(), "space" | "espaço" | "espaco" | "") {
+            return ' ';
+        }
+        let mut it = t.chars();
+        match (it.next(), it.next()) {
+            (Some(c), None) if !c.is_control() => c,
+            _ => ' ',
+        }
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -55,6 +86,7 @@ impl Default for Config {
             font: FontCfg::default(),
             cursor: CursorCfg::default(),
             scroll: ScrollCfg::default(),
+            keys: KeysCfg::default(),
         }
     }
 }
@@ -162,4 +194,23 @@ fn cli_config() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod testes_teclas {
+    use super::*;
+
+    #[test]
+    fn lider_aceita_nome_ou_caractere_e_cai_em_espaco() {
+        let k = |s: &str| KeysCfg { leader: s.into() }.leader_char();
+        assert_eq!(k("space"), ' ');
+        assert_eq!(k("<Space>"), ' ');
+        assert_eq!(k("Espaço"), ' ');
+        assert_eq!(k(","), ',');
+        assert_eq!(k("\\"), '\\');
+        assert_eq!(k("ab"), ' ');
+        assert_eq!(k(""), ' ');
+        let c: Config = toml::from_str("[keys]\nleader = \";\"").unwrap();
+        assert_eq!(c.keys.leader_char(), ';');
+    }
 }

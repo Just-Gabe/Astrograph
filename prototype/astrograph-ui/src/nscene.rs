@@ -12,7 +12,7 @@ use astrograph_core::VKind;
 
 use crate::anim::{ease_out_cubic, ease_out_expo, lerp, mix_color, Chase, Spring};
 use crate::design::{self as d, Cls, ModeKind};
-use crate::nview::{ToastKind, ViewModel};
+use crate::nview::{PickerView, ToastKind, TreeView, ViewModel};
 use crate::paint::{Canvas, Font, INTER_REGULAR, INTER_SEMIBOLD};
 
 const MONO_NAMES: &[&str] = &[
@@ -84,6 +84,15 @@ pub struct Scene {
     shift: Spring,
     shift_row: usize,
     last_lines: usize,
+    side: Spring,
+    tree_cache: Option<TreeView>,
+    tree_top: Spring,
+    tree_sel: Spring,
+    pick: Chase,
+    pick_sel: Spring,
+    pick_cache: Option<PickerView>,
+    dash_at: Option<Instant>,
+    ready_ms: u32,
     hit_id: u64,
     hit_fade: Chase,
     flash_id: u64,
@@ -145,6 +154,15 @@ impl Scene {
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
+            side: Spring::new(0.0, 24.0, 1.0),
+            tree_cache: None,
+            tree_top: Spring::new(0.0, 26.0, 1.0),
+            tree_sel: Spring::new(0.0, 34.0, 1.0),
+            pick: Chase::new(0.0, 18.0),
+            pick_sel: Spring::new(0.0, 36.0, 1.0),
+            pick_cache: None,
+            dash_at: None,
+            ready_ms: 0,
             hit_id: 0,
             hit_fade: Chase::new(0.0, 14.0),
             flash_id: 0,
@@ -187,13 +205,21 @@ impl Scene {
         let s = self.scale;
         let digits = lines.max(100).to_string().len().max(3) as f32;
         let gch = self.char_w * 0.84;
-        let gutter_x = d::M.pad_x * s;
+        // a posição acompanha a largura que desliza; o número de colunas já conta a final
+        let (sx, sx_final) = (self.side.x.max(0.0), self.side.target.max(0.0));
+        let gutter_x = d::M.pad_x * s + sx;
         let gutter_w = digits * gch;
         let text_x = (gutter_x + gutter_w + 18.0 * s).round();
+        let text_x_final = (d::M.pad_x * s + sx_final + gutter_w + 18.0 * s).round();
         let text_y = (d::M.title_h * s).round();
         let area_h = h as f32 - text_y - d::M.bottom * s;
-        let cols = (((w as f32 - text_x - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
+        let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
+    }
+
+    /// O ponto (em pixels) está sobre o explorador?
+    pub fn in_side(&self, x: f32) -> bool {
+        self.side.x > 1.0 && x < self.side.x
     }
 
     /// Posição do clique no texto: (linha do buffer, coluna visual).
@@ -218,10 +244,10 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
-        for ch in [&mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
+        for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
             ch.step(dt);
         }
         // avisos: somem sozinhos
@@ -238,7 +264,17 @@ impl Scene {
         self.last_top = self.top.x;
 
         c.clear(d::BG);
-        self.paint_content(c, vm, &lay, now);
+        if vm.dash {
+            if self.dash_at.is_none() {
+                self.dash_at = Some(now);
+                self.ready_ms = crate::nview::T0.get().map_or(0, |t| t.elapsed().as_millis() as u32);
+            }
+            self.paint_dash(c, now, (w, h, s));
+        } else {
+            self.dash_at = None;
+            self.paint_content(c, vm, &lay, now);
+        }
+        self.paint_side(c, (w, h, s));
         self.paint_chrome(c, vm, &lay, now, (w, h, s));
 
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -318,6 +354,31 @@ impl Scene {
             self.mode = vm.mode;
             self.mode_label = vm.mode.label().to_string();
         }
+        // explorador: a largura desliza; a janela de itens alimenta a seleção
+        match &vm.tree {
+            Some(tv) => {
+                if self.tree_cache.is_none() {
+                    self.tree_sel.snap(tv.sel as f32);
+                    self.tree_top.snap(0.0);
+                }
+                self.side.target = 264.0 * s;
+                self.tree_sel.target = tv.sel as f32;
+                self.tree_cache = Some(tv.clone());
+            }
+            None => self.side.target = 0.0,
+        }
+        // buscador
+        match &vm.picker {
+            Some(pv) => {
+                if self.pick_cache.is_none() || self.pick.target < 0.5 {
+                    self.pick_sel.snap(pv.sel as f32);
+                }
+                self.pick_sel.target = pv.sel as f32;
+                self.pick_cache = Some(pv.clone());
+                self.pick.target = 1.0;
+            }
+            None => self.pick.target = 0.0,
+        }
         // paleta de comandos
         if let Some((k, t)) = &vm.cmd {
             self.cmd_cache = (*k, t.clone());
@@ -362,6 +423,7 @@ impl Scene {
 
     fn snap_all(&mut self, vm: &ViewModel, lay: &Layout) {
         let _ = (vm, lay);
+        self.side.snap(self.side.target);
         self.top.snap(self.top.target);
         self.cur_x.snap(self.cur_x.target);
         self.cur_y.snap(self.cur_y.target);
@@ -406,8 +468,8 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
-        let chases = [&self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
+        let springs = [&self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
         let (_, blink_wake) = self.blink(now);
@@ -423,7 +485,8 @@ impl Scene {
             wake = Some(wake.map_or(d, |w| w.min(d)));
         }
         let flash = self.flash_at.is_some();
-        Frame { animating: springs || chases || mode_anim || flash, wake }
+        let intro = vm.dash && self.dash_at.is_some_and(|t| now.saturating_duration_since(t).as_millis() < 700);
+        Frame { animating: springs || chases || mode_anim || flash || intro, wake }
     }
 
     // ------------------------------------------------------------------
@@ -437,7 +500,7 @@ impl Scene {
         let clip_bottom = (h - d::M.bottom * s * 0.55) as i32;
         // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
         // sem invadir o título nem a base, mesmo quando a mola passa do alvo
-        let edit = (0, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
+        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s) as i32);
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
@@ -485,7 +548,7 @@ impl Scene {
         }
 
         // o texto rola por baixo do véu do título
-        c.set_clip(0, 0, c.w, clip_bottom);
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, clip_bottom);
         // linhas visíveis
         let pad = (self.shift.x.abs() / lay.line_h).ceil() as i64;
         let first = ((top_px / lay.line_h).floor() as i64 - 1 - pad).max(0) as usize;
@@ -555,25 +618,10 @@ impl Scene {
             }
         }
 
-        // arquivo vazio e sem nome: tela de boas-vindas
-        if vm.name == "Sem nome" && vm.lines == 1 && vm.line(0).is_empty() && vm.cmd.is_none() {
-            let cx = w / 2.0;
-            let cy = h * 0.40;
-            let tpx = 38.0 * s;
-            let tw = self.ui_semi.measure("Astrograph", tpx);
-            c.text(&mut self.ui_semi, tpx, cx - tw / 2.0, cy, "Astrograph", d::TEXT_STRONG, 0.92);
-            let lines = ["i  começar a escrever", ":e arquivo  abrir um arquivo", ":q  sair"];
-            for (n, l) in lines.iter().enumerate() {
-                let px = 14.0 * s;
-                let lw = self.ui.measure(l, px);
-                c.text(&mut self.ui, px, cx - lw / 2.0, cy + 40.0 * s + n as f32 * 26.0 * s, l, d::DIM, 0.9);
-            }
-        }
-
         // cursor: de volta à área do editor
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
         self.paint_cursor(c, vm, lay, top_px, now);
-        c.set_clip(0, 0, c.w, clip_bottom);
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, clip_bottom);
 
         // barra de rolagem
         if self.bar.v > 0.01 && vm.lines as f32 * lay.line_h > h {
@@ -661,7 +709,7 @@ impl Scene {
                     c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::BG, alpha);
                     c.reset_clip();
                     // continua valendo o corte do editor
-                    c.set_clip(0, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
+                    c.set_clip(self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
                 }
             }
         }
@@ -672,26 +720,140 @@ impl Scene {
     // ------------------------------------------------------------------
 
     fn paint_chrome(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, now: Instant, (w, h, s): (f32, f32, f32)) {
-        // título: o texto rola por baixo de um véu que se dissolve
+        // título: o texto rola por baixo de um véu que se dissolve (à direita do explorador)
+        let prev_clip = c.clip;
+        c.set_clip(self.side.x.max(0.0) as i32, 0, c.w, c.h);
+        if vm.dash {
+            c.clip = prev_clip;
+            self.paint_overlays(c, vm, lay, (w, h, s));
+            return;
+        }
         c.vgrad(0, 0, w as i32, (lay.text_y + 14.0 * s) as i32, d::BG, 1.0, 0.0);
         c.rect(0, 0, w as i32, (lay.text_y * 0.62) as i32, d::BG, 0.9);
         let tpx = 13.0 * s;
         let tw = self.ui_semi.measure(&vm.name, tpx);
         let dot = if vm.modified { 12.0 * s } else { 0.0 };
-        let tx = (w - tw - dot) / 2.0;
+        let tx = (w + self.side.x.max(0.0) - tw - dot) / 2.0;
         let tb = lay.text_y * 0.5 + tpx * 0.36;
         c.text(&mut self.ui_semi, tpx, tx, tb, &vm.name, d::TEXT, 0.92);
         if vm.modified {
             c.rrect(tx + tw + 8.0 * s, tb - 6.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
         }
 
-        // escurece o fundo atrás da paleta
-        if self.cmd.v > 0.01 {
-            c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * self.cmd.v);
-        }
+        c.clip = prev_clip;
+        self.paint_overlays(c, vm, lay, (w, h, s));
         self.paint_pill(c, vm, now, (w, h, s));
+    }
+
+    fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+        // escurece o fundo atrás da paleta
+        let veil = self.cmd.v.max(self.pick.v);
+        if veil > 0.01 {
+            c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
+        }
         self.paint_palette(c, (w, h, s));
+        self.paint_picker(c, (w, h, s));
         self.paint_toast(c, lay, (w, h, s));
+    }
+
+    /// Tela inicial: estrela, nome em traço fino, linha discreta, menu e rodapé.
+    /// Mesma composição do dashboard do Neovim; entra com fade escalonado (~0,6 s).
+    fn paint_dash(&mut self, c: &mut Canvas, now: Instant, (w, h, s): (f32, f32, f32)) {
+        let p = self.dash_at.map_or(1.0, |t| (now.saturating_duration_since(t).as_secs_f32() / 0.6).min(1.0));
+        let at = |start: f32, len: f32| ease_out_cubic(((p - start) / len).clamp(0.0, 1.0));
+        let fg = d::TEXT;
+        let secondary = mix_color(fg, d::BG, 0.45);
+        let tertiary = mix_color(fg, d::BG, 0.62);
+        let strong = mix_color(fg, d::WHITE, 0.5);
+        let px = self.font_px;
+        let (asc, desc) = self.mono.metrics(px);
+        let pitch = (asc + desc).round();
+        let cw = self.char_w;
+        let cx = (w / 2.0).round();
+        let mut y = (h * 0.13).round();
+
+        // estrela
+        let star = "✦";
+        let sw = self.mono.measure(star, px);
+        y += pitch;
+        let star_col = mix_color(d::BG, d::ACCENT, at(0.0, 0.45));
+        if self.mono.has('✦') {
+            c.text(&mut self.mono, px, cx - sw / 2.0, y, star, star_col, 1.0);
+        } else if self.ui.has('✦') {
+            let w2 = self.ui.measure(star, px);
+            c.text(&mut self.ui, px, cx - w2 / 2.0, y, star, star_col, 1.0);
+        } else {
+            // sem o glifo na fonte: estrela de quatro pontas desenhada
+            let r = px * 0.5;
+            let my = y - px * 0.35;
+            c.rrect(cx - r, my - 0.9 * s, 2.0 * r, 1.8 * s, 0.9 * s, d::ACCENT, 0.9);
+            c.rrect(cx - 0.9 * s, my - r, 1.8 * s, 2.0 * r, 0.9 * s, d::ACCENT, 0.9);
+            c.rrect(cx - r * 0.4, my - r * 0.4, r * 0.8, r * 0.8, r * 0.4, d::ACCENT, 0.9);
+        }
+        y += pitch * 1.4;
+
+        // nome em traço fino, com leve degradê vertical
+        const BANNER: [&str; 3] = [
+            "┏━┓┏━┓╺┳╸┏━┓┏━┓┏━╸┏━┓┏━┓┏━┓╻ ╻",
+            "┣━┫┗━┓ ┃ ┣┳┛┃ ┃┃╺┓┣┳┛┣━┫┣━┛┣━┫",
+            "╹ ╹┗━┛ ╹ ╹┗╸┗━┛┗━┛╹┗╸╹ ╹╹  ╹ ╹",
+        ];
+        for (i, line) in BANNER.iter().enumerate() {
+            let col = mix_color(strong, secondary, 0.18 * i as f32);
+            let lw = line.chars().count() as f32 * cw;
+            let a = at(0.15 + i as f32 * 0.08, 0.5);
+            let mut x = cx - lw / 2.0;
+            for ch in line.chars() {
+                if ch != ' ' {
+                    c.glyph_at(&mut self.mono, px, x.round(), y, ch, mix_color(d::BG, col, a), 1.0);
+                }
+                x += cw;
+            }
+            y += pitch;
+        }
+        y += pitch * 1.4;
+
+        // linha discreta
+        let tag = "Editor com agentes de IA";
+        let tw = self.mono.measure(tag, px);
+        c.text(&mut self.mono, px, cx - tw / 2.0, y, tag, mix_color(d::BG, secondary, at(0.4, 0.45)), 1.0);
+        y += pitch * 3.0;
+
+        // menu: ícone, descrição e atalho à direita (coluna de 50 células)
+        let menu: [(&str, &str, &str); 6] = [
+            ("\u{f0415}", "Novo arquivo", "n"),
+            ("\u{f002}", "Buscar arquivo", "f"),
+            ("\u{f0214}", "Recentes", "o"),
+            ("\u{f0b9a}", "Buscar palavra", "w"),
+            ("\u{f06a9}", "Agentes de IA", "a"),
+            ("\u{f01b2}", "Última sessão", "s"),
+        ];
+        let left = cx - 25.0 * cw;
+        let right = cx + 25.0 * cw;
+        // em janelas baixas o menu se aperta para não encostar no rodapé
+        let step = (px * 3.2).min((h * 0.88 - pitch * 2.0 - y) / 5.0).round().max(pitch);
+        let m = at(0.45, 0.55);
+        for (i, (icon, desc, key)) in menu.iter().enumerate() {
+            let base = y + i as f32 * step;
+            if i == 0 {
+                // cursor sobre a primeira ação, como no dashboard
+                c.rrect(left + 3.0 * cw, base - asc, cw, asc + desc_h(&self.mono, px), 2.0 * s, mix_color(d::BG, d::TEXT, m), 0.85);
+            }
+            let ic = icon.chars().next().unwrap_or(' ');
+            if self.mono.has(ic) {
+                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::BG, secondary, m), 1.0);
+            }
+            for (j, ch) in desc.chars().enumerate() {
+                let col = if i == 0 && j == 0 { d::BG } else { mix_color(d::BG, fg, m) };
+                c.glyph_at(&mut self.mono, px, left + (3.0 + j as f32) * cw, base, ch, col, 1.0);
+            }
+            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::BG, tertiary, m), 1.0);
+        }
+
+        // rodapé
+        let foot = format!("pronto em {} ms", self.ready_ms);
+        let fw = self.mono.measure(&foot, px);
+        c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
     }
 
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
@@ -761,6 +923,154 @@ impl Scene {
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+    }
+
+    /// Explorador: painel que desliza da esquerda, itens com recuo, seleção que desliza.
+    fn paint_side(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let sw = self.side.x;
+        if sw < 2.0 {
+            if self.side.target < 1.0 {
+                self.tree_cache = None;
+            }
+            return;
+        }
+        let Some(tv) = self.tree_cache.clone() else { return };
+        let _ = w;
+        let top = (d::M.title_h * s).round();
+        let row_h = 27.0 * s;
+        let area = h - top - d::M.bottom * s;
+        let vis = (area / row_h).floor().max(1.0);
+        // mantém a seleção dentro da janela visível
+        let want = if (tv.sel as f32) < self.tree_top.target {
+            tv.sel as f32
+        } else if tv.sel as f32 > self.tree_top.target + vis - 1.0 {
+            tv.sel as f32 - vis + 1.0
+        } else {
+            self.tree_top.target
+        };
+        self.tree_top.target = want.max(0.0);
+        let prev_clip = c.clip;
+        c.set_clip(0, 0, sw as i32, c.h);
+        // fundo e borda
+        c.rect(0, 0, sw as i32, c.h, d::SURFACE, 0.55);
+        c.rect((sw - 1.0) as i32, 0, 1.max(s as i32), c.h, d::WHITE, 0.07);
+        // título
+        let hpx = 12.0 * s;
+        c.text(&mut self.ui_semi, hpx, 20.0 * s, top * 0.5 + hpx * 0.36, &tv.root.to_uppercase(), d::DIM, 0.95);
+        c.set_clip(0, top as i32, sw as i32, (c.h as f32 - d::M.bottom * s) as i32);
+        let t0 = self.tree_top.x;
+        // seleção
+        let sy = top + (self.tree_sel.x - t0) * row_h;
+        let (col, al) = if tv.focus { (d::ACCENT, 0.24) } else { (d::WHITE, 0.07) };
+        c.rrect(8.0 * s, sy + 1.0, sw - 16.0 * s - 1.0, row_h - 2.0, 8.0 * s, col, al);
+        let npx = 13.0 * s;
+        for (i, it) in tv.items.iter().enumerate() {
+            let abs = tv.first + i;
+            let y = top + (abs as f32 - t0) * row_h;
+            if y + row_h < top || y > top + area {
+                continue;
+            }
+            let base = y + row_h / 2.0 + npx * 0.36;
+            let x = 18.0 * s + it.level as f32 * 14.0 * s;
+            if it.dir {
+                // seta: aponta à direita (fechada) ou para baixo (aberta)
+                let g = if it.open { "⌄" } else { "›" };
+                if self.ui.has(it.open.then_some('⌄').unwrap_or('›')) {
+                    c.text(&mut self.ui_semi, npx, x, base - if it.open { 3.0 * s } else { 0.0 }, g, d::DIM, 1.0);
+                }
+            }
+            let nx = x + 15.0 * s;
+            let (font_semi, color) = if it.dir { (true, d::TEXT_STRONG) } else { (false, if abs == tv.sel { d::TEXT_STRONG } else { d::TEXT }) };
+            let maxw = sw - nx - 12.0 * s;
+            let mut name = it.name.clone();
+            while self.ui.measure(&name, npx) > maxw && name.chars().count() > 3 {
+                name.pop();
+            }
+            if name != it.name {
+                name.push('…');
+            }
+            if font_semi {
+                c.text(&mut self.ui_semi, npx, nx, base, &name, color, 1.0);
+            } else {
+                c.text(&mut self.ui, npx, nx, base, &name, color, 0.92);
+            }
+        }
+        c.clip = prev_clip;
+    }
+
+    /// Buscador: campo de texto, lista com o trecho que casou em destaque e seleção que desliza.
+    fn paint_picker(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
+        let p = self.pick.v;
+        if p < 0.01 {
+            return;
+        }
+        let Some(pv) = self.pick_cache.clone() else { return };
+        let e = ease_out_expo(p);
+        let rows = pv.items.len().max(1) as f32;
+        let (pw0, row_h, head) = ((680.0 * s).min(w - 48.0 * s), 34.0 * s, 56.0 * s);
+        let ph0 = head + rows * row_h + 18.0 * s;
+        let k = lerp(0.965, 1.0, e);
+        let (pw, ph) = (pw0 * k, ph0 * k);
+        let x = ((w - pw) / 2.0).round();
+        let y = (h * 0.14 + (1.0 - e) * -8.0 * s).round();
+        c.shadow(x, y, pw, ph, 16.0 * s, 34.0 * s, 14.0 * s, d::BLACK, 0.6 * p);
+        c.rrect(x, y, pw, ph, 16.0 * s, d::SURFACE_HI, 0.985 * p);
+        c.rrect_border(x, y, pw, ph, 16.0 * s, 1.0, d::WHITE, 0.11 * p);
+        // campo
+        let mid = y + head / 2.0 * k;
+        let ipx = 13.0 * s;
+        c.text(&mut self.ui_semi, ipx, x + 22.0 * s, mid + ipx * 0.36, &pv.title, d::DIM, p);
+        let tw0 = self.ui_semi.measure(&pv.title, ipx);
+        let px = self.font_px * 1.05;
+        let tx = x + 22.0 * s + tw0 + 16.0 * s;
+        let mut pen = tx;
+        for ch in pv.query.chars() {
+            let cw = self.mono.advance(ch, px);
+            c.glyph_at(&mut self.mono, px, pen, mid + px * 0.34, ch, d::TEXT_STRONG, p);
+            pen += cw;
+        }
+        c.rrect(pen + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
+        let cnt = format!("{}", pv.total);
+        let cw = self.ui.measure(&cnt, 12.0 * s);
+        c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw, mid + 12.0 * s * 0.36, &cnt, d::FAINT, p);
+        c.rect((x + 14.0 * s) as i32, (y + head - 2.0 * s) as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::WHITE, 0.07 * p);
+        // lista
+        let top = y + head + 6.0 * s;
+        if pv.items.is_empty() {
+            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::DIM, p);
+            return;
+        }
+        // seleção desliza entre as linhas
+        let sy = top + self.pick_sel.x * row_h * k;
+        c.rrect(x + 8.0 * s, sy, pw - 16.0 * s, row_h * k, 9.0 * s, d::ACCENT, 0.22 * p);
+        let fpx = self.font_px;
+        for (i, it) in pv.items.iter().enumerate() {
+            let base = top + i as f32 * row_h * k + row_h * k * 0.5 + fpx * 0.34;
+            let a = p * if i == pv.sel { 1.0 } else { 0.86 };
+            let mut pen = x + 22.0 * s;
+            let maxx = x + pw - 22.0 * s;
+            for (j, ch) in it.text.chars().enumerate() {
+                let cw = self.mono.advance(ch, fpx);
+                if pen + cw > maxx {
+                    break;
+                }
+                let hit = it.hits.contains(&j);
+                let col = if hit { d::ACCENT_SOFT } else if i == pv.sel { d::TEXT_STRONG } else { d::TEXT };
+                c.glyph_at(&mut self.mono, fpx, pen, base, ch, col, a);
+                pen += cw;
+            }
+            if !it.detail.is_empty() {
+                pen += 18.0 * s;
+                for ch in it.detail.chars() {
+                    let cw = self.mono.advance(ch, fpx * 0.92);
+                    if pen + cw > maxx {
+                        break;
+                    }
+                    c.glyph_at(&mut self.mono, fpx * 0.92, pen, base, ch, d::DIM, a);
+                    pen += cw;
+                }
+            }
+        }
     }
 
     fn paint_toast(&mut self, c: &mut Canvas, lay: &Layout, (w, _h, s): (f32, f32, f32)) {
@@ -860,6 +1170,10 @@ fn match_bracket(vm: &ViewModel) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+fn desc_h(font: &Font, px: f32) -> f32 {
+    font.metrics(px).1
 }
 
 #[cfg(test)]
@@ -1109,6 +1423,93 @@ mod testes {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tela_inicial_aparece_some_ao_editar_e_avisa_o_que_falta() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::welcome();
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        assert!(vm.dash);
+        let a = quadro(&mut sc, &vm, 800, 600, t0);
+        let mut b = a.clone();
+        for i in 1..60 {
+            b = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > 500, "entra com fade");
+        s.feed("a");
+        let vm = s.view_model();
+        assert!(vm.dash && vm.toast.is_some(), "a ainda não existe: avisa e segue na tela inicial");
+        s.feed("f");
+        assert!(s.view_model().picker.is_some(), "f abre o buscador de arquivos");
+        s.feed("<Esc>");
+        s.feed("n");
+        let vm = s.view_model();
+        assert!(!vm.dash && vm.mode == ModeKind::Insert, "n começa a escrever");
+    }
+
+    #[test]
+    fn buscador_entra_com_fade_e_mostra_resultados() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("x\n", None);
+        let d = std::env::temp_dir().join(format!("astrograph-cena-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        std::fs::write(d.join("um.txt"), "1").unwrap();
+        std::fs::write(d.join("dois.txt"), "2").unwrap();
+        s.feed(" ff");
+        let _ = &d;
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        let antes = quadro(&mut sc, &vm, 800, 600, t0);
+        s.feed("ff");
+        let vm = s.view_model();
+        assert!(vm.picker.is_some());
+        let mut depois = antes.clone();
+        for i in 1..40 {
+            depois = quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(antes.iter().zip(&depois).filter(|(a, b)| a != b).count() > 2000);
+        s.feed("<Esc>");
+        let vm = s.view_model();
+        for i in 40..100 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.pick.v < 0.01, "fecha com fade");
+    }
+
+    #[test]
+    fn explorador_desliza_e_empurra_o_texto() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("fn main() {}\n", None);
+        let lay0 = sc.layout(800, 600, 1);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        quadro(&mut sc, &vm, 800, 600, t0);
+        let x0 = sc.layout(800, 600, 1).text_x;
+        s.feed(" e");
+        let vm = s.view_model();
+        assert!(vm.tree.is_some());
+        quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16));
+        let meio = sc.layout(800, 600, 1).text_x;
+        for i in 2..80 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        let fim = sc.layout(800, 600, 1).text_x;
+        assert!(x0 < meio && meio < fim, "o texto é empurrado aos poucos: {x0} {meio} {fim}");
+        assert!(sc.in_side(10.0) && !sc.in_side(fim));
+        s.feed(" e");
+        let vm = s.view_model();
+        for i in 80..160 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!((sc.layout(800, 600, 1).text_x - x0).abs() < 1.0, "e volta ao fechar");
     }
 
     /// Medição: `cargo test --release custo_do_quadro -- --ignored --nocapture`

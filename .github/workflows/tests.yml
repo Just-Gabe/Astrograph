@@ -92,3 +92,22 @@ jobs:
           workspaces: prototype/astrograph-core
       - name: Testes do nucleo
         run: cargo test
+
+  # app nativo (cena, explorador, buscador, motor em sessao): unitarios sem janela
+  rust-ui:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: prototype/astrograph-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/astrograph-ui
+      - name: Testes do app
+        run: cargo test

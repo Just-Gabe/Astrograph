@@ -34,9 +34,14 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Desfazer/refazer (`u`, `<C-r>`), repetir (`.` com contagem) | 99,8% (sobra o cursor após `u` em casos raros) |
 | Objetos de texto `iw aw iW aW ip ap i( a( ib i[ i{ iB i< i\" i' i\``, com contagem | **99,9%** (2500 casos) |
 | Visual `v` e `V` (movimentos, objetos, `d y c x X D Y C s S < > ~ u U J r o`), com as regras do Vim (cursor sobre a quebra de linha, `ip` que estende) | 99,2% (2500 casos) |
-| Visual em bloco (`<C-v>`), `p` no visual, busca (`/ ? n N * #`), marcas, macros (`q @`), comandos `:` | próximo |
+| Busca (`/ ? n N * #`, realce animado, `:noh`) | pronto |
+| Visual em bloco (`<C-v>`), `p` no visual, marcas, macros (`q @`), `:s` `:g` | próximo |
 | Realce, indent, textobjects (tree-sitter) | prontos em `astrograph-syntax` (reaproveitados) |
-| Janelas/abas, explorador, busca de arquivos (ripgrep/fd como crates), git, LSP, completar, agentes | roadmap (S3, S4...) |
+| Buscador nativo (crate `ignore` + casamento difuso próprio, sem `fd`/`ripgrep`): `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, e `f o w` na tela inicial | **funcionando** |
+| Setas, Home/End, PageUp/PageDown (nunca viram texto; teclas sem função são ignoradas) | pronto |
+| Tecla líder configurável (`[keys] leader` no `config.toml` da UI; padrão `<Espaço>`); as menções a ela mostram o nome da tecla escolhida | pronto |
+| Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
+| Janelas/abas, git, LSP, completar, agentes | roadmap (S3, S4...) |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
 
 ## Experimentar
@@ -47,8 +52,9 @@ ASTROGRAPH_ENGINE=native astrograph arquivo.rs
 
 Abre o arquivo no motor nativo (sem Neovim): todos os movimentos, operadores,
 objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`,
-`:wq`, `:e arquivo` e `:<número>`. O padrão do app continua sendo o Neovim até o
-motor nativo cobrir busca, janelas e as funções dos plugins.
+`:wq`, `:e arquivo` e `:<número>`. Sem arquivo, abre a tela inicial do Astrograph
+(`n` novo, `f` buscar arquivo, `o` recentes, `w` buscar palavra). O padrão do app continua sendo o Neovim até o
+motor nativo cobrir janelas, explorador, git, LSP e as funções dos plugins.
 
 ## Divergências conhecidas
 

@@ -80,7 +80,34 @@ fn vocabulario_busca() -> Vec<&'static str> {
     ]
 }
 
+fn vocabulario_macro() -> Vec<&'static str> {
+    vec![
+        "qa", "qb", "q", "@a", "@b", "@@", "2@a", "3@b", "qaxq", "qadwjq", "qaA;<Esc>jq", "qbI#<Esc>q", "qaq", "qaj0q", "qbjq", "qaiX<Esc>q", "qAdwq",
+        "x", "dw", "j", "k", "w", "b", "iX<Esc>", "A.<Esc>", "dd", "p", "u", ".", "3@a", "0", "$", "G", "gg", "J", "ddp", "yyp", "cwY<Esc>", "ve<Esc>",
+    ]
+}
+
+fn vocabulario_marcas() -> Vec<&'static str> {
+    vec![
+        "ma", "mb", "'a", "'b", "`a", "`b", "d'a", "d`a", "y'a", "y`a", "c'aX<Esc>", "c`aX<Esc>", "''", "``", "d''", "y``", "gg", "G", "3G", "2j", "3k", "w", "e", "$", "0", "fo", "}", "{",
+        "dd", "p", "P", "x", "u", ".", "ohi<Esc>", "Ohi<Esc>", "J", "ddp", "yyp", "3dd", "maj", "mbjj", "jma", "kmb", "v'a<Esc>", "d%", "/o<CR>", "n", "'<", "`>", "v<Esc>", "jv<Esc>",
+    ]
+}
+
+fn vocabulario_vp() -> Vec<&'static str> {
+    vec![
+        "yw", "yy", "yiw", "yj", "y$", "yG", "dw", "dd", "x", "D", "vp", "vP", "Vp", "VP", "viwp", "viwP", "vep", "vjp", "vlp", "V2jp", "vawp", "v$p", "vgp", "vip", "Vjp", "vp.", "p", "P",
+        "w", "e", "b", "j", "k", "$", "0", "G", "gg", "2w", "3j", "fo", "u", ".", "yyp", "ve<Esc>", "v<Esc>",
+    ]
+}
+
 fn vocabulario(nome: &str) -> Vec<&'static str> {
+    match nome {
+        "mac" => return vocabulario_macro(),
+        "marc" => return vocabulario_marcas(),
+        "vp" => return vocabulario_vp(),
+        _ => {}
+    }
     if nome == "bus" {
         return vocabulario_busca();
     }
@@ -124,7 +151,7 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
         vim.fn.writefile(lines, tmp)
         vim.cmd('silent edit! ' .. vim.fn.fnameescape(tmp))
         vim.api.nvim_win_set_cursor(0, { 1, 0 })
-        for _, r in ipairs({ '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) do vim.fn.setreg(r, '') end
+        for _, r in ipairs({ 'a', 'b', 'c', '"', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) do vim.fn.setreg(r, '') end
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), 'xt', false)
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nxt', false)
         local c = vim.api.nvim_win_get_cursor(0)
@@ -136,11 +163,12 @@ async fn nvim_run(lines: &[&str], keys: &str) -> Option<(Vec<String>, (usize, us
     // um nvim novo por caso: sem histórico de undo, registradores, busca de f/t nem `.` herdados
     let mut cmd = Command::new(std::env::var("NVIM_BIN").unwrap_or_else(|_| "nvim".into()));
     cmd.args(["--embed", "--headless", "--clean", "-n"]);
-    let (nvim, _io, _child) = create::new_child_cmd(&mut cmd, Nada).await.ok()?;
+    let (nvim, _io, mut child) = create::new_child_cmd(&mut cmd, Nada).await.ok()?;
     let args = vec![Value::from(lines.iter().map(|l| Value::from(*l)).collect::<Vec<_>>()), Value::from(keys)];
     // um caso que trava o nvim (pergunta, prompt) não pode travar o teste
     let r = tokio::time::timeout(std::time::Duration::from_secs(4), nvim.exec_lua(code, args)).await.ok().and_then(|r| r.ok());
-    let _ = nvim.command("qa!").await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), nvim.command("qa!")).await;
+    let _ = child.kill().await;
     let r = r?;
     let a = r.as_array()?;
     let text: Vec<String> = a[0].as_array()?.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
@@ -174,6 +202,25 @@ async fn diverge(lines: &[&str], toks: &[&str], cmp_reg: bool) -> Option<String>
     if why.is_empty() { None } else { Some(why.join("; ")) }
 }
 
+/// Sem `@` dentro de uma gravação aberta: macro que chama a si mesmo não termina (nem no nvim).
+fn sem_recursao(toks: &[&str]) -> bool {
+    let mut gravando = false;
+    for t in toks {
+        let completo = t.len() > 2 && t.starts_with('q') && t.ends_with('q');
+        if *t == "q" {
+            gravando = false;
+        } else if t.len() == 2 && t.starts_with('q') {
+            gravando = true;
+        } else if !completo && t.contains('@') && gravando {
+            return false;
+        }
+        if completo {
+            continue;
+        }
+    }
+    true
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -190,7 +237,10 @@ async fn main() {
     for _ in 0..casos {
         let lines = *rng.pick(CORPUS);
         let n = 1 + rng.below(4);
-        let toks: Vec<&str> = (0..n).map(|_| *rng.pick(&voc)).collect();
+        let mut toks: Vec<&str> = (0..n).map(|_| *rng.pick(&voc)).collect();
+        while !sem_recursao(&toks) {
+            toks = (0..n).map(|_| *rng.pick(&voc)).collect();
+        }
         match diverge(lines, &toks, cmp_reg).await {
             None => {
                 ok += 1;

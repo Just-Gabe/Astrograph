@@ -13,6 +13,8 @@ mod grid;
 mod realce;
 mod render;
 mod anim;
+mod arvore;
+mod busca;
 mod design;
 mod native;
 mod nscene;
@@ -1075,6 +1077,10 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {
+                    // clique no explorador: ainda sem ação (o teclado navega)
+                    return;
+                }
                 let pressed = state == ElementState::Pressed;
                 if button == MouseButton::Left {
                     self.left_down = pressed;
@@ -1292,6 +1298,7 @@ fn make_icon() -> Icon {
 }
 
 fn main() {
+    nview::T0.get_or_init(Instant::now);
     let cfg = {
         let (cfg, path) = Config::load();
         match &path {
@@ -1306,6 +1313,7 @@ fn main() {
         g
     }));
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
+    let leader_key = cfg.keys.leader_char();
     let native_on = std::env::var("ASTROGRAPH_ENGINE").is_ok_and(|v| v == "native");
     let native_shared = nview::shared();
     let app_native = native_on.then(|| native_shared.clone());
@@ -1332,7 +1340,7 @@ fn main() {
         // ASTROGRAPH_ENGINE=native [arquivo]: o motor em Rust, sem Neovim
         if native_on {
             let file = std::env::args().skip(1).find(|a| !a.starts_with('-')).map(std::path::PathBuf::from);
-            runtime.block_on(native::native_task(native_shared, rx, proxy, file));
+            runtime.block_on(native::native_task(native_shared, rx, proxy, file, leader_key));
         } else {
             runtime.block_on(nvim_task(back, front_for_nvim, rx, proxy));
         }

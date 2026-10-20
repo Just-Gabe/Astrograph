@@ -70,6 +70,8 @@ pub const TEXT_STRONG: u32 = 0x00f5_f5f7;
 pub const DIM: u32 = 0x008e_8e96;
 pub const FAINT: u32 = 0x0058_5860;
 pub const ACCENT: u32 = 0x000a_84ff;
+/// acento claro para texto destacado sobre fundo escuro
+pub const ACCENT_SOFT: u32 = 0x0064_b5ff;
 pub const GREEN: u32 = 0x0030_d158;
 pub const ORANGE: u32 = 0x00ff_9f0a;
 pub const PURPLE: u32 = 0x00bf_5af2;
