@@ -9,6 +9,7 @@
 //! alteradas na grade que a UI desenha e pede um quadro via `EventLoopProxy`.
 
 mod config;
+mod git;
 mod grid;
 mod realce;
 mod relogio;

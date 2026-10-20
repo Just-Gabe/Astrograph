@@ -67,6 +67,13 @@ pub struct TermView {
     pub focus: bool,
 }
 
+/// Git do arquivo aberto: branch e sinais da margem (ordenados por linha).
+#[derive(Clone)]
+pub struct GitView {
+    pub branch: String,
+    pub signs: std::sync::Arc<Vec<(usize, crate::git::Sign)>>,
+}
+
 #[derive(Clone)]
 pub struct ViewModel {
     /// sobe a cada publicação (a tela só repinta o que mudou)
@@ -102,6 +109,7 @@ pub struct ViewModel {
     pub picker: Option<PickerView>,
     pub tree: Option<TreeView>,
     pub term: Option<TermView>,
+    pub git: Option<GitView>,
     pub flash: Option<((usize, usize), (usize, usize), u64)>,
 }
 
@@ -131,6 +139,7 @@ impl ViewModel {
             picker: None,
             tree: None,
             term: None,
+            git: None,
             flash: None,
         }
     }

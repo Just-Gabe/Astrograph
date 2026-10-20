@@ -442,7 +442,8 @@ impl Scene {
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
-        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + 18.0 * s;
+        let branch_w = vm.git.as_ref().map_or(0.0, |g| 18.0 * s + 1.0 + 18.0 * s + self.ui.measure(&g.branch, 12.0 * s));
+        self.pill_w.target = 18.0 * s + 8.0 * s + 8.0 * s + label_w.max(46.0 * s) + 18.0 * s + 1.0 + 18.0 * s + pos_w.max(34.0 * s) + show_w + branch_w + 18.0 * s;
     }
 
     fn snap_all(&mut self, vm: &ViewModel, lay: &Layout) {
@@ -608,6 +609,19 @@ impl Scene {
                 let l = vm.line(mr);
                 let vx = lay.text_x + (vcol_start(&l, mc) as f32 - vm.left as f32) * lay.char_w;
                 c.rrect(vx - 1.0 * s, y + 2.0, lay.char_w + 2.0 * s, lay.line_h - 4.0, 4.0 * s, d::ACCENT, 0.30);
+            }
+            // sinais do git na margem: barra verde (nova), laranja (alterada), traço vermelho (removida acima)
+            if let Some(g) = &vm.git {
+                let i = g.signs.partition_point(|&(r, _)| r < row);
+                for &(r, k) in g.signs[i..].iter().take_while(|&&(r, _)| r == row) {
+                    let _ = r;
+                    let sx = lay.gutter_x - 10.0 * s;
+                    match k {
+                        crate::git::Sign::Added => c.rrect(sx, y + 3.0 * s, 3.0 * s, lay.line_h - 6.0 * s, 1.5 * s, d::GREEN, 0.9),
+                        crate::git::Sign::Changed => c.rrect(sx, y + 3.0 * s, 3.0 * s, lay.line_h - 6.0 * s, 1.5 * s, d::ORANGE, 0.9),
+                        crate::git::Sign::Removed => c.rrect(sx - 1.0 * s, y - 1.0 * s, 7.0 * s, 2.5 * s, 1.0 * s, d::RED, 0.9),
+                    }
+                }
             }
             let ra = if row >= self.fade_rows.0 && row < self.fade_rows.1 { self.fade.v.clamp(0.0, 1.0) } else { 1.0 };
             // número da linha
@@ -933,6 +947,13 @@ impl Scene {
         if !vm.showcmd.is_empty() {
             let pw2 = self.ui.measure(&pos, ppx).max(34.0 * s);
             c.text(&mut self.ui_semi, ppx, cx + pw2 + 14.0 * s, mid + ppx * 0.36, &vm.showcmd, d::ACCENT, fade);
+        }
+        if let Some(g) = &vm.git {
+            let pos_w = self.ui.measure(&pos, ppx).max(34.0 * s);
+            let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
+            let bx = cx + pos_w + show_w + 18.0 * s;
+            c.rect(bx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+            c.text(&mut self.ui, ppx, bx + 18.0 * s, mid + ppx * 0.36, &g.branch, d::DIM, fade);
         }
     }
 

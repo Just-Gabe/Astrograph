@@ -15,7 +15,8 @@ use astrograph_syntax::{detect, lang, Document, Lang};
 use crate::design::{classify, ModeKind};
 use crate::arvore::Arvore;
 use crate::busca;
-use crate::nview::{PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
+use crate::git;
+use crate::nview::{GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,6 +60,11 @@ pub struct Session {
     tree_focus: bool,
     term: Option<Term>,
     term_focus: bool,
+    git_branch: Option<String>,
+    /// o arquivo em `HEAD` (None: fora de um repositório)
+    git_base: Option<Vec<String>>,
+    git_rev: u64,
+    git_signs: std::sync::Arc<Vec<(usize, git::Sign)>>,
     /// apertou <C-\\>: o próximo <C-n> devolve o teclado ao editor
     term_esc: bool,
     term_dims: (u16, u16),
@@ -102,6 +108,10 @@ impl Session {
             tree_focus: false,
             term: None,
             term_focus: false,
+            git_branch: None,
+            git_base: None,
+            git_rev: u64::MAX,
+            git_signs: std::sync::Arc::new(Vec::new()),
             term_esc: false,
             term_dims: (12, 100),
             term_screen: None,
@@ -128,6 +138,7 @@ impl Session {
     /// Sem arquivo: abre na tela inicial (some ao editar, ao `n` ou ao abrir um arquivo).
     pub fn welcome() -> Self {
         let mut s = Session::new("", None);
+        s.git_load();
         s.dash = true;
         s
     }
@@ -135,6 +146,7 @@ impl Session {
     pub fn open(path: &Path) -> Self {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
+        s.git_load();
         if !path.exists() {
             s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
@@ -325,6 +337,33 @@ impl Session {
     }
 
     // ------------------------------------------------------------------
+    // git
+    // ------------------------------------------------------------------
+
+    /// Lê o branch e o arquivo em `HEAD` (de novo depois de salvar, de um commit no terminal...).
+    pub fn git_load(&mut self) {
+        let dir = self.path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)).filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| self.root.clone());
+        self.git_branch = git::branch(&dir);
+        self.git_base = match (&self.git_branch, &self.path) {
+            (Some(_), Some(p)) => git::base(p),
+            _ => None,
+        };
+        self.git_rev = u64::MAX;
+    }
+
+    /// Sinais da margem para o texto atual (recalculados só quando o texto muda).
+    fn git_signs(&mut self) -> std::sync::Arc<Vec<(usize, git::Sign)>> {
+        if self.git_rev != self.ed.buf.rev {
+            self.git_rev = self.ed.buf.rev;
+            self.git_signs = std::sync::Arc::new(match &self.git_base {
+                Some(base) => git::sinais(base, &self.ed.lines()),
+                None => Vec::new(),
+            });
+        }
+        self.git_signs.clone()
+    }
+
+    // ------------------------------------------------------------------
     // terminal
     // ------------------------------------------------------------------
 
@@ -388,6 +427,8 @@ impl Session {
             self.term_esc = false;
             if keys.eq_ignore_ascii_case("<C-n>") {
                 self.term_focus = false;
+                // o que foi feito no terminal pode ter mudado o git (commit, checkout...)
+                self.git_load();
                 return;
             }
             if let Some(t) = self.term.as_mut() {
@@ -674,7 +715,10 @@ impl Session {
         }
         match name {
             "noh" | "nohl" | "nohlsearch" => self.hl_off = true,
-            "w" | "write" => self.write(arg),
+            "w" | "write" => {
+                self.write(arg);
+                self.git_load();
+            }
             "q" | "quit" => {
                 if self.modified() && !bang {
                     self.say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
@@ -812,6 +856,7 @@ impl Session {
             }
         }
         let hits_id = if pat.is_some() && !self.hl_off { self.hl_id } else { 0 };
+        let signs = self.git_signs();
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
         } else if self.cmdline.is_some() {
@@ -859,6 +904,7 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
+            git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
             term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus }),
             tree: self.tree.as_ref().map(|t| {
                 let first = t.sel.saturating_sub(100);
@@ -1125,6 +1171,33 @@ mod testes {
         s.feed("<C-n>");
         s.feed(" T");
         assert!(modelo(&mut s).term.is_none());
+    }
+
+    #[test]
+    fn git_mostra_branch_e_sinais_ao_vivo() {
+        if std::process::Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let d = projeto("git");
+        let run = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&d).output().unwrap().status.success());
+        run(&["init", "-q", "-b", "principal"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "x"]);
+        let mut s = Session::open(&d.join("src/alfa.rs"));
+        s.resize(80, 20.0);
+        let g = modelo(&mut s).git.expect("dentro de um repositório");
+        assert_eq!(g.branch, "principal");
+        assert!(g.signs.is_empty(), "arquivo igual ao HEAD: sem sinais");
+        // editar sem salvar já aparece: linha nova no fim e a primeira alterada
+        s.feed("Gonovo<Esc>ggA!<Esc>");
+        let g = modelo(&mut s).git.unwrap();
+        assert!(g.signs.contains(&(0, git::Sign::Changed)), "{:?}", g.signs);
+        assert!(g.signs.iter().any(|&(r, k)| k == git::Sign::Added && r >= 2), "{:?}", g.signs);
+        // desfazer tudo: some
+        s.feed("uu");
+        assert!(modelo(&mut s).git.unwrap().signs.is_empty());
     }
 
     #[test]

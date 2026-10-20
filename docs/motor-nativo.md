@@ -45,7 +45,8 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Tecla líder configurável (`[keys] leader` no `config.toml` da UI; padrão `<Espaço>`); as menções a ela mostram o nome da tecla escolhida | pronto |
 | Explorador de arquivos nativo (`<Espaço>e`: árvore com pastas que abrem/fecham, `j k h l`, `<CR>`, revela o arquivo aberto, painel que desliza) | **funcionando** |
 | Terminal nativo (pty + emulação VT: `<Espaço>t`; `<C-\\><C-n>` sai, `<Espaço>T` fecha) e agentes de IA (`<Espaço>Al` roda claude/opencode/codex/gemini nele) | **funcionando** |
-| Janelas/abas, git, LSP, completar | roadmap (S3, S4...) |
+| Git: branch na pílula e sinais de margem (nova/alterada/removida) comparando o buffer ao `HEAD`, ao vivo (`similar`; só lê o `HEAD` com o `git` instalado) | **funcionando** |
+| Janelas/abas, LSP, completar | roadmap (S3, S4...) |
 | Camada de tela nativa no app (`ASTROGRAPH_ENGINE=native [arquivo]`): numeração, realce tree-sitter, seleção visual, statusline, `:w :q :wq :e :N`, rolagem e clique | **funcionando** (verificado no app real sob Xvfb, sem Neovim) |
 
 ## Experimentar
