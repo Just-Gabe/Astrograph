@@ -492,7 +492,12 @@ while True:
 
     #[test]
     fn uris_e_colunas_utf16() {
-        assert_eq!(uri(Path::new("/tmp/a b.rs")), "file:///tmp/a%20b.rs");
+        // no Windows `/tmp/..` não é absoluto (falta o drive): o caminho absoluto muda por plataforma
+        if cfg!(windows) {
+            assert_eq!(uri(Path::new("C:\\tmp\\a b.rs")), "file:///C:/tmp/a%20b.rs");
+        } else {
+            assert_eq!(uri(Path::new("/tmp/a b.rs")), "file:///tmp/a%20b.rs");
+        }
         assert_eq!(de_uri("file:///tmp/a%20b.rs"), Some(PathBuf::from("/tmp/a b.rs")));
         assert_eq!(de_uri("file:///C:/x/y.rs"), Some(PathBuf::from("C:/x/y.rs")));
         // 😀 vale 2 unidades UTF-16
