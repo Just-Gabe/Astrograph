@@ -331,7 +331,10 @@ fn corpo(o: &Opcoes) -> Resultado {
         msg.push_str(&format!("\nApp recompilado: {}.", compilados.join(", ")));
     }
     if !falharam.is_empty() {
-        msg.push_str(&format!("\nNao consegui recompilar {}: o app antigo continua valendo.", falharam.join(", ")));
+        msg.push_str(&format!(
+            "\nNao consegui recompilar {}: o app antigo continua valendo (precisa do Rust/cargo: https://rustup.rs).",
+            falharam.join(", ")
+        ));
     }
     // num clone raso o git nao enxerga o pai da versao nova: o ramo e so ponto de
     // restauracao; so avisa quando o historico divergiu de verdade
@@ -344,7 +347,7 @@ fn corpo(o: &Opcoes) -> Resultado {
             raiz.display()
         ));
     }
-    msg.push_str("\nReinicie o Neovim para carregar a versao nova.");
+    msg.push_str("\nReinicie o Astrograph (e o Neovim, se usa o espelho) para carregar a versao nova.");
     Resultado {
         status: Estado::Atualizado,
         mensagem: msg,

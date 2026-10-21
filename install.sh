@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-REPO="https://github.com/Just-Gabe/Astrograph.git"
+REPO="${ASTROGRAPH_REPO:-https://github.com/Just-Gabe/Astrograph.git}"
 ROOT="$HOME/Astrograph"
 CONFIG="$HOME/.config/nvim"
 FONT_DIR="$HOME/.local/share/fonts"
@@ -204,12 +204,64 @@ else
 fi
 
 # --- 4. Clonar/atualizar o Astrograph -------------------------------------
-if [ -d "$ROOT/.git" ]; then
+# Pasta do Astrograph que já tem arquivos mas não é um clone limpo (arquivos modificados, histórico
+# próprio, ou nem é git): pergunta se apaga e substitui (a antiga vai para backup) ou usa o que está lá.
+CLONE_MODE="$(printf '%s' "${ASTROGRAPH_CLONE_EXISTENTE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+case "$CLONE_MODE" in
+  substituir | usar | "") ;;
+  *) warn "ASTROGRAPH_CLONE_EXISTENTE='$CLONE_MODE' não reconhecido (use substituir ou usar)."; CLONE_MODE="" ;;
+esac
+escolher_clone() {
+  # $1 = o motivo; define CLONE_MODE (substituir|usar)
+  [ -n "$CLONE_MODE" ] && return 0
+  if [ -n "$TTY" ]; then
+    printf '\n'
+    warn "$1"
+    printf '  [1] Apagar e substituir  a pasta atual vai para backup (%s.backup-<data>) e o Astrograph é clonado de novo\n' "$ROOT"
+    printf '  [2] Usar os existentes   não mexe nos arquivos (não atualiza; o :Astrograph atualizar pode recusar)\n'
+    printf '  escolha [1]: '
+    IFS= read -r -u 3 pick || pick=""
+    case "$pick" in 2) CLONE_MODE="usar" ;; *) CLONE_MODE="substituir" ;; esac
+  else
+    info "Sem terminal interativo: uso os arquivos existentes (ASTROGRAPH_CLONE_EXISTENTE=substituir apaga e clona de novo)."
+    CLONE_MODE="usar"
+  fi
+}
+substituir_clone() {
+  bk="$ROOT.backup-$(date +%Y%m%d-%H%M%S)"
+  info "A pasta atual vai para $bk"
+  mv "$ROOT" "$bk"
+  info "Clonando o Astrograph em $ROOT"
+  git clone --depth 1 "$REPO" "$ROOT"
+}
+if [ -d "$ROOT" ] && [ -n "$(ls -A "$ROOT" 2>/dev/null)" ] && [ ! -d "$ROOT/.git" ]; then
+  escolher_clone "A pasta $ROOT já tem arquivos, mas não é um clone do Astrograph."
+  if [ "$CLONE_MODE" = "substituir" ]; then
+    substituir_clone
+  else
+    [ -d "$ROOT/template" ] || { warn "Sem $ROOT/template não dá para usar essa pasta. Rode de novo e escolha substituir."; exit 1; }
+    info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+  fi
+elif [ -d "$ROOT/.git" ]; then
   info "Atualizando $ROOT"
   # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
   # alteração o pull falha e a instalação continua velha sem avisar
   git -C "$ROOT" checkout -- template/lazy-lock.json 2>/dev/null || true
-  git -C "$ROOT" pull --ff-only || warn "Não consegui atualizar $ROOT (alterações locais?). Rode: git -C \"$ROOT\" status"
+  if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    escolher_clone "O clone em $ROOT tem arquivos modificados."
+  fi
+  if [ "$CLONE_MODE" = "substituir" ]; then
+    substituir_clone
+  elif [ "$CLONE_MODE" = "usar" ]; then
+    info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+  elif ! git -C "$ROOT" pull --ff-only; then
+    escolher_clone "Não consegui atualizar $ROOT (o histórico local diverge da main)."
+    if [ "$CLONE_MODE" = "substituir" ]; then
+      substituir_clone
+    else
+      info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+    fi
+  fi
 else
   info "Clonando o Astrograph em $ROOT"
   git clone --depth 1 "$REPO" "$ROOT"

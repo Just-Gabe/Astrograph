@@ -59,6 +59,22 @@ Uma cópia antiga do próprio Astrograph vai direto para backup (importar
 duplicaria os plugins). Sem terminal interativo vale a opção 1; para escolher,
 defina `ASTROGRAPH_CONFIG_EXISTENTE=limpar`, `importar` ou `manter`.
 
+## Pasta do Astrograph que já existe
+
+Se `~/Astrograph` (ou `%LOCALAPPDATA%\Astrograph`) já tem arquivos e não é um clone limpo (arquivos
+modificados, histórico próprio ou nem é um repositório git), o instalador pergunta:
+
+| Opção | O que faz |
+|---|---|
+| **1. Apagar e substituir** | a pasta atual vai para `<pasta>.backup-<data>` e o Astrograph é clonado de novo |
+| **2. Usar os existentes** | não mexe em nada (e não atualiza) |
+
+Sem terminal interativo vale a opção 2 (nada é apagado sem você pedir); para escolher,
+defina `ASTROGRAPH_CLONE_EXISTENTE=substituir` ou `usar`. Um clone limpo só é atualizado (`git pull`).
+
+`:Astrograph atualizar` segue a `main`: traz o código novo e recompila o app em Rust (motor nativo
+incluído) quando ele mudou. Sem `cargo` instalado o app não é recompilado e o comando avisa.
+
 {: .note }
 Um `init.lua` que monta o próprio lazy.nvim (estilo kickstart) não é importado:
 ele fica no backup para você copiar o que quiser.

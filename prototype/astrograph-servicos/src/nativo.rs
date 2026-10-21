@@ -135,6 +135,8 @@ pub fn compilar_um(raiz: &Path, alvo: &Alvo) -> bool {
 pub fn compilar(raiz: &Path, mudanca: Option<(&str, &str)>) -> (Vec<String>, Vec<String>) {
     let (mut ok, mut falhou) = (Vec::new(), Vec::new());
     if !rodar("cargo", &["--version"], None, &[], Duration::from_secs(10)).ok() {
+        // sem cargo o app não é recompilado: avisa em vez de ficar calado com o app velho
+        falhou.extend(precisam(raiz, mudanca).iter().map(|a| a.crate_.to_string()));
         return (ok, falhou);
     }
     for a in precisam(raiz, mudanca) {
