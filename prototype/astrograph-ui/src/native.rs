@@ -32,6 +32,9 @@ pub enum PickKind {
     Lista,
 }
 
+mod ajustes;
+use ajustes::Ajuste;
+
 /// O que acontece ao escolher um item de uma lista.
 #[derive(Clone, Debug)]
 enum Destino {
@@ -46,6 +49,8 @@ enum Destino {
     /// navegar para dentro de uma pasta / abrir a pasta como projeto
     Pasta(PathBuf),
     AbrirPasta(PathBuf),
+    /// uma linha da central de configurações
+    Ajuste(Ajuste),
 }
 
 #[derive(Clone, Debug)]
@@ -125,10 +130,10 @@ const COMP_LINHAS: usize = 8;
 /// quanto esperar depois da líder para mostrar o menu de atalhos
 
 /// Ações do menu da tela inicial, na ordem em que aparecem (a letra é o atalho).
-pub const DASH_ACOES: [char; 7] = ['n', 'f', 'p', 'o', 'w', 'a', 's'];
+pub const DASH_ACOES: [char; 8] = ['n', 'f', 'p', 'o', 'w', 'a', 's', 'c'];
 
 /// O que cada ação faz, para as dicas.
-const DASH_DESC: [&str; 7] = ["novo arquivo", "buscar arquivo pelo nome", "abrir pasta", "arquivos recentes", "buscar palavra no projeto", "abrir o agente de IA", "retomar a conversa"];
+const DASH_DESC: [&str; 8] = ["novo arquivo", "buscar arquivo pelo nome", "abrir pasta", "arquivos recentes", "buscar palavra no projeto", "abrir o agente de IA", "retomar a conversa", "central de configurações"];
 
 /// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
 /// ainda está selecionado.
@@ -748,6 +753,7 @@ impl Session {
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
                 [Key::Char('f'), Key::Char('p')] => self.pasta_navegar(self.root.clone()),
+                [Key::Char('f'), Key::Char('c')] => self.configuracoes(0),
                 _ => {
                     // não é atalho: devolve as teclas ao editor
                     let all = std::mem::take(&mut self.leader);
@@ -839,6 +845,7 @@ impl Session {
             }
             'f' => self.pick_open(PickKind::Arquivos),
             'p' => self.pasta_navegar(self.root.clone()),
+            'c' => self.configuracoes(0),
             'o' => self.pick_open(PickKind::Recentes),
             'w' => self.pick_open(PickKind::Texto),
             'a' => self.open_agent(),
@@ -3004,6 +3011,7 @@ impl Session {
                     Destino::Sessao { id, pasta } => self.retomar_sessao(&id, &pasta),
                     Destino::Pasta(d) => self.pasta_navegar(d),
                     Destino::AbrirPasta(d) => self.abrir_pasta(d),
+                    Destino::Ajuste(a) => self.ajuste_aplicar(a),
                 }
                 return;
             }
@@ -3454,6 +3462,7 @@ impl Session {
                 }
             }
             "wq" | "x" | "xit" | "exit" => self.write_sair(arg, true),
+            "config" | "configuracoes" | "configurações" | "settings" => self.configuracoes(0),
             "cd" | "chdir" | "lcd" => {
                 // `:cd pasta` abre o Astrograph naquela pasta (`~` é a home; sem argumento, mostra a lista)
                 if arg.is_empty() {
@@ -3925,10 +3934,11 @@ impl Session {
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
             term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen, sel: self.term_sel }),
             tree: self.tree.as_ref().map(|t| {
-                let first = t.sel.saturating_sub(100);
+                // todos os nós visíveis (até um teto): a roda do mouse rola o explorador por conta própria
+                let first = 0;
                 TreeView {
                     root: t.raiz.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t.raiz.display().to_string()),
-                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
+                    items: t.nos.iter().skip(first).take(20_000).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
                     first,
                     sel: t.sel,
                     total: t.nos.len(),
@@ -6567,5 +6577,49 @@ mod testes {
         s3.feed("<Right><Right><Right><Right><Right><Right><Right><Right>");
         assert!(modelo(&mut s3).toast.is_none());
         crate::dicas::encerrar();
+    }
+
+    #[test]
+    fn central_de_configuracoes_troca_grava_e_aplica() {
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        let arq = crate::config::caminho_para_gravar();
+        let _ = std::fs::remove_file(&arq);
+        let mut s = Session::new("", None);
+        s.resize(80, 20.0);
+        s.dash = true;
+        // `c` na tela inicial abre as configurações
+        s.feed("c");
+        let p = modelo(&mut s).picker.expect("configurações");
+        assert!(p.title.starts_with("Configurações"), "{}", p.title);
+        assert_eq!(p.items.len(), 10, "a lista mostra 10 linhas e rola com a seleção");
+        assert_eq!((p.items[1].text.as_str(), p.items[1].detail.as_str()), ("Tamanho da fonte", "22 px"));
+        // trocar a fonte: grava, avisa que vale ao reabrir e a lista volta na mesma linha com o valor novo
+        s.ajuste_aplicar(Ajuste::Fonte);
+        let m = modelo(&mut s);
+        let p = m.picker.as_ref().expect("lista de volta");
+        assert_eq!((p.sel, p.items[1].detail.as_str()), (1, "24 px"));
+        assert!(m.toast.as_ref().is_some_and(|(_, t, _)| t.contains("reabrir")), "{:?}", m.toast);
+        assert_eq!(crate::config::atual().font.size, 24.0);
+        // quebra de linha e formatar ao salvar valem na hora
+        s.ajuste_aplicar(Ajuste::Quebra);
+        assert!(s.wrap);
+        s.ajuste_aplicar(Ajuste::Formatar);
+        assert!(s.formatar_ao_salvar);
+        // dicas ligam/desligam na hora
+        s.ajuste_aplicar(Ajuste::Dicas);
+        assert!(!crate::config::atual().ui.tips && !crate::dicas::ligadas());
+        // líder e animação do cursor avançam na lista
+        s.ajuste_aplicar(Ajuste::Lider);
+        s.ajuste_aplicar(Ajuste::AnimCursor);
+        let c = crate::config::atual();
+        assert_eq!((c.keys.leader.as_str(), c.cursor.animation_ms), (",", 120));
+        // o arquivo guarda só o que mudou
+        let t = std::fs::read_to_string(&arq).unwrap();
+        assert!(t.contains("[font]") && t.contains("[keys]") && !t.contains("[clock]"), "{t}");
+        // abrir o arquivo de configuração abre o próprio arquivo
+        s.ajuste_aplicar(Ajuste::ArquivoConfig);
+        assert_eq!(s.path.as_deref(), Some(arq.as_path()));
+        crate::dicas::encerrar();
+        let _ = std::fs::remove_file(&arq);
     }
 }

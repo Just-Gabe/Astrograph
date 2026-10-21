@@ -1383,8 +1383,16 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseScrollDelta::PixelDelta(p) => p.y / line_h,
                 };
                 if dy != 0.0 {
-                    // terminal: a roda rola o histórico (ou vai ao programa, se ele pede o mouse)
+                    // explorador: a roda rola a lista de arquivos (sem barra de rolagem)
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                    if self.scene.as_ref().is_some_and(|sc| sc.in_side(mx)) {
+                        if let Some(sc) = self.scene.as_mut() {
+                            sc.tree_rolar(-dy as f32);
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                    // terminal: a roda rola o histórico (ou vai ao programa, se ele pede o mouse)
                     if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(mx, my, false)) {
                         let shift = self.modifiers.shift_key();
                         let _ = self.tx.send(UiCommand::TermMouse { acao: "wheel", botao: if dy > 0.0 { 64 } else { 65 }, row: r as i64, col: c as i64, shift });
@@ -1745,6 +1753,7 @@ fn main() {
     nview::T0.get_or_init(Instant::now);
     let cfg = {
         let (cfg, path) = Config::load();
+        dicas::ligar(cfg.ui.tips);
         match &path {
             Some(path) => println!("CONFIG: {:?}", path),
             None => println!("CONFIG: usando defaults"),

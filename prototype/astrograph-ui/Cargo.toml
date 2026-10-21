@@ -29,6 +29,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 arboard = "3"
 rustybuzz = "0.20.1"
+toml_edit = "0.22"
 
 [build-dependencies]
 embed-resource = "2.5"

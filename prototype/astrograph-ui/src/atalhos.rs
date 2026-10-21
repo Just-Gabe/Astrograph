@@ -6,6 +6,7 @@ pub const LIDER: &[(&str, &str)] = &[
     ("fw", "Buscar texto"),
     ("fo", "Arquivos recentes"),
     ("fp", "Abrir pasta"),
+    ("fc", "Configurações"),
     ("e", "Explorador de arquivos"),
     ("t", "Terminal"),
     ("T", "Fechar o terminal"),
@@ -78,7 +79,7 @@ mod testes {
         assert!(raiz.contains(&("f".into(), "+Buscar".into())));
         assert!(raiz.contains(&("A".into(), "+Agentes de IA".into())));
         let f = proximos("f");
-        assert_eq!(f.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["f", "w", "o", "p"]);
+        assert_eq!(f.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), vec!["f", "w", "o", "p", "c"]);
         assert_eq!(f[0].1, "Buscar arquivo");
         assert!(proximos("zz").is_empty());
     }

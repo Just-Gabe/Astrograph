@@ -17,6 +17,21 @@ pub struct Config {
     pub lsp: LspCfg,
     pub editor: EditorCfg,
     pub theme: ThemeCfg,
+    pub ui: UiCfg,
+}
+
+/// Preferências gerais da interface.
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct UiCfg {
+    /// dicas visuais que ensinam os atalhos (Configurações liga e desliga)
+    pub tips: bool,
+}
+
+impl Default for UiCfg {
+    fn default() -> Self {
+        UiCfg { tips: true }
+    }
 }
 
 /// Tema do app nativo.
@@ -184,6 +199,7 @@ impl Default for Config {
             lsp: LspCfg::default(),
             editor: EditorCfg::default(),
             theme: ThemeCfg::default(),
+            ui: UiCfg::default(),
         }
     }
 }
@@ -282,7 +298,60 @@ fn candidate_paths() -> Vec<PathBuf> {
     if let Ok(appdata) = std::env::var("APPDATA") {
         paths.push(Path::new(&appdata).join("astrograph").join("ui.toml"));
     }
+    if let Some(p) = xdg_config() {
+        paths.push(p);
+    }
     paths
+}
+
+/// `$XDG_CONFIG_HOME/astrograph/ui.toml` ou `~/.config/astrograph/ui.toml` (Linux e macOS).
+fn xdg_config() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("astrograph").join("ui.toml"))
+}
+
+/// Onde as Configurações gravam: o arquivo que está valendo ou, sem ele, o lugar padrão do sistema.
+/// Nos testes é um arquivo temporário (nunca a configuração de verdade).
+pub fn caminho_para_gravar() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("astrograph-ui-teste-{}.toml", std::process::id()));
+    }
+    if let Some(p) = caminho_config() {
+        return p;
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        return Path::new(&appdata).join("astrograph").join("ui.toml");
+    }
+    xdg_config().unwrap_or_else(|| PathBuf::from("astrograph-ui.toml"))
+}
+
+/// A configuração gravada agora (os padrões se o arquivo não existe ou não lê).
+pub fn atual() -> Config {
+    std::fs::read_to_string(caminho_para_gravar()).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Grava `[secao] chave = valor` no arquivo de configuração, sem mexer no resto (comentários incluídos).
+pub fn gravar(secao: &str, chave: &str, valor: toml_edit::Value) -> Result<PathBuf, String> {
+    let caminho = caminho_para_gravar();
+    gravar_em(&caminho, secao, chave, valor)?;
+    Ok(caminho)
+}
+
+pub fn gravar_em(caminho: &Path, secao: &str, chave: &str, mut valor: toml_edit::Value) -> Result<(), String> {
+    let texto = std::fs::read_to_string(caminho).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = texto.parse().map_err(|e| format!("o arquivo {} não é um TOML válido: {e}", caminho.display()))?;
+    if !doc.contains_key(secao) {
+        doc[secao] = toml_edit::table();
+    }
+    // o comentário na mesma linha (`size = 18 # tamanho`) fica
+    if let Some(antigo) = doc.get(secao).and_then(|t| t.get(chave)).and_then(|i| i.as_value()) {
+        *valor.decor_mut() = antigo.decor().clone();
+    }
+    doc[secao][chave] = toml_edit::Item::Value(valor);
+    if let Some(d) = caminho.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(caminho, doc.to_string()).map_err(|e| format!("não consegui gravar {}: {e}", caminho.display()))
 }
 
 fn cli_config() -> Option<String> {
@@ -347,4 +416,33 @@ mod testes_motor {
         assert!(!toml::from_str::<Config>("[engine]\nnative = false").unwrap().engine.native, "o Neovim ainda é uma escolha");
         assert_eq!(Config::default().theme.mode, "dark");
     }
+
+#[cfg(test)]
+mod testes_gravar {
+    use super::*;
+
+    #[test]
+    fn gravar_muda_so_a_chave_e_guarda_o_resto() {
+        let d = std::env::temp_dir().join(format!("astrograph-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let f = d.join("sub/ui.toml");
+        // arquivo novo (e a pasta)
+        gravar_em(&f, "font", "size", 24.0.into()).unwrap();
+        let c: Config = toml::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(c.font.size, 24.0);
+        // um arquivo com comentários e outras seções: só a chave muda
+        std::fs::write(&f, "# meu comentario\n[font]\nsize = 18.0 # tamanho\nline_height = 1.5\n\n[theme]\nmode = \"dark\"\n").unwrap();
+        gravar_em(&f, "font", "size", 20.0.into()).unwrap();
+        gravar_em(&f, "ui", "tips", false.into()).unwrap();
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert!(t.contains("# meu comentario") && t.contains("# tamanho") && t.contains("line_height = 1.5") && t.contains("mode = \"dark\""), "{t}");
+        let c: Config = toml::from_str(&t).unwrap();
+        assert_eq!((c.font.size, c.font.line_height, c.ui.tips), (20.0, 1.5, false));
+        // TOML quebrado: recusa em vez de apagar o arquivo
+        std::fs::write(&f, "[font\nsize =").unwrap();
+        assert!(gravar_em(&f, "font", "size", 20.0.into()).is_err());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "[font\nsize =");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
 }

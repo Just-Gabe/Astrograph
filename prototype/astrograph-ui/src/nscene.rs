@@ -123,6 +123,8 @@ pub struct Scene {
     /// (topo, altura da linha, fundo) do explorador no último quadro, para o clique
     tree_geom: Option<(f32, f32, f32)>,
     tree_top: Spring,
+    /// a linha selecionada que a rolagem já garantiu visível (a roda do mouse pode afastar a vista dela)
+    tree_sel_visto: Option<usize>,
     tree_sel: Spring,
     pick: Chase,
     pick_sel: Spring,
@@ -226,6 +228,7 @@ impl Scene {
             anim_rolagem_ms: 160,
             tree_geom: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
+            tree_sel_visto: None,
             tree_sel: Spring::new(0.0, 34.0, 1.0),
             pick: Chase::new(0.0, 18.0),
             pick_sel: Spring::new(0.0, 36.0, 1.0),
@@ -398,6 +401,18 @@ impl Scene {
     /// Ação da tela inicial sob o ponto (índice no menu).
     pub fn dash_hit(&self, x: f32, y: f32) -> Option<usize> {
         self.dash_rects.iter().position(|&(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
+    }
+
+    /// Roda do mouse sobre o explorador: rola `linhas` (positivo = para baixo), sem barra de rolagem, com o
+    /// mesmo deslize suave. A vista não passa do começo nem do fim da lista.
+    pub fn tree_rolar(&mut self, linhas: f32) -> bool {
+        let (Some(tv), Some((top, row_h, fundo))) = (self.tree_cache.as_ref(), self.tree_geom) else { return false };
+        let visiveis = ((fundo - top) / row_h).floor().max(1.0);
+        let max = (tv.total as f32 - visiveis).max(0.0);
+        let novo = (self.tree_top.target + linhas).clamp(0.0, max);
+        let mudou = (novo - self.tree_top.target).abs() > 0.001;
+        self.tree_top.target = novo;
+        mudou
     }
 
     /// Linha (índice na lista do explorador) sob o ponto, se ele cair numa linha do explorador.
@@ -1200,7 +1215,7 @@ impl Scene {
         y += pitch * 3.0;
 
         // menu: ícone, descrição e atalho à direita (coluna de 50 células)
-        let menu: [(&str, &str, &str); 7] = [
+        let menu: [(&str, &str, &str); 8] = [
             ("\u{f0415}", "Novo arquivo", "n"),
             ("\u{f002}", "Buscar arquivo", "f"),
             ("\u{f0770}", "Abrir pasta", "p"),
@@ -1208,6 +1223,7 @@ impl Scene {
             ("\u{f0b9a}", "Buscar palavra", "w"),
             ("\u{f06a9}", "Agentes de IA", "a"),
             ("\u{f01b2}", "Última sessão", "s"),
+            ("\u{f0493}", "Configurações", "c"),
         ];
         let left = cx - 25.0 * cw;
         let right = cx + 25.0 * cw;
@@ -1749,6 +1765,7 @@ impl Scene {
         if sw < 2.0 {
             self.tree_geom = None;
             if self.side.target < 1.0 {
+                self.tree_sel_visto = None;
                 self.tree_cache = None;
             }
             return;
@@ -1760,15 +1777,18 @@ impl Scene {
         let area = h - top - d::M.bottom * s;
         self.tree_geom = Some((top, row_h, top + area));
         let vis = (area / row_h).floor().max(1.0);
-        // mantém a seleção dentro da janela visível
-        let want = if (tv.sel as f32) < self.tree_top.target {
-            tv.sel as f32
-        } else if tv.sel as f32 > self.tree_top.target + vis - 1.0 {
-            tv.sel as f32 - vis + 1.0
-        } else {
-            self.tree_top.target
-        };
-        self.tree_top.target = want.max(0.0);
+        // a seleção volta à janela quando ela muda (teclado, abrir arquivo); a roda do mouse pode afastar a vista
+        if self.tree_sel_visto != Some(tv.sel) {
+            self.tree_sel_visto = Some(tv.sel);
+            let want = if (tv.sel as f32) < self.tree_top.target {
+                tv.sel as f32
+            } else if tv.sel as f32 > self.tree_top.target + vis - 1.0 {
+                tv.sel as f32 - vis + 1.0
+            } else {
+                self.tree_top.target
+            };
+            self.tree_top.target = want.max(0.0);
+        }
         let prev_clip = c.clip;
         c.set_clip(0, 0, sw as i32, c.h);
         // fundo e borda
@@ -2806,5 +2826,43 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, desde + Duration::from_millis(800 + 8 * i));
         }
         assert_eq!(sc.wk.v, 0.0);
+    }
+
+    #[test]
+    fn roda_do_mouse_rola_o_explorador_sem_perder_a_selecao_nem_passar_dos_limites() {
+        use crate::nview::{TreeItem, TreeView};
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("x\n", None);
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let mut vm = s.view_model();
+        let items: Vec<TreeItem> = (0..100).map(|i| TreeItem { name: format!("arquivo_{i}.rs"), level: 0, dir: false, open: false, git: ' ' }).collect();
+        vm.tree = Some(TreeView { root: "proj".into(), items, first: 0, sel: 0, total: 100, focus: false });
+        let t0 = Instant::now();
+        for i in 0..80 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        let (top, row_h, fundo) = sc.tree_geom.expect("pintou");
+        let visiveis = ((fundo - top) / row_h).floor();
+        assert_eq!(sc.tree_hit(20.0, top + row_h * 0.5), Some(0));
+        // rolar 10 linhas para baixo: a vista desliza e a linha de cima passa a ser a 10
+        assert!(sc.tree_rolar(10.0));
+        for i in 80..160 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert_eq!(sc.tree_hit(20.0, top + row_h * 0.5), Some(10));
+        assert_eq!(sc.tree_cache.as_ref().unwrap().sel, 0, "a seleção não muda (só a vista)");
+        // não passa do fim (100 itens, `visiveis` cabem) nem do começo
+        sc.tree_rolar(1000.0);
+        assert_eq!(sc.tree_top.target, 100.0 - visiveis);
+        assert!(!sc.tree_rolar(5.0), "já no fim");
+        sc.tree_rolar(-1000.0);
+        assert_eq!(sc.tree_top.target, 0.0);
+        // mexer na seleção pelo teclado traz a vista de volta até ela
+        vm.tree.as_mut().unwrap().sel = 60;
+        for i in 160..260 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.tree_top.target >= 60.0 - visiveis + 1.0 - 0.01 && sc.tree_top.target <= 60.0, "{}", sc.tree_top.target);
     }
 }
