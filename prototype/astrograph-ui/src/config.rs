@@ -55,12 +55,18 @@ pub struct LspCfg {
     pub format_on_save: bool,
 }
 
-/// Qual motor edita: o Neovim (padrão) ou o motor nativo em Rust.
-#[derive(Deserialize, Clone, Default)]
+/// Qual motor edita: o nativo em Rust (padrão) ou o Neovim.
+#[derive(Deserialize, Clone)]
 #[serde(default)]
 pub struct EngineCfg {
-    /// `true` abre sempre no motor nativo (sem Neovim). `ASTROGRAPH_ENGINE=nvim` ainda força o Neovim.
+    /// `true` (padrão) abre no motor nativo, sem Neovim; `false` abre o Neovim. `ASTROGRAPH_ENGINE=nvim|native` manda sobre isto.
     pub native: bool,
+}
+
+impl Default for EngineCfg {
+    fn default() -> Self {
+        EngineCfg { native: true }
+    }
 }
 
 /// Relógio pequeno no canto inferior direito.
@@ -248,6 +254,11 @@ impl Config {
     }
 }
 
+/// O arquivo de config que está valendo (o primeiro que existe), se houver.
+pub fn caminho_config() -> Option<PathBuf> {
+    candidate_paths().into_iter().find(|p| p.is_file())
+}
+
 fn candidate_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(arg) = cli_config() {
@@ -315,5 +326,19 @@ mod testes_teclas {
         assert_eq!(k(""), ' ');
         let c: Config = toml::from_str("[keys]\nleader = \";\"").unwrap();
         assert_eq!(c.keys.leader_char(), ';');
+    }
+}
+
+#[cfg(test)]
+mod testes_motor {
+    use super::*;
+
+    #[test]
+    fn o_padrao_e_o_motor_nativo_e_o_tema_escuro() {
+        assert!(Config::default().engine.native);
+        assert!(toml::from_str::<Config>("").unwrap().engine.native);
+        assert!(toml::from_str::<Config>("[engine]").unwrap().engine.native, "tabela sem a chave");
+        assert!(!toml::from_str::<Config>("[engine]\nnative = false").unwrap().engine.native, "o Neovim ainda é uma escolha");
+        assert_eq!(Config::default().theme.mode, "dark");
     }
 }

@@ -138,7 +138,7 @@ pub type LspPool = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Str
 pub enum PedidoAba {
     Nova(Option<PathBuf>),
     /// aba sem arquivo com um texto pronto (a resposta da IA)
-    NovaComTexto(String),
+    NovaComTexto(String, String),
     Fechar { forcar: bool },
     Proxima,
     Anterior,
@@ -229,7 +229,9 @@ pub struct Session {
     /// teste: programa e argumentos no lugar do agente (o pedido entra como último argumento)
     ia_cmd: Option<(String, Vec<String>)>,
     /// texto para uma aba nova (resposta da IA) e o nome fixo desta sessão
-    ia_resposta: Option<String>,
+    aba_texto: Option<(String, String)>,
+    /// `:Astrograph atualizar` em andamento
+    atualizando: Option<std::sync::mpsc::Receiver<Result<crate::comandos::Resultado, String>>>,
     nome_fixo: Option<String>,
     /// estado de git de cada arquivo (decoração do explorador) e a leitura em andamento
     tree_git: std::collections::HashMap<PathBuf, char>,
@@ -372,7 +374,8 @@ impl Session {
             ia_prompt: None,
             ia_job: None,
             ia_cmd: None,
-            ia_resposta: None,
+            aba_texto: None,
+            atualizando: None,
             nome_fixo: None,
             tree_git: Default::default(),
             tree_git_rx: None,
@@ -2009,6 +2012,87 @@ impl Session {
         self.agente_enviar(crate::agentes::pedido_explicar(&rel, de + 1, ate + 1));
     }
 
+    /// `:Astrograph <subcomando>`: o mesmo conjunto do Neovim (atualizar, saude, agentes, configurar, login,
+    /// sessoes, atalhos, docs).
+    fn comando_astrograph(&mut self, arg: &str) {
+        let (sub, resto) = match arg.trim().split_once(char::is_whitespace) {
+            Some((s, r)) => (s, r.trim()),
+            None => (arg.trim(), ""),
+        };
+        match sub {
+            "atualizar" | "update" => self.atualizar_astrograph(),
+            "saude" | "health" => {
+                let t = crate::comandos::saude("motor nativo", &lsp::servidores_instalados());
+                self.aba_texto = Some(("Saúde do Astrograph".into(), t));
+            }
+            "atalhos" => {
+                let t = crate::comandos::atalhos(&tecla_nome(self.leader_key));
+                self.aba_texto = Some(("Atalhos".into(), t));
+            }
+            "agentes" | "agente" => self.agente_escolher(),
+            "modo" => self.agente_modo(),
+            "configurar" => self.agente_instalar(resto),
+            "login" => self.agente_login(),
+            "sessoes" => self.agente_sessoes(),
+            "preparo" => {}
+            "docs" => {
+                let _ = std::process::Command::new(if cfg!(windows) { "cmd" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" })
+                    .args(if cfg!(windows) { vec!["/C", "start", "", "https://just-gabe.github.io/Astrograph/"] } else { vec!["https://just-gabe.github.io/Astrograph/"] })
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                self.say("Abrindo a documentação no navegador".into(), ToastKind::Info);
+            }
+            "" => self.say("Uso: :Astrograph atualizar | saude | agentes | modo | configurar | login | sessoes | atalhos | docs".into(), ToastKind::Info),
+            outro => self.say(format!("Subcomando desconhecido: {outro}. Use :Astrograph para ver a lista."), ToastKind::Error),
+        }
+    }
+
+    /// `:Astrograph atualizar`: atualização transacional pelo `astrograph-servicos`, em segundo plano.
+    fn atualizar_astrograph(&mut self) {
+        if self.atualizando.is_some() {
+            self.say("A atualização já está rodando.".into(), ToastKind::Info);
+            return;
+        }
+        let Some(raiz) = crate::comandos::raiz_do_clone() else {
+            self.say("Não achei a pasta do Astrograph (instalação fora do padrão): defina ASTROGRAPH_ROOT.".into(), ToastKind::Error);
+            return;
+        };
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::comandos::atualizar(&raiz));
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.atualizando = Some(rx);
+        self.say("Atualizando o Astrograph em segundo plano…".into(), ToastKind::Info);
+    }
+
+    fn atualizar_poll(&mut self) {
+        let Some(rx) = self.atualizando.as_ref() else { return };
+        let Ok(r) = rx.try_recv() else { return };
+        self.atualizando = None;
+        match r {
+            Ok(res) => {
+                let msg = if res.status == "atualizado" { format!("{}\n\nReinicie o app para usar a versão nova.", res.mensagem) } else { res.mensagem.clone() };
+                let tipo = match res.status.as_str() {
+                    "atualizado" => ToastKind::Done,
+                    "ja-atualizado" => ToastKind::Info,
+                    _ => ToastKind::Error,
+                };
+                if msg.contains('\n') || msg.chars().count() > 110 {
+                    self.aba_texto = Some(("Atualização do Astrograph".into(), msg));
+                } else {
+                    self.say(msg, tipo);
+                }
+            }
+            Err(e) => self.say(format!("A atualização falhou: {e}"), ToastKind::Error),
+        }
+    }
+
     /// Abre um terminal e roda `comando` nele (instalar ou fazer login de um agente).
     fn terminal_rodando(&mut self, comando: &str) {
         self.term_spawn(term::shell_padrao());
@@ -2161,7 +2245,7 @@ impl Session {
                 if t.is_empty() {
                     return self.say("A IA não respondeu.".into(), ToastKind::Error);
                 }
-                self.ia_resposta = Some(t);
+                self.aba_texto = Some(("Resposta da IA".into(), t));
             }
         }
     }
@@ -3085,6 +3169,7 @@ impl Session {
                 self.lsp_formatar(false, false);
             }
             "CodeAction" | "LspCodeAction" => self.lsp_acoes(),
+            "Astrograph" => self.comando_astrograph(arg),
             "AgentInstall" => self.agente_instalar(arg),
             "AgentLogin" => self.agente_login(),
             "Symbols" | "LspSymbols" => self.lsp_consulta(PedidoLsp::Simbolos),
@@ -3213,6 +3298,7 @@ impl Session {
         }
         self.pick_poll();
         self.ia_poll();
+        self.atualizar_poll();
         self.agente_fila_poll();
         self.recarregar_se_mudou();
         self.git_poll();
@@ -3331,7 +3417,7 @@ impl Session {
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
             whichkey: self.menu_lider(),
-            progress: if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
+            progress: if self.atualizando.is_some() { Some("Atualizando o Astrograph…".to_string()) } else if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
             sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),
@@ -3887,11 +3973,11 @@ impl Workspace {
                         self.abas.insert(self.ativa + 1, nova);
                         self.ativa += 1;
                     }
-                    PedidoAba::NovaComTexto(t) => {
+                    PedidoAba::NovaComTexto(titulo, t) => {
                         let mut nova = self.nova_sessao(None);
                         nova.ed.sincronizar(&ropey::Rope::from_str(&t));
                         nova.saved_rev = nova.ed.buf.rev;
-                        nova.nome_fixo = Some("Resposta da IA".into());
+                        nova.nome_fixo = Some(titulo);
                         let ativa = self.ativa;
                         mover_paineis(&mut self.abas[ativa], &mut nova);
                         self.abas.insert(self.ativa + 1, nova);
@@ -3914,8 +4000,8 @@ impl Workspace {
                 }
                 continue;
             }
-            if let Some(t) = s.ia_resposta.take() {
-                s.aba_pedido = Some(PedidoAba::NovaComTexto(t));
+            if let Some((titulo, t)) = s.aba_texto.take() {
+                s.aba_pedido = Some(PedidoAba::NovaComTexto(titulo, t));
                 continue;
             }
             if let Some(p) = s.jan_pedido.take() {
@@ -3982,7 +4068,7 @@ impl Workspace {
         let mut vm = self.abas[self.ativa].view_model();
         // respostas do servidor chegam sozinhas (renomear, formatar e gravar, `:wq`...): resolve já
         let s = &self.abas[self.ativa];
-        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() || s.ia_resposta.is_some() {
+        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() || s.aba_texto.is_some() {
             self.depois();
             if !self.sair {
                 vm = self.abas[self.ativa].view_model();
@@ -4433,6 +4519,23 @@ mod testes {
         // a raiz do projeto também vale
         s.feed("0fLgf");
         assert_eq!(s.ed.buf.line(0), "oi");
+    }
+
+    #[test]
+    fn comando_astrograph_saude_atalhos_e_subcomando_desconhecido() {
+        let mut w = Workspace::new(None, ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.feed(":Astrograph saude<CR>");
+        let m = w.view_model();
+        assert_eq!(m.name, "Saúde do Astrograph");
+        assert!(m.rope.to_string().contains("Agentes de IA"));
+        w.feed(":Astrograph atalhos<CR>");
+        let m = w.view_model();
+        assert_eq!(m.name, "Atalhos");
+        assert!(m.rope.to_string().contains("<Espaço>ff"));
+        assert_eq!(m.tabs.len(), 3);
+        w.feed(":Astrograph foo<CR>");
+        assert!(w.view_model().toast.is_some_and(|t| t.1.contains("desconhecido")));
     }
 
     #[test]

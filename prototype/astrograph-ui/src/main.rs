@@ -8,6 +8,7 @@
 //! grade de trabalho e, a cada `flush` (quadro completo), publica as linhas
 //! alteradas na grade que a UI desenha e pede um quadro via `EventLoopProxy`.
 
+mod comandos;
 mod config;
 mod git;
 mod grid;

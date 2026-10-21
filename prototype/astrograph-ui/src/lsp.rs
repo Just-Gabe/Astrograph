@@ -278,6 +278,14 @@ fn achar(nome: &str) -> Option<PathBuf> {
     dirs.iter().find_map(|d| exts.iter().map(|e| d.join(format!("{nome}{e}"))).find(|p| p.is_file()))
 }
 
+/// Os servidores mais comuns e se estão instalados (PATH ou Mason): para o `:Astrograph saude`.
+pub fn servidores_instalados() -> Vec<(&'static str, bool)> {
+    ["rust-analyzer", "pyright-langserver", "typescript-language-server", "gopls", "lua-language-server", "clangd", "bash-language-server", "vscode-json-language-server", "yaml-language-server", "taplo", "marksman", "zls"]
+        .into_iter()
+        .map(|n| (n, achar(n).is_some()))
+        .collect()
+}
+
 /// Raiz do projeto de `arquivo` para o servidor: a raiz do git; sem git, a pasta mais perto com um
 /// marcador de projeto; senão `padrao`.
 pub fn raiz_do_projeto(arquivo: &Path, padrao: &Path) -> PathBuf {

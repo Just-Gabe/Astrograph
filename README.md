@@ -83,51 +83,42 @@ rodar `nvim`.
 | **Explorador deslizando (`<Leader>e`)** | **`dd`: a linha colapsa e some** |
 | ![Explorador](docs/img/explorador.gif) | ![Apagar linha](docs/img/apagar-linha.gif) |
 
-### UI nativa (em desenvolvimento)
+### O app em Rust (motor nativo)
 
-Uma janela própria em Rust ([`prototype/astrograph-ui`](prototype/astrograph-ui)),
-com dois motores: o Neovim (padrão) e o **motor nativo em Rust, sem Neovim**
-(`ASTROGRAPH_ENGINE=native astrograph-ui [arquivo]`, ou `[engine] native = true` no
-`config.toml` da UI para abrir sempre nele), que reproduz os atalhos do
-Vim e é testado contra o Neovim de verdade (mais de 1000 sequências de teclas).
-Cobre movimentos, operadores, objetos de texto, modo visual, busca, registradores,
-desfazer/refazer, comandos `:w :q :wq :e`, macros (`q`, `@`), um **buscador próprio** (com a tecla líder,
-`<Espaço>` por padrão: `<Espaço>ff` arquivos, `<Espaço>fw` texto, `<Espaço>fo` recentes, sem `fd`/`ripgrep`) e um
-**explorador de arquivos** (`<Espaço>e`); abas (`:tabnew`, `gt`/`gT`, `:tabc`, barra de abas clicável, o buscador e o explorador abrem em aba), **janelas divididas** (`:split`, `:vsplit`, `<C-w>`, divisores arrastáveis, buffer compartilhado); o
-restante ainda é do Neovim. A tecla líder é configurável
-(`[keys] leader = ","` no `config.toml` da UI); o app mostra o nome da tecla
-escolhida (por exemplo `<Espaço>f` ou `<,>f` enquanto você digita o atalho).
+O app ([`prototype/astrograph-ui`](prototype/astrograph-ui)) abre com um **motor próprio em
+Rust, sem Neovim**: mais rápido, sem travas e sem nada para configurar. Ele reproduz os atalhos do Vim e é
+testado contra o Neovim de verdade (milhares de sequências de teclas comparadas com o `nvim --headless`).
+O Neovim com a config do Astrograph continua como espelho para quem prefere o terminal:
+`ASTROGRAPH_ENGINE=nvim astrograph` (ou `[engine] native = false` no `config.toml` da UI) abre o app com ele.
 
-No motor nativo o visual deixa de ser uma grade de terminal e vira uma cena de
-pixels no estilo Apple (fonte Inter na interface, cantos arredondados, sombras)
-com animações próprias, todas em mola:
+- **Vim completo**: movimentos, operadores, objetos de texto (inclusive de tree-sitter: `if af ic ac ia aa`), visual
+  (caractere, linha e bloco), registradores, macros, marcas, jumplist e changelist, `.`, desfazer, busca, `:s :g :normal :sort :t :m`,
+  `gq`, `gf`, `gx`, mapeamentos (`:map`, `[keys]` no `config.toml`) e `:set`.
+- **Navegação**: buscador próprio com trecho do arquivo (`<Espaço>ff` arquivos, `fw` texto, `fo` recentes; sem `fd`/`ripgrep`),
+  explorador que cria, renomeia, copia, move e apaga arquivos e marca o estado do git (`<Espaço>e`), abas e janelas
+  divididas, menu de atalhos ao esperar depois da líder (configurável: `[keys] leader`).
+- **Linguagens**: LSP nativo (rust-analyzer, pyright, typescript, gopls, lua, clangd, bash, json, yaml, toml...: diagnósticos,
+  hover `K`, `gd`, completar com snippets e imports automáticos, renomear, ações de código, formatar, referências, símbolos),
+  realce e recuo por tree-sitter, `.editorconfig`, git na margem e o branch na pílula.
+- **IA**: terminal nativo (`<Espaço>t`; vários com `<Espaço>N`), agentes (Claude Code, opencode, Codex, Gemini e Ollama local)
+  em `<Espaço>Al`, edição da seleção ou pergunta pelo `<Espaço>AE`, citar arquivo ou linhas em `<Espaço>Ac`, modo zen em
+  `<Espaço>Az`, `:AgentInstall` e `:AgentLogin`.
+- **Aparência**: cena de pixels no estilo Apple (fonte Inter na interface, cantos arredondados, sombras) com animações em mola,
+  **tema claro** (`[theme] mode = "dark" | "light" | "auto"`, `:set background=light`), a mesma tela inicial do Neovim,
+  relógio no canto (`[clock] enabled = false` desliga) e indicador do que roda em segundo plano.
+- **`:Astrograph`**: `atualizar` (transacional, com desfazer automático), `saude`, `agentes`, `modo`, `configurar`, `login`,
+  `sessoes`, `atalhos` e `docs`, como no Neovim.
 
-- rolagem suave com overscroll elástico; cursor que desliza e pisca com fade;
-- clarão ao copiar, realce da busca com fade, linhas apagadas/coladas que deslizam;
-- paleta de comandos com fade, avisos que deslizam, pílula de modo na base;
-- guias de recuo, destaque do par de colchetes e a mesma tela inicial do Astrograph;
-- buscador com fade, trecho que casou em destaque e seleção que desliza;
-- explorador que desliza da esquerda e empurra o texto;
-- LSP nativo (rust-analyzer, pyright, typescript-language-server, gopls, lua-language-server,
-  clangd e bash-language-server, do PATH ou do Mason): diagnósticos com sublinhado ondulado,
-  ponto na margem e mensagem ao fim da linha, `K` (hover), `gd` (ir para a definição) e completar ao digitar (`Tab` aceita, `<C-n>`/`<C-p>`
-  navegam),
-  contagem de erros e avisos na pílula (`ASTROGRAPH_LSP=0` desliga);
-- git na margem (linha nova, alterada ou removida, ao vivo enquanto você digita, sem
-  salvar) e o branch na pílula;
-- terminal nativo (`<Espaço>t`) que sobe da base, com cores e cursor, onde o agente de IA
-  instalado (claude, opencode, codex ou gemini) roda via `<Espaço>Al`; `<C-\><C-n>` devolve o
-  teclado ao texto e `<Espaço>T` fecha;
-- relógio pequeno no canto inferior direito (também no app com Neovim), útil em tela
-  cheia; `[clock] enabled = false` desliga e `hour12 = true` mostra `3:07 PM`.
+Ainda faltam: folds, quebra de linha (`wrap`) e validação do app no Windows e no macOS; a lista completa está em
+[`docs/motor-nativo.md`](docs/motor-nativo.md).
 
 Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.
 
-| Editor | Busca |
+| Editor | Busca com trecho do arquivo |
 | --- | --- |
 | ![Editor nativo](docs/img/ui/nativo-editor.png) | ![Busca nativa](docs/img/ui/nativo-busca.png) |
-| **Paleta de comandos** | |
-| ![Paleta nativa](docs/img/ui/nativo-paleta.png) | |
+| **Menu de atalhos (`Espaço` `A`)** | **Tema claro (`:set background=light`)** |
+| ![Menu de atalhos](docs/img/ui/nativo-menu.png) | ![Tema claro](docs/img/ui/nativo-claro.png) |
 
 No app com Neovim, o texto desliza por pixel ao rolar, o cursor desliza e pisca com
 fade, e as janelas flutuantes ganham sombra:

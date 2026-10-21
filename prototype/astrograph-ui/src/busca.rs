@@ -379,6 +379,10 @@ pub fn buscar_texto(raiz: &Path, padrao: &str, limite: usize, tempo: Duration) -
 }
 
 /// Pasta do estado do usuário (recentes, posição do cursor).
+pub fn pasta_estado() -> Option<PathBuf> {
+    dir_estado()
+}
+
 fn dir_estado() -> Option<PathBuf> {
     arquivo_recentes().and_then(|f| f.parent().map(Path::to_path_buf))
 }
