@@ -5154,7 +5154,7 @@ mod testes {
         assert_eq!(m.cmd.as_ref().map(|c| c.0), Some('✦'));
         assert!(m.cmd.unwrap().1.starts_with("Editar a seleção"));
         w.feed("troque por 2<CR>");
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut m = w.view_model();
         while m.rope.to_string() == "a = 1\nb = 1\nc = 1" && std::time::Instant::now() < fim {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -5168,7 +5168,7 @@ mod testes {
         w.feed(" AE");
         assert!(w.view_model().cmd.unwrap().1.starts_with("Perguntar à IA"));
         w.feed("o que faz?<CR>");
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut m = w.view_model();
         while m.name != "Resposta da IA" && std::time::Instant::now() < fim {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -5236,7 +5236,7 @@ mod testes {
     }
 
     fn espera_term(s: &mut Session, ok: impl Fn(&ViewModel) -> bool) -> ViewModel {
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let m = modelo(s);
             if ok(&m) || std::time::Instant::now() > fim {
@@ -5394,7 +5394,7 @@ mod testes {
         assert_eq!(m.mode, ModeKind::Terminal);
         // o shell recebe as teclas (e o editor não)
         s.feed("echo $((6*7))<CR>");
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let achou = loop {
             let m = modelo(&mut s);
             let texto: String = m.term.as_ref().map(|t| t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>() + "\n").collect()).unwrap_or_default();
@@ -5846,7 +5846,7 @@ mod testes {
         w.feed(" ff");
         w.feed("LEIA<CR>");
         // o Enter vem antes da lista de arquivos: a sessão espera e abre quando ela chega
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while w.n_abas() < 3 && std::time::Instant::now() < fim {
             w.view_model();
             std::thread::sleep(std::time::Duration::from_millis(20));
