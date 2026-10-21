@@ -351,6 +351,20 @@ local n = s:match(\"%d+\")";
     }
 
     #[test]
+    fn typescript_e_tsx_tem_realce() {
+        for (name, src) in [
+            ("typescript", "import { NextResponse } from 'next/server'\nexport async function GET(req: Request): Promise<Response> { return NextResponse.json({ ok: true }) }"),
+            ("tsx", "const A = (p: { n: number }) => <div className=\"x\">{p.n}</div>"),
+        ] {
+            let doc = Document::new(lang(name).unwrap(), &lines(src));
+            let spans = doc.highlights(0..2);
+            assert!(spans.len() > 8, "{name}: {}", spans.len());
+            assert!(spans.iter().any(|s| s.group.contains("keyword")), "{name}");
+            assert!(spans.iter().any(|s| s.group.contains("type")), "{name}");
+        }
+    }
+
+    #[test]
     fn todas_as_gramaticas_carregam() {
         for name in LANG_NAMES {
             let l = lang(name).unwrap_or_else(|| panic!("{name}"));

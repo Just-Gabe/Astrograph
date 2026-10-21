@@ -47,13 +47,13 @@ pub struct Injections {
 }
 
 /// Linguagens de arquivo (nome = o `filetype` do Neovim, exceto `bash`).
-pub const LANG_NAMES: [&str; 7] = ["bash", "javascript", "json", "lua", "python", "rust", "toml"];
+pub const LANG_NAMES: [&str; 9] = ["bash", "javascript", "json", "lua", "python", "rust", "toml", "typescript", "tsx"];
 
 /// Linguagens que so aparecem dentro de outras (injecoes).
 pub const INJECTED_NAMES: [&str; 6] = ["comment", "luadoc", "luap", "printf", "regex", "vim"];
 
-const ALL: [&str; 13] = [
-    "bash", "javascript", "json", "lua", "python", "rust", "toml", "comment", "luadoc", "luap", "printf", "regex", "vim",
+const ALL: [&str; 15] = [
+    "bash", "javascript", "json", "lua", "python", "rust", "toml", "typescript", "tsx", "comment", "luadoc", "luap", "printf", "regex", "vim",
 ];
 
 // compiladas pelo build.rs a partir de vendor/ (ver vendor/NOTICE.md)
@@ -74,6 +74,8 @@ fn language_of(name: &str) -> Option<(Language, &'static str)> {
         "python" => (Language::new(tree_sitter_python::LANGUAGE), tree_sitter_python::HIGHLIGHTS_QUERY),
         "rust" => (Language::new(tree_sitter_rust::LANGUAGE), tree_sitter_rust::HIGHLIGHTS_QUERY),
         "toml" => (Language::new(tree_sitter_toml_ng::LANGUAGE), tree_sitter_toml_ng::HIGHLIGHTS_QUERY),
+        "typescript" => (Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT), tree_sitter_typescript::HIGHLIGHTS_QUERY),
+        "tsx" => (Language::new(tree_sitter_typescript::LANGUAGE_TSX), tree_sitter_typescript::HIGHLIGHTS_QUERY),
         "comment" => (Language::new(tree_sitter_comment::LANGUAGE), ""),
         "regex" => (Language::new(tree_sitter_regex::LANGUAGE), tree_sitter_regex::HIGHLIGHTS_QUERY),
         "printf" => (Language::new(tree_sitter_printf::LANGUAGE), tree_sitter_printf::HIGHLIGHTS_QUERY),
@@ -111,10 +113,10 @@ fn nvim_query(kind: &str, name: &str) -> Option<&'static str> {
         };
     }
     if kind == "injections" {
-        return inj!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "vim");
+        return inj!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "tsx", "typescript", "vim");
     }
     if kind == "indents" {
-        return ind!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml");
+        return ind!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "tsx", "typescript");
     }
     macro_rules! tobj {
         ($($n:literal),*) => {
@@ -125,10 +127,10 @@ fn nvim_query(kind: &str, name: &str) -> Option<&'static str> {
         };
     }
     if kind == "textobjects" {
-        return tobj!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml");
+        return tobj!("bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "tsx", "typescript");
     }
     q!(
-        "bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "comment", "luadoc", "luap",
+        "bash", "ecma", "javascript", "json", "jsx", "lua", "python", "rust", "toml", "tsx", "typescript", "comment", "luadoc", "luap",
         "printf", "regex", "vim"
     )
 }
@@ -364,7 +366,7 @@ fn modern_capture(cap: &str) -> Option<&str> {
     })
 }
 
-static CACHE: [OnceLock<Option<Lang>>; 13] = [const { OnceLock::new() }; 13];
+static CACHE: [OnceLock<Option<Lang>>; 15] = [const { OnceLock::new() }; 15];
 
 /// Linguagem pelo nome: o `filetype` do Neovim (`sh` -> bash) ou o nome que
 /// aparece numa injecao (bloco de codigo: `js`, `py`...).
@@ -372,6 +374,8 @@ pub fn lang(name: &str) -> Option<&'static Lang> {
     let name = match name {
         "sh" | "shell" | "zsh" => "bash",
         "javascriptreact" | "js" | "jsx" | "node" => "javascript",
+        "ts" | "mts" | "cts" => "typescript",
+        "typescriptreact" => "tsx",
         "jsonc" | "json5" => "json",
         "py" | "python3" => "python",
         "rs" => "rust",

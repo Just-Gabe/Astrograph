@@ -26,6 +26,8 @@ pub fn detect(path: &str, first_line: &str) -> Option<&'static str> {
         Some("json") | Some("jsonc") | Some("json5") | Some("geojson") => Some("json"),
         Some("sh") | Some("bash") | Some("ksh") | Some("ebuild") => Some("bash"),
         Some("js") | Some("mjs") | Some("cjs") | Some("jsx") => Some("javascript"),
+        Some("ts") | Some("mts") | Some("cts") => Some("typescript"),
+        Some("tsx") => Some("tsx"),
         Some("toml") => Some("toml"),
         _ => None,
     };
@@ -63,6 +65,9 @@ mod tests {
         assert_eq!(detect("script", "#!/usr/bin/env -S python3 -u"), Some("python"));
         assert_eq!(detect("run", "#!/bin/bash -e"), Some("bash"));
         assert_eq!(detect("tool", "#!/usr/bin/env node"), Some("javascript"));
+        assert_eq!(detect("app/api/route.ts", ""), Some("typescript"));
+        assert_eq!(detect("a.mts", ""), Some("typescript"));
+        assert_eq!(detect("App.tsx", ""), Some("tsx"));
         assert_eq!(detect("notas.txt", "texto"), None);
         assert_eq!(detect("sem-nada", ""), None);
     }
