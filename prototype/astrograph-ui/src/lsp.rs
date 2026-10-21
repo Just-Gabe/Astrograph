@@ -236,12 +236,19 @@ pub fn servidor_para(arquivo: &Path) -> Option<(String, Vec<String>, &'static st
         let prog = it.next()?;
         return Some((prog, it.collect(), "plaintext"));
     }
+    servidor_em(arquivo, &dirs_de_servidores(), cfg!(windows))
+}
+
+/// `servidor_para` com as pastas e o sistema escolhidos (para testar o Windows em qualquer lugar).
+fn servidor_em(arquivo: &Path, dirs: &[PathBuf], windows: bool) -> Option<(String, Vec<String>, &'static str)> {
     let ext = arquivo.extension()?.to_string_lossy().to_lowercase();
     let (cmds, lang): (&[(&str, &[&str])], &'static str) = match ext.as_str() {
         "rs" => (&[("rust-analyzer", &[])], "rust"),
         "py" | "pyi" => (&[("pyright-langserver", &["--stdio"]), ("basedpyright-langserver", &["--stdio"]), ("pylsp", &[])], "python"),
-        "ts" | "tsx" => (&[("typescript-language-server", &["--stdio"])], "typescript"),
-        "js" | "jsx" | "mjs" => (&[("typescript-language-server", &["--stdio"])], "javascript"),
+        "ts" | "mts" | "cts" => (&[("typescript-language-server", &["--stdio"])], "typescript"),
+        "tsx" => (&[("typescript-language-server", &["--stdio"])], "typescriptreact"),
+        "js" | "mjs" | "cjs" => (&[("typescript-language-server", &["--stdio"])], "javascript"),
+        "jsx" => (&[("typescript-language-server", &["--stdio"])], "javascriptreact"),
         "go" => (&[("gopls", &[])], "go"),
         "lua" => (&[("lua-language-server", &[])], "lua"),
         "c" | "h" => (&[("clangd", &[])], "c"),
@@ -264,20 +271,43 @@ pub fn servidor_para(arquivo: &Path) -> Option<(String, Vec<String>, &'static st
         "ex" | "exs" => (&[("elixir-ls", &[])], "elixir"),
         _ => return None,
     };
-    cmds.iter().find_map(|(nome, args)| achar(nome).map(|p| (p.to_string_lossy().into_owned(), args.iter().map(|a| a.to_string()).collect(), lang)))
+    cmds.iter().find_map(|(nome, args)| crate::term::achar_programa(nome, dirs, windows).map(|p| (p.to_string_lossy().into_owned(), args.iter().map(|a| a.to_string()).collect(), lang)))
 }
 
-/// Procura no PATH e na pasta de binários do Mason (a que o Neovim já usa).
+/// Procura no PATH, na pasta de binários do Mason (a que o Neovim já usa) e na do npm global. No Windows
+/// só vale `.exe`/`.cmd`/`.bat`: o script sem extensão que o npm deixa ao lado do `.cmd` não executa (erro 193),
+/// e era ele que o servidor de TypeScript (instalado pelo npm ou pelo Mason) acabava usando, sem subir.
 fn achar(nome: &str) -> Option<PathBuf> {
+    crate::term::achar_programa(nome, &dirs_de_servidores(), cfg!(windows))
+}
+
+fn dirs_de_servidores() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     if let Some(l) = std::env::var_os("LOCALAPPDATA") {
         dirs.push(PathBuf::from(l).join("nvim-data/mason/bin"));
     }
-    if let Some(h) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(h).join(".local/share/nvim/mason/bin"));
+    if let Some(a) = std::env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(a).join("npm"));
     }
-    let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
-    dirs.iter().find_map(|d| exts.iter().map(|e| d.join(format!("{nome}{e}"))).find(|p| p.is_file()))
+    if let Some(h) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(&h).join(".local/share/nvim/mason/bin"));
+        dirs.push(PathBuf::from(&h).join(".npm-global/bin"));
+    }
+    dirs
+}
+
+/// O servidor que falta para `arquivo`: (linguagem, como instalar). Só para tipos que o app sabe atender.
+pub fn dica_de_instalacao(arquivo: &Path) -> Option<(&'static str, &'static str)> {
+    let ext = arquivo.extension()?.to_string_lossy().to_lowercase();
+    Some(match ext.as_str() {
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => ("TypeScript/JavaScript", "npm i -g typescript typescript-language-server"),
+        "rs" => ("Rust", "rustup component add rust-analyzer"),
+        "py" | "pyi" => ("Python", "npm i -g pyright"),
+        "go" => ("Go", "go install golang.org/x/tools/gopls@latest"),
+        "lua" => ("Lua", "instale o lua-language-server (ou use o Mason)"),
+        "c" | "h" | "cpp" | "cc" | "hpp" => ("C/C++", "instale o clangd"),
+        _ => return None,
+    })
 }
 
 /// Os servidores mais comuns e se estão instalados (PATH ou Mason): para o `:Astrograph saude`.
@@ -1264,5 +1294,30 @@ while True:
         if let Some((p, _, l)) = servidor_para(Path::new("a.py")) {
             assert!(!p.is_empty() && l == "python");
         }
+    }
+
+    #[test]
+    fn typescript_acha_o_cmd_do_npm_no_windows_e_usa_o_idioma_certo() {
+        let d = std::env::temp_dir().join(format!("astrograph-ts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // o npm deixa um script sem extensão ao lado do .cmd; só o .cmd executa no Windows
+        std::fs::write(d.join("typescript-language-server"), "#!/bin/sh").unwrap();
+        let dirs = vec![d.clone()];
+        assert!(servidor_em(Path::new("a.ts"), &dirs, true).is_none(), "o script sem extensão não serve no Windows");
+        std::fs::write(d.join("typescript-language-server.cmd"), "@echo off").unwrap();
+        let (prog, args, lang) = servidor_em(Path::new("a.ts"), &dirs, true).expect("achou o .cmd");
+        assert!(prog.ends_with("typescript-language-server.cmd"), "{prog}");
+        assert_eq!((args, lang), (vec!["--stdio".to_string()], "typescript"));
+        for (arq, idioma) in [("a.tsx", "typescriptreact"), ("a.js", "javascript"), ("a.jsx", "javascriptreact"), ("a.mts", "typescript"), ("a.cjs", "javascript")] {
+            assert_eq!(servidor_em(Path::new(arq), &dirs, true).map(|s| s.2), Some(idioma), "{arq}");
+        }
+        // Linux/macOS: o arquivo com o nome exato
+        assert!(servidor_em(Path::new("a.ts"), &dirs, false).is_some());
+        // sem servidor instalado há a dica de como instalar
+        assert!(servidor_em(Path::new("a.ts"), &[], false).is_none());
+        assert_eq!(dica_de_instalacao(Path::new("x.tsx")).map(|d| d.0), Some("TypeScript/JavaScript"));
+        assert!(dica_de_instalacao(Path::new("x.txt")).is_none());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

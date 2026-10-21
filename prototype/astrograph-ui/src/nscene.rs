@@ -35,6 +35,8 @@ const ZEN_TOP: f32 = 64.0;
 const ZEN_BOTTOM: f32 = 56.0;
 
 const TOAST_MS: u128 = 3200;
+/// dicas de atalho ficam mais tempo na tela (dá para ler com calma)
+const TOAST_DICA_MS: u128 = 7000;
 /// Altura da barra de abas (px lógicos).
 const TAB_H: f32 = 32.0;
 
@@ -152,6 +154,9 @@ pub struct Scene {
     dash_rects: Vec<(f32, f32, f32, f32)>,
     dash_y: Spring,
     dash_y_vivo: bool,
+    /// menu de atalhos da líder: entra (0..1) depois de `WK_ESPERA_MS` e guarda a última lista para sair suave
+    wk: Chase,
+    wk_lista: Vec<(String, String)>,
     /// pintura mais lenta do último segundo (para `ASTROGRAPH_PERF`)
     pub paint_ms: f32,
 }
@@ -250,6 +255,8 @@ impl Scene {
             dash_rects: Vec::new(),
             dash_y: Spring::new(0.0, 40.0, 1.0),
             dash_y_vivo: false,
+            wk: Chase::new(0.0, 22.0),
+            wk_lista: Vec::new(),
             paint_ms: 0.0,
         };
         s.set_metrics(font_px, scale);
@@ -455,11 +462,11 @@ impl Scene {
         for sp in [&mut self.term, &mut self.zen, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
-        for ch in [&mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
+        for ch in [&mut self.wk, &mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
             ch.step(dt);
         }
         // avisos: somem sozinhos
-        if self.toast.target > 0.5 && now.saturating_duration_since(self.toast_at).as_millis() > TOAST_MS {
+        if self.toast.target > 0.5 && now.saturating_duration_since(self.toast_at).as_millis() > self.toast_ms() {
             self.toast.target = 0.0;
         }
         // barra de rolagem: aparece ao rolar, some depois
@@ -508,6 +515,15 @@ impl Scene {
         }
         self.cur_w.set_omega(w_cur * 1.15);
         self.top.set_omega(w_rol);
+        // menu de atalhos da líder: espera um pouco e entra com fade + subida; some ao soltar
+        if !vm.whichkey.is_empty() && self.wk_lista != vm.whichkey {
+            self.wk_lista = vm.whichkey.clone();
+        }
+        let wk_vez = !vm.whichkey.is_empty() && vm.whichkey_desde.is_some_and(|t| now.saturating_duration_since(t).as_millis() >= WK_ESPERA_MS);
+        self.wk.target = if wk_vez { 1.0 } else { 0.0 };
+        if self.first {
+            self.wk.v = self.wk.target;
+        }
         self.top.target = vm.top * lay.line_h;
         // cursor em coordenadas do documento (a rolagem não o arrasta)
         let line = vm.line(vm.cursor.0);
@@ -717,10 +733,15 @@ impl Scene {
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
         let (_, blink_wake) = self.blink(now);
+        let wk_anim = !self.wk.settled();
+        let wk_espera = vm.whichkey_desde.filter(|t| !vm.whichkey.is_empty() && now.saturating_duration_since(*t).as_millis() < WK_ESPERA_MS).map(|t| Duration::from_millis((WK_ESPERA_MS - now.saturating_duration_since(t).as_millis()) as u64 + 4));
         let blinking = vm.cmd.is_none();
         let mut wake = if blinking { blink_wake } else { None };
+        if let Some(d) = wk_espera {
+            wake = Some(wake.map_or(d, |w| w.min(d)));
+        }
         if toast_wait {
-            let left = TOAST_MS.saturating_sub(now.saturating_duration_since(self.toast_at).as_millis());
+            let left = self.toast_ms().saturating_sub(now.saturating_duration_since(self.toast_at).as_millis());
             let d = Duration::from_millis(left as u64 + 5);
             wake = Some(wake.map_or(d, |w| w.min(d)));
         }
@@ -734,7 +755,7 @@ impl Scene {
             let d = crate::relogio::ate_proximo_minuto();
             wake = Some(wake.map_or(d, |w| w.min(d)));
         }
-        Frame { animating: springs || chases || mode_anim || flash || intro, wake }
+        Frame { animating: springs || chases || mode_anim || flash || intro || wk_anim, wake }
     }
 
     // ------------------------------------------------------------------
@@ -1436,31 +1457,34 @@ impl Scene {
     }
 
     /// Menu de atalhos da líder: lista no canto de baixo, acima da pílula.
-    fn paint_whichkey(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
-        if vm.whichkey.is_empty() {
+    fn paint_whichkey(&mut self, c: &mut Canvas, _vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        let a = self.wk.v;
+        if self.wk_lista.is_empty() || a <= 0.01 {
             return;
         }
+        let lista = self.wk_lista.clone();
         let (kpx, dpx) = (15.0 * s, 13.0 * s);
         let row_h = 25.0 * s;
-        let n = vm.whichkey.len().min(16);
-        let kw = vm.whichkey.iter().take(n).map(|(k, _)| self.mono.advance(k.chars().next().unwrap_or(' '), kpx)).fold(0.0_f32, f32::max).max(10.0 * s);
-        let dw = vm.whichkey.iter().take(n).map(|(_, d)| self.ui.measure(d, dpx)).fold(0.0_f32, f32::max);
+        let n = lista.len().min(16);
+        let kw = lista.iter().take(n).map(|(k, _)| self.mono.advance(k.chars().next().unwrap_or(' '), kpx)).fold(0.0_f32, f32::max).max(10.0 * s);
+        let dw = lista.iter().take(n).map(|(_, d)| self.ui.measure(d, dpx)).fold(0.0_f32, f32::max);
         let (pad, gap) = (16.0 * s, 14.0 * s);
         let cw = (pad * 2.0 + kw + gap + dw).min(w - 2.0 * d::M.pad_x * s);
         let ch = pad * 1.2 + n as f32 * row_h;
         let x = (w - d::M.pad_x * s - cw).round();
-        let y = (h - 20.0 * s - 34.0 * s - 14.0 * s - ch).round();
-        c.shadow(x, y, cw, ch, 14.0 * s, 24.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5);
-        c.rrect(x, y, cw, ch, 14.0 * s, d::surface_hi(), 0.97);
-        c.rrect_border(x, y, cw, ch, 14.0 * s, 1.0, d::white(), 0.1);
-        for (i, (k, desc)) in vm.whichkey.iter().take(n).enumerate() {
+        // sobe uns pixels enquanto aparece
+        let y = (h - 20.0 * s - 34.0 * s - 14.0 * s - ch + (1.0 - a) * 10.0 * s).round();
+        c.shadow(x, y, cw, ch, 14.0 * s, 24.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5 * a);
+        c.rrect(x, y, cw, ch, 14.0 * s, d::surface_hi(), 0.97 * a);
+        c.rrect_border(x, y, cw, ch, 14.0 * s, 1.0, d::white(), 0.1 * a);
+        for (i, (k, desc)) in lista.iter().take(n).enumerate() {
             let base = y + pad * 0.6 + i as f32 * row_h + row_h * 0.5;
             let grupo = desc.starts_with('+');
             for ch in k.chars().take(1) {
-                c.glyph_at(&mut self.mono, kpx, x + pad, base + kpx * 0.34, ch, d::accent_soft(), 1.0);
+                c.glyph_at(&mut self.mono, kpx, x + pad, base + kpx * 0.34, ch, d::accent_soft(), a);
             }
             let cor = if grupo { d::accent_soft() } else { d::text() };
-            c.text(&mut self.ui, dpx, x + pad + kw + gap, base + dpx * 0.36, desc, cor, if grupo { 0.9 } else { 0.95 });
+            c.text(&mut self.ui, dpx, x + pad + kw + gap, base + dpx * 0.36, desc, cor, (if grupo { 0.9 } else { 0.95 }) * a);
         }
     }
 
@@ -1925,6 +1949,14 @@ impl Scene {
         }
     }
 
+    /// Quanto o aviso atual fica na tela.
+    fn toast_ms(&self) -> u128 {
+        match self.toast_cache {
+            Some((_, ToastKind::Dica)) => TOAST_DICA_MS,
+            _ => TOAST_MS,
+        }
+    }
+
     fn paint_toast(&mut self, c: &mut Canvas, lay: &Layout, (w, _h, s): (f32, f32, f32)) {
         let p = self.toast.v;
         if p < 0.01 {
@@ -1933,20 +1965,27 @@ impl Scene {
         let Some((text, kind)) = self.toast_cache.clone() else { return };
         let e = ease_out_expo(p);
         let tpx = 13.0 * s;
+        // dica de atalho: rótulo "Dica" em destaque antes do texto
+        let rotulo = if kind == ToastKind::Dica { "Dica" } else { "" };
+        let rw = if rotulo.is_empty() { 0.0 } else { self.ui_semi.measure(rotulo, tpx) + 10.0 * s };
         let tw = self.ui.measure(&text, tpx);
-        let (bw, bh) = (tw + 56.0 * s, 40.0 * s);
+        let (bw, bh) = (tw + rw + 56.0 * s, 40.0 * s);
         let x = (w - bw - 24.0 * s + (1.0 - e) * 34.0 * s).round();
         let y = (lay.text_y + 6.0 * s).round();
         c.shadow(x, y, bw, bh, 12.0 * s, 22.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5 * p);
         c.rrect(x, y, bw, bh, 12.0 * s, d::surface_hi(), 0.98 * p);
         c.rrect_border(x, y, bw, bh, 12.0 * s, 1.0, d::white(), 0.10 * p);
         let col = match kind {
-            ToastKind::Info => d::ACCENT,
+            ToastKind::Info | ToastKind::Dica => d::ACCENT,
             ToastKind::Error => d::RED,
             ToastKind::Done => d::GREEN,
         };
         c.rrect(x + 18.0 * s, y + bh / 2.0 - 4.0 * s, 8.0 * s, 8.0 * s, 4.0 * s, col, p);
-        c.text(&mut self.ui, tpx, x + 36.0 * s, y + bh / 2.0 + tpx * 0.36, &text, d::text_strong(), p);
+        let base = y + bh / 2.0 + tpx * 0.36;
+        if !rotulo.is_empty() {
+            c.text(&mut self.ui_semi, tpx, x + 36.0 * s, base, rotulo, d::accent_soft(), p);
+        }
+        c.text(&mut self.ui, tpx, x + 36.0 * s + rw, base, &text, d::text_strong(), p);
     }
 }
 
@@ -2023,6 +2062,9 @@ fn match_bracket(vm: &ViewModel) -> Option<(usize, usize)> {
     }
     None
 }
+
+/// Quanto a cena espera depois da tecla líder antes de mostrar o menu de atalhos.
+const WK_ESPERA_MS: u128 = 300;
 
 fn desc_h(font: &Font, px: f32) -> f32 {
     font.metrics(px).1
@@ -2727,5 +2769,42 @@ mod testes {
             }
         }
         assert_eq!(sc.dash_hit(5.0, 5.0), None);
+    }
+
+    #[test]
+    fn menu_da_lider_espera_300_ms_entra_suave_e_some() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("abc\n", Some("a.rs".into()));
+        let lay = sc.layout(800, 600, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let t_ini = Instant::now();
+        quadro(&mut sc, &s.view_model(), 800, 600, t_ini);
+        s.feed(" ");
+        let vm = s.view_model();
+        let desde = vm.whichkey_desde.expect("líder apertada");
+        // logo depois: nada na tela, e a cena pede para ser acordada quando chegar a hora (sem outra thread)
+        quadro(&mut sc, &vm, 800, 600, desde + Duration::from_millis(16));
+        assert_eq!(sc.wk.v, 0.0);
+        let f = sc.frame(&vm, desde + Duration::from_millis(16));
+        let acorda = f.wake.expect("agenda o menu").as_millis();
+        assert!((250..=300).contains(&(acorda as u64)), "acorda em {acorda} ms");
+        // depois da espera ele entra aos poucos (fade) e chega ao total em ~200 ms
+        let mut meio = false;
+        for i in 0..40u64 {
+            quadro(&mut sc, &vm, 800, 600, desde + Duration::from_millis(300 + 8 * i));
+            if sc.wk.v > 0.2 && sc.wk.v < 0.9 {
+                meio = true;
+            }
+        }
+        assert!(meio, "passa por valores intermediários (animado)");
+        assert!(sc.wk.v > 0.98, "terminou de aparecer: {}", sc.wk.v);
+        // soltar (Esc): some suave
+        s.feed("<Esc>");
+        let vm = s.view_model();
+        assert!(vm.whichkey.is_empty());
+        for i in 0..40u64 {
+            quadro(&mut sc, &vm, 800, 600, desde + Duration::from_millis(800 + 8 * i));
+        }
+        assert_eq!(sc.wk.v, 0.0);
     }
 }

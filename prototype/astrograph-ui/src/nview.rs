@@ -21,6 +21,8 @@ pub enum ToastKind {
     Info,
     Error,
     Done,
+    /// dica de atalho: aparece mais tempo, com o rótulo "Dica"
+    Dica,
 }
 
 /// Uma linha do buscador: texto, posições destacadas (em caracteres) e detalhe à direita.
@@ -159,6 +161,8 @@ pub struct ViewModel {
     pub progress: Option<String>,
     /// menu de atalhos depois da líder (aparece ao esperar): (tecla, o que faz)
     pub whichkey: Vec<(String, String)>,
+    /// quando a líder foi apertada: a cena espera um pouco antes de mostrar o menu e o anima
+    pub whichkey_desde: Option<std::time::Instant>,
     /// com dobras fechadas: o número da linha do arquivo de cada linha mostrada (a margem usa isto)
     pub row_map: Option<std::sync::Arc<Vec<usize>>>,
     /// com linhas quebradas: quais linhas mostradas são continuação da anterior (sem número na margem)
@@ -234,6 +238,7 @@ impl ViewModel {
             hover: None,
             progress: None,
             whichkey: Vec::new(),
+            whichkey_desde: None,
             row_map: None,
             row_cont: None,
             cursor_real: (0, 0),

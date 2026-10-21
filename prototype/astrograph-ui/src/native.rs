@@ -123,10 +123,12 @@ struct Comp {
 
 const COMP_LINHAS: usize = 8;
 /// quanto esperar depois da líder para mostrar o menu de atalhos
-const LIDER_MENU_MS: u64 = 450;
 
 /// Ações do menu da tela inicial, na ordem em que aparecem (a letra é o atalho).
 pub const DASH_ACOES: [char; 7] = ['n', 'f', 'p', 'o', 'w', 'a', 's'];
+
+/// O que cada ação faz, para as dicas.
+const DASH_DESC: [&str; 7] = ["novo arquivo", "buscar arquivo pelo nome", "abrir pasta", "arquivos recentes", "buscar palavra no projeto", "abrir o agente de IA", "retomar a conversa"];
 
 /// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
 /// ainda está selecionado.
@@ -241,6 +243,8 @@ pub struct Session {
     proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
     /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
     leader_desde: Option<std::time::Instant>,
+    /// setas apertadas em seguida no modo normal (para ensinar h j k l)
+    setas_seguidas: u32,
     /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
     ia_prompt: Option<(IaTipo, String)>,
     ia_job: Option<IaJob>,
@@ -396,6 +400,7 @@ impl Session {
             larga_cache: std::cell::Cell::new((u64::MAX, 0, false)),
             proj: std::cell::RefCell::new(None),
             leader_desde: None,
+            setas_seguidas: 0,
             ia_prompt: None,
             ia_job: None,
             ia_cmd: None,
@@ -655,6 +660,12 @@ impl Session {
             let c = c.min(self.ed.buf.line_len(r));
             self.ed.set_cursor(r, c);
         } else {
+            // muitas setas seguidas: ensina os movimentos do Vim
+            self.setas_seguidas += 1;
+            if self.setas_seguidas >= 8 {
+                self.setas_seguidas = 0;
+                self.dica("setas", "Sem tirar a mão do teclado: h j k l movem · w e b pulam palavras · 0 e $ início e fim da linha · gg e G topo e fim".into(), 2);
+            }
             match n {
                 Nav::Left => self.ed.feed(&[Key::Char('h')]),
                 Nav::Right => self.ed.feed(&[Key::Char('l')]),
@@ -669,6 +680,7 @@ impl Session {
     }
 
     fn key(&mut self, k: Key) {
+        self.setas_seguidas = 0;
         if self.picker.is_some() {
             self.pick_key(k);
             return;
@@ -678,14 +690,8 @@ impl Session {
         let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
         if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
+            // o menu de atalhos é decisão da cena: ela espera um pouco e o anima (sem depender de outra thread)
             self.leader_desde = Some(std::time::Instant::now());
-            // acorda a tela quando chegar a hora de mostrar o menu de atalhos
-            if let Some(n) = self.notify.clone() {
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(LIDER_MENU_MS + 30));
-                    n();
-                });
-            }
             return;
         }
         if !self.leader.is_empty() {
@@ -810,6 +816,17 @@ impl Session {
         }
     }
 
+    /// Mostra uma dica de atalho (poucas vezes por dica, com intervalo entre elas; some em Configurações).
+    fn dica(&mut self, id: &str, texto: String, max: u32) {
+        if crate::dicas::mostrar(id, max) {
+            self.say(texto, ToastKind::Dica);
+        }
+    }
+
+    fn lider_nome(&self) -> String {
+        tecla_nome(self.leader_key)
+    }
+
     /// Faz a ação da tela inicial identificada pela letra (a mesma tecla do atalho).
     fn dash_acao(&mut self, c: char) {
         if let Some(i) = DASH_ACOES.iter().position(|&a| a == c) {
@@ -843,7 +860,10 @@ impl Session {
         if !self.dash || self.picker.is_some() || i >= DASH_ACOES.len() {
             return;
         }
-        self.dash_acao(DASH_ACOES[i]);
+        let c = DASH_ACOES[i];
+        // quem clica aprende a tecla que faz o mesmo
+        self.dica(&format!("dash-{c}"), format!("Na tela inicial, a tecla {c} faz isso: {}", DASH_DESC[i]), 2);
+        self.dash_acao(c);
     }
 
     /// O mouse passou por cima de um item do menu da tela inicial: o destaque vai para ele.
@@ -914,6 +934,14 @@ impl Session {
         self.lsp_rev = self.ed.buf.rev;
         self.lsp_diags = std::sync::Arc::new(Vec::new());
         let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
+            // há servidor conhecido para esse tipo de arquivo mas ele não está instalado: diz como instalar (uma vez)
+            if !off && std::env::var_os("ASTROGRAPH_LSP_CMD").is_none() {
+                if let Some((nome, como)) = lsp::dica_de_instalacao(&path) {
+                    if crate::dicas::mostrar(&format!("lsp-{nome}"), 2) {
+                        self.say(format!("Sem servidor de linguagem para {nome}. Instale: {como}"), ToastKind::Info);
+                    }
+                }
+            }
             return;
         };
         let raiz = lsp::raiz_do_projeto(&path, &self.root);
@@ -939,7 +967,12 @@ impl Session {
         if let Some(c) = &cli {
             c.lock().unwrap().abrir(&path, lang, &self.ed.buf.rope.to_string());
         }
+        let subiu = cli.is_some();
         self.lsp = cli;
+        if subiu {
+            let dica = format!("Com o servidor de linguagem: K documentação · gd definição · gr referências · {0}rn renomeia · {0}ca ações de código", self.lider_nome());
+            self.dica("lsp-uso", dica, 2);
+        }
     }
 
     /// Manda o texto novo ao servidor e pega o que ele já respondeu.
@@ -1748,7 +1781,7 @@ impl Session {
 
     /// Menu de atalhos: depois da líder, esperando um tempo, mostra o que cada tecla faz.
     fn menu_lider(&self) -> Vec<(String, String)> {
-        if self.leader.is_empty() || self.leader_desde.is_none_or(|t| t.elapsed().as_millis() < LIDER_MENU_MS as u128) {
+        if self.leader.is_empty() {
             return Vec::new();
         }
         let prefixo: String = self.leader[1..].iter().filter_map(|k| k.as_char()).collect();
@@ -2678,6 +2711,9 @@ impl Session {
         t.sel = i;
         self.term_focus = false;
         let n = t.nos[i].clone();
+        let dica = format!("Explorador pelo teclado: {}e abre e fecha · j k navegam · Enter abre · a cria · r renomeia · d apaga", self.lider_nome());
+        self.dica("explorador", dica, 2);
+        let Some(t) = self.tree.as_mut() else { return };
         if n.pasta {
             t.alternar();
             self.tree_focus = true;
@@ -3873,6 +3909,7 @@ impl Session {
             diags,
             hover: self.hover_text.clone(),
             whichkey: self.menu_lider(),
+            whichkey_desde: self.leader_desde.filter(|_| !self.leader.is_empty()),
             progress: if self.atualizando.is_some() { Some("Atualizando o Astrograph…".to_string()) } else if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
@@ -4017,7 +4054,12 @@ impl Workspace {
         s.set_notify(notify.clone());
         s.modo_abas = true;
         s.lsp_attach();
-        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false, fechar_armado: None }
+        let mut w = Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false, fechar_armado: None };
+        if w.abas[0].dash {
+            let dica = format!("Aperte {} e espere um instante: o menu mostra todos os atalhos", w.abas[0].lider_nome());
+            w.abas[0].dica("inicio", dica, 3);
+        }
+        w
     }
 
     fn atual(&mut self) -> &mut Session {
@@ -4533,6 +4575,9 @@ impl Workspace {
     /// Vai para a aba `i` (clique na barra).
     pub fn ir_para(&mut self, i: usize) {
         self.trocar(i);
+        let dica = format!("gt e gT trocam de aba · {}ff abre outro arquivo", self.abas[self.ativa].lider_nome());
+        let a = self.ativa;
+        self.abas[a].dica("abas", dica, 2);
     }
 
     pub fn view_model(&mut self) -> ViewModel {
@@ -5159,8 +5204,9 @@ mod testes {
         let mut s = Session::new("abc\n", None);
         s.resize(80, 20.0);
         s.feed(" ");
-        assert!(modelo(&mut s).whichkey.is_empty(), "logo depois da líder ainda não mostra");
-        s.leader_desde = Some(std::time::Instant::now() - std::time::Duration::from_millis(LIDER_MENU_MS + 10));
+        // a sessão já publica a lista (e quando a líder foi apertada); a cena decide quando mostrar
+        let m = modelo(&mut s);
+        assert!(m.whichkey_desde.is_some());
         let m = modelo(&mut s);
         assert!(m.whichkey.contains(&("e".into(), "Explorador de arquivos".into())));
         assert!(m.whichkey.contains(&("f".into(), "+Buscar".into())));
@@ -5170,7 +5216,8 @@ mod testes {
         assert!(m.whichkey.iter().any(|(k, d)| k == "z" && d == "Modo zen"), "{:?}", m.whichkey);
         // esc fecha
         s.feed("<Esc>");
-        assert!(modelo(&mut s).whichkey.is_empty());
+        let m = modelo(&mut s);
+        assert!(m.whichkey.is_empty() && m.whichkey_desde.is_none());
     }
 
     #[test]
@@ -6490,5 +6537,35 @@ mod testes {
         assert!(vm.toast.as_ref().is_some_and(|(_, t, _)| t.contains("não salvas")), "{:?}", vm.toast);
         w.pedido_de_fechar();
         assert!(w.sair, "o segundo pedido descarta");
+    }
+
+    #[test]
+    fn dicas_ensinam_o_atalho_de_quem_clica_e_das_setas_e_podem_ser_desligadas() {
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        crate::dicas::zerar();
+        // clicar na tela inicial ensina a tecla
+        let mut s = Session::new("", None);
+        s.resize(80, 20.0);
+        s.dash = true;
+        s.dash_click(1);
+        let m = modelo(&mut s);
+        let (_, texto, tipo) = m.toast.expect("dica");
+        assert_eq!(tipo, ToastKind::Dica);
+        assert!(texto.contains("tecla f") && texto.contains("buscar arquivo"), "{texto}");
+        // não vira chuva: outra logo em seguida espera o intervalo
+        crate::dicas::zerar();
+        let mut s2 = Session::new("abc\n", None);
+        s2.resize(80, 20.0);
+        s2.feed("<Right><Right><Right><Right><Right><Right><Right><Right>");
+        let m = modelo(&mut s2);
+        assert!(m.toast.as_ref().is_some_and(|(_, t, k)| *k == ToastKind::Dica && t.contains("h j k l")), "{:?}", m.toast);
+        // desligadas: nada
+        crate::dicas::zerar();
+        crate::dicas::ligar(false);
+        let mut s3 = Session::new("abc\n", None);
+        s3.resize(80, 20.0);
+        s3.feed("<Right><Right><Right><Right><Right><Right><Right><Right>");
+        assert!(modelo(&mut s3).toast.is_none());
+        crate::dicas::encerrar();
     }
 }
