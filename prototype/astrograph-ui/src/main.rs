@@ -15,6 +15,7 @@ mod realce;
 mod relogio;
 mod render;
 mod anim;
+mod atalhos;
 mod arvore;
 mod busca;
 mod design;

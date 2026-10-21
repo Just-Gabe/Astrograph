@@ -118,6 +118,8 @@ struct Comp {
 }
 
 const COMP_LINHAS: usize = 8;
+/// quanto esperar depois da líder para mostrar o menu de atalhos
+const LIDER_MENU_MS: u64 = 450;
 
 /// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
 /// ainda está selecionado.
@@ -219,6 +221,8 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
+    leader_desde: Option<std::time::Instant>,
     /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
     ia_prompt: Option<(IaTipo, String)>,
     ia_job: Option<IaJob>,
@@ -364,6 +368,7 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            leader_desde: None,
             ia_prompt: None,
             ia_job: None,
             ia_cmd: None,
@@ -631,6 +636,14 @@ impl Session {
         let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
         if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
+            self.leader_desde = Some(std::time::Instant::now());
+            // acorda a tela quando chegar a hora de mostrar o menu de atalhos
+            if let Some(n) = self.notify.clone() {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(LIDER_MENU_MS + 30));
+                    n();
+                });
+            }
             return;
         }
         if !self.leader.is_empty() {
@@ -1485,6 +1498,15 @@ impl Session {
             }
         });
         self.git_rx = Some(rx);
+    }
+
+    /// Menu de atalhos: depois da líder, esperando um tempo, mostra o que cada tecla faz.
+    fn menu_lider(&self) -> Vec<(String, String)> {
+        if self.leader.is_empty() || self.leader_desde.is_none_or(|t| t.elapsed().as_millis() < LIDER_MENU_MS as u128) {
+            return Vec::new();
+        }
+        let prefixo: String = self.leader[1..].iter().filter_map(|k| k.as_char()).collect();
+        crate::atalhos::proximos(&prefixo)
     }
 
     /// Texto do trabalho que o servidor de linguagem está fazendo (indexando...), se houver.
@@ -3176,6 +3198,7 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
+            whichkey: self.menu_lider(),
             progress: if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
@@ -4230,6 +4253,25 @@ mod testes {
         s.feed("Gp");
         let t = modelo(&mut s).tree.unwrap();
         assert!(t.items.iter().any(|i| i.name == "novo.txt" && i.level == 0), "{:?}", t.items.iter().map(|i| (&i.name, i.level)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn menu_de_atalhos_aparece_depois_de_esperar_a_lider() {
+        let mut s = Session::new("abc\n", None);
+        s.resize(80, 20.0);
+        s.feed(" ");
+        assert!(modelo(&mut s).whichkey.is_empty(), "logo depois da líder ainda não mostra");
+        s.leader_desde = Some(std::time::Instant::now() - std::time::Duration::from_millis(LIDER_MENU_MS + 10));
+        let m = modelo(&mut s);
+        assert!(m.whichkey.contains(&("e".into(), "Explorador de arquivos".into())));
+        assert!(m.whichkey.contains(&("f".into(), "+Buscar".into())));
+        // um nível abaixo
+        s.feed("A");
+        let m = modelo(&mut s);
+        assert!(m.whichkey.iter().any(|(k, d)| k == "z" && d == "Modo zen"), "{:?}", m.whichkey);
+        // esc fecha
+        s.feed("<Esc>");
+        assert!(modelo(&mut s).whichkey.is_empty());
     }
 
     #[test]

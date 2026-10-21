@@ -1009,6 +1009,7 @@ impl Scene {
     fn paint_overlays(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
         self.paint_clock(c, (w, h, s));
         self.paint_progress(c, vm, (w, h, s));
+        self.paint_whichkey(c, vm, (w, h, s));
         // escurece o fundo atrás da paleta
         let veil = self.cmd.v.max(self.pick.v);
         if veil > 0.01 {
@@ -1315,6 +1316,35 @@ impl Scene {
         // mesma linha da pílula: centro a 37 px (em escala 1) da borda de baixo
         let mid = h - 20.0 * s - 17.0 * s;
         c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::dim(), 0.85);
+    }
+
+    /// Menu de atalhos da líder: lista no canto de baixo, acima da pílula.
+    fn paint_whichkey(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        if vm.whichkey.is_empty() {
+            return;
+        }
+        let (kpx, dpx) = (15.0 * s, 13.0 * s);
+        let row_h = 25.0 * s;
+        let n = vm.whichkey.len().min(16);
+        let kw = vm.whichkey.iter().take(n).map(|(k, _)| self.mono.advance(k.chars().next().unwrap_or(' '), kpx)).fold(0.0_f32, f32::max).max(10.0 * s);
+        let dw = vm.whichkey.iter().take(n).map(|(_, d)| self.ui.measure(d, dpx)).fold(0.0_f32, f32::max);
+        let (pad, gap) = (16.0 * s, 14.0 * s);
+        let cw = (pad * 2.0 + kw + gap + dw).min(w - 2.0 * d::M.pad_x * s);
+        let ch = pad * 1.2 + n as f32 * row_h;
+        let x = (w - d::M.pad_x * s - cw).round();
+        let y = (h - 20.0 * s - 34.0 * s - 14.0 * s - ch).round();
+        c.shadow(x, y, cw, ch, 14.0 * s, 24.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5);
+        c.rrect(x, y, cw, ch, 14.0 * s, d::surface_hi(), 0.97);
+        c.rrect_border(x, y, cw, ch, 14.0 * s, 1.0, d::white(), 0.1);
+        for (i, (k, desc)) in vm.whichkey.iter().take(n).enumerate() {
+            let base = y + pad * 0.6 + i as f32 * row_h + row_h * 0.5;
+            let grupo = desc.starts_with('+');
+            for ch in k.chars().take(1) {
+                c.glyph_at(&mut self.mono, kpx, x + pad, base + kpx * 0.34, ch, d::accent_soft(), 1.0);
+            }
+            let cor = if grupo { d::accent_soft() } else { d::text() };
+            c.text(&mut self.ui, dpx, x + pad + kw + gap, base + dpx * 0.36, desc, cor, if grupo { 0.9 } else { 0.95 });
+        }
     }
 
     /// Trabalho do servidor de linguagem (indexando...), logo acima do relógio.

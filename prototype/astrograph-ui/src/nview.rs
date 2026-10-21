@@ -153,6 +153,8 @@ pub struct ViewModel {
     pub hover: Option<String>,
     /// trabalho do servidor de linguagem em andamento ("rust-analyzer: Indexando 40%")
     pub progress: Option<String>,
+    /// menu de atalhos depois da líder (aparece ao esperar): (tecla, o que faz)
+    pub whichkey: Vec<(String, String)>,
     /// `:set number` / `relativenumber`
     pub numero: bool,
     pub relativo: bool,
@@ -219,6 +221,7 @@ impl ViewModel {
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
             progress: None,
+            whichkey: Vec::new(),
             numero: true,
             relativo: false,
             sig: None,
