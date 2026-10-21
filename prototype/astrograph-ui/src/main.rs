@@ -20,6 +20,7 @@ mod atalhos;
 mod arvore;
 mod busca;
 mod design;
+mod dobras;
 mod editorconfig;
 mod native;
 mod lsp;

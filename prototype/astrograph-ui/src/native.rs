@@ -221,6 +221,8 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// projeção das dobras fechadas (cache por revisão e dobras)
+    proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
     /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
     leader_desde: Option<std::time::Instant>,
     /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
@@ -370,6 +372,7 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            proj: std::cell::RefCell::new(None),
             leader_desde: None,
             ia_prompt: None,
             ia_job: None,
@@ -2958,7 +2961,7 @@ impl Session {
         // clicar no texto tira o teclado do terminal
         self.term_focus = false;
         self.term_zen = false;
-        let r = row.min(self.ed.buf.line_count() - 1);
+        let r = self.proj_a_real(row).min(self.ed.buf.line_count() - 1);
         let line = self.ed.buf.line(r);
         let len = line.chars().count();
         // na inserção o cursor pode ficar depois do último caractere
@@ -3016,7 +3019,7 @@ impl Session {
 
     /// Leva o cursor (e a ponta móvel da seleção) à célula `(row, vcol)`.
     fn mouse_para(&mut self, row: usize, vcol: usize) {
-        let r = row.min(self.ed.buf.line_count() - 1);
+        let r = self.proj_a_real(row).min(self.ed.buf.line_count() - 1);
         let line = self.ed.buf.line(r);
         let len = line.chars().count();
         let c = if vcol >= vcol_start(&line, len) { len.saturating_sub(1) } else { col_for_vcol(&line, vcol) };
@@ -3025,21 +3028,27 @@ impl Session {
 
     /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
     pub fn scroll(&mut self, lines: f32) {
-        let max = self.ed.buf.line_count().saturating_sub(1) as f32;
-        let wanted = self.top + lines;
-        self.top = wanted.clamp(0.0, max);
-        if wanted != self.top {
+        let proj = self.proj_atual();
+        let n = proj.as_ref().map_or(self.ed.buf.line_count(), |p| p.linhas());
+        let a_proj = |r: usize| proj.as_ref().map_or(r, |p| p.a_proj(r));
+        let a_real = |p: usize| proj.as_ref().map_or(p, |q| q.a_real(p));
+        let max = n.saturating_sub(1) as f32;
+        let top_p = a_proj(self.top as usize) as f32 + self.top.fract();
+        let wanted = top_p + lines;
+        let novo = wanted.clamp(0.0, max);
+        self.top = a_real(novo.floor() as usize) as f32 + novo.fract();
+        if wanted != novo {
             let id = self.bump.map_or(1, |(i, _)| i + 1);
-            self.bump = Some((id, wanted - self.top));
+            self.bump = Some((id, wanted - novo));
         }
         // o cursor acompanha para não sair da tela
         let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = self.ed.cursor.row as f32;
-        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
+        let row = a_proj(self.ed.cursor.row) as f32;
+        let (lo, hi) = (novo + so, novo + self.rows - 1.0 - so);
         if row < lo {
-            self.ed.set_cursor(lo.ceil() as usize, self.ed.cursor.col);
+            self.ed.set_cursor(a_real(lo.ceil() as usize), self.ed.cursor.col);
         } else if row > hi {
-            self.ed.set_cursor(hi.floor().max(0.0) as usize, self.ed.cursor.col);
+            self.ed.set_cursor(a_real(hi.floor().max(0.0) as usize), self.ed.cursor.col);
         }
     }
 
@@ -3269,19 +3278,55 @@ impl Session {
     }
 
     /// Mantém o cursor à vista: rola o mínimo (ou centraliza num salto longe).
-    fn follow_cursor(&mut self) {
-        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = self.ed.cursor.row as f32;
-        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
-        if row < self.top - self.rows || row > self.top + 2.0 * self.rows {
-            self.top = (row - self.rows / 3.0).max(0.0);
-        } else if row < lo {
-            self.top = (row - so).max(0.0);
-        } else if row > hi {
-            self.top = row - self.rows + 1.0 + so;
+    /// A projeção do texto com as dobras fechadas escondidas (None: não há dobra fechada).
+    fn proj_atual(&self) -> Option<std::sync::Arc<crate::dobras::Proj>> {
+        let dobras = self.ed.dobras_fechadas();
+        if dobras.is_empty() {
+            *self.proj.borrow_mut() = None;
+            return None;
         }
-        let last = self.ed.buf.line_count().saturating_sub(1) as f32;
-        self.top = self.top.clamp(0.0, last);
+        let rev = self.ed.buf.rev;
+        if let Some(p) = self.proj.borrow().as_ref() {
+            if p.rev == rev && p.dobras == dobras {
+                return Some(p.clone());
+            }
+        }
+        let buf = &self.ed.buf;
+        let p = std::sync::Arc::new(crate::dobras::Proj::construir(&|r| buf.line(r), buf.line_count(), &dobras, rev));
+        *self.proj.borrow_mut() = Some(p.clone());
+        Some(p)
+    }
+
+    /// Linha do arquivo de uma linha mostrada (clique, arrastar).
+    fn proj_a_real(&self, row: usize) -> usize {
+        self.proj_atual().map_or(row, |p| p.a_real(row))
+    }
+
+    fn follow_cursor(&mut self) {
+        let proj = self.proj_atual();
+        let n = proj.as_ref().map_or(self.ed.buf.line_count(), |p| p.linhas());
+        let a_proj = |r: usize| proj.as_ref().map_or(r, |p| p.a_proj(r));
+        let top_p = a_proj(self.top as usize) as f32 + self.top.fract();
+        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
+        let row = a_proj(self.ed.cursor.row) as f32;
+        let mut top = top_p;
+        let (lo, hi) = (top + so, top + self.rows - 1.0 - so);
+        if row < top - self.rows || row > top + 2.0 * self.rows {
+            top = (row - self.rows / 3.0).max(0.0);
+        } else if row < lo {
+            top = (row - so).max(0.0);
+        } else if row > hi {
+            top = row - self.rows + 1.0 + so;
+        }
+        let last = n.saturating_sub(1) as f32;
+        top = top.clamp(0.0, last);
+        // só mexe se mudou (a conversão de volta arredonda para a linha do arquivo)
+        if top != top_p {
+            self.top = match &proj {
+                Some(p) => p.a_real(top.floor() as usize) as f32 + top.fract(),
+                None => top,
+            };
+        }
         // horizontal (em colunas visuais)
         let line = self.ed.buf.line(self.ed.cursor.row);
         let v = vcol_cursor(&line, self.ed.cursor.col);
@@ -3307,29 +3352,69 @@ impl Session {
         self.follow_cursor();
         self.refresh_syntax();
         self.seq += 1;
-        let line_count = self.ed.buf.line_count();
-        let lo = (self.top as usize).saturating_sub(SPAN_MARGIN);
-        let hi = (self.top as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
+        let proj = self.proj_atual();
+        let real_n = self.ed.buf.line_count();
+        let line_count = proj.as_ref().map_or(real_n, |p| p.linhas());
+        // topo na linha mostrada (com dobras o topo do arquivo e o da tela diferem)
+        let top_v = match &proj {
+            Some(p) => p.a_proj(self.top as usize) as f32 + self.top.fract(),
+            None => self.top,
+        };
+        let lo = (top_v as usize).saturating_sub(SPAN_MARGIN);
+        let hi = (top_v as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
         let mut spans: Vec<Vec<Span>> = vec![Vec::new(); hi.saturating_sub(lo)];
         if let Some((doc, _)) = &self.doc {
-            for sp in doc.highlights(lo..hi) {
-                let Some(cls) = classify(sp.group) else { continue };
-                let line = self.ed.buf.line(sp.row);
+            let mut poe = |row_real: usize, prow: usize, sp: &astrograph_syntax::Span| {
+                let Some(cls) = classify(sp.group) else { return };
+                let line = self.ed.buf.line(row_real);
                 let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count() as u32;
-                spans[sp.row - lo].push(Span { start: to_char(sp.start_col), end: to_char(sp.end_col), cls });
+                spans[prow - lo].push(Span { start: to_char(sp.start_col), end: to_char(sp.end_col), cls });
+            };
+            match &proj {
+                None => {
+                    for sp in doc.highlights(lo..hi) {
+                        poe(sp.row, sp.row, &sp);
+                    }
+                }
+                Some(p) => {
+                    for prow in lo..hi {
+                        let r = p.mapa[prow];
+                        for sp in doc.highlights(r..r + 1) {
+                            poe(r, prow, &sp);
+                        }
+                    }
+                }
             }
         }
+        // o aviso "⋯ N linhas" da dobra fica em cinza
+        if let Some(p) = &proj {
+            for prow in lo..hi {
+                if let Some((fim_txt, n)) = p.marcas[prow] {
+                    spans[prow - lo].push(Span { start: fim_txt as u32, end: (fim_txt + n) as u32, cls: crate::design::Cls::Comment });
+                }
+            }
+        }
+        // posições do arquivo -> da tela (uma linha escondida cai no começo da dobra)
+        let mapa_pos = |r: usize, c: usize| -> (usize, usize) {
+            match &proj {
+                Some(p) => {
+                    let pr = p.a_proj(r);
+                    (pr, if p.mapa[pr] == r { c } else { 0 })
+                }
+                None => (r, c),
+            }
+        };
         let sel = self.ed.selection().map(|(k, a)| {
             let c = self.ed.cursor;
             // em bloco os dois cantos ficam como estão (o retângulo vem das colunas visuais de cada um)
             let (lo, hi) = if a <= c || k == VKind::Block { (a, c) } else { (c, a) };
-            (k, (lo.row, lo.col), (hi.row, hi.col))
+            (k, mapa_pos(lo.row, lo.col), mapa_pos(hi.row, hi.col))
         });
         // valor padrão do snippet: aparece selecionado até a primeira tecla
         let sel = sel.or_else(|| {
             let sn = self.snip.as_ref().filter(|s| s.sel)?;
             let (a, b) = sn.stops[sn.idx];
-            Some((VKind::Char, (a.row, a.col), (b.row, b.col.saturating_sub(1))))
+            Some((VKind::Char, mapa_pos(a.row, a.col), mapa_pos(b.row, b.col.saturating_sub(1))))
         });
         let search = self.ed.search_line();
         // realce da busca: ao digitar já mostra as ocorrências; `:noh` apaga até mudar o padrão
@@ -3346,20 +3431,44 @@ impl Session {
         }
         if let (Some(p), false) = (&pat, self.hl_off) {
             if let Some(re) = astrograph_core::search::compile(p) {
-                for row in lo..hi {
+                for prow in lo..hi {
+                    let row = proj.as_ref().map_or(prow, |p| p.mapa[prow]);
                     let line = self.ed.buf.line(row);
                     for m in re.find_iter(&line).take(200) {
                         if m.start() == m.end() {
                             continue;
                         }
                         let a = line[..m.start()].chars().count();
-                        hits.push((row, a, a + line[m.start()..m.end()].chars().count()));
+                        hits.push((prow, a, a + line[m.start()..m.end()].chars().count()));
                     }
                 }
             }
         }
         let hits_id = if pat.is_some() && !self.hl_off { self.hl_id } else { 0 };
         let signs = self.git_signs();
+        // com dobras: os sinais, diagnósticos e o realce de cópia vão para as linhas mostradas
+        let (signs, diags) = match &proj {
+            Some(p) => {
+                let mut v: Vec<(usize, git::Sign)> = Vec::new();
+                for (r, sg) in signs.iter() {
+                    let pr = p.a_proj(*r);
+                    if v.last().is_none_or(|(l, _)| *l != pr) {
+                        v.push((pr, *sg));
+                    }
+                }
+                let d: Vec<lsp::Diag> = self
+                    .lsp_diags
+                    .iter()
+                    .map(|g| {
+                        let (r0, c0) = mapa_pos(g.row, g.col);
+                        let (r1, c1) = mapa_pos(g.end_row, g.end_col);
+                        lsp::Diag { row: r0, col: c0, end_row: r1, end_col: c1, ..g.clone() }
+                    })
+                    .collect();
+                (std::sync::Arc::new(v), std::sync::Arc::new(d))
+            }
+            None => (signs, self.lsp_diags.clone()),
+        };
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
         } else if self.ed.cmdline().is_some() || self.tree_prompt.is_some() || self.ia_prompt.is_some() {
@@ -3390,13 +3499,14 @@ impl Session {
             doc_id: self.doc_id,
             seq: self.seq,
             rev: self.ed.buf.rev,
-            rope: self.ed.buf.rope.clone(),
+            rope: proj.as_ref().map_or_else(|| self.ed.buf.rope.clone(), |p| p.rope.clone()),
             lines: line_count,
             span_lo: lo,
             spans,
-            top: self.top,
+            top: top_v,
             left: self.left,
-            cursor: (self.ed.cursor.row, self.ed.cursor.col),
+            cursor: mapa_pos(self.ed.cursor.row, self.ed.cursor.col),
+            row_map: proj.as_ref().map(|p| p.mapa.clone()),
             mode,
             selection: sel,
             sel_eol: self.ed.bloco_ate_o_fim(),
@@ -3414,7 +3524,7 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
-            diags: self.lsp_diags.clone(),
+            diags,
             hover: self.hover_text.clone(),
             whichkey: self.menu_lider(),
             progress: if self.atualizando.is_some() { Some("Atualizando o Astrograph…".to_string()) } else if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
@@ -3426,7 +3536,7 @@ impl Session {
                 CompView {
                     items: c.shown.iter().skip(first).take(COMP_LINHAS).map(|(i, h)| CompItem { label: c.items[*i].label.clone(), detail: c.items[*i].detalhe.clone(), kind: c.items[*i].tipo, hits: h.clone() }).collect(),
                     sel: c.sel - first,
-                    anchor: (c.start.row, c.start.col),
+                    anchor: mapa_pos(c.start.row, c.start.col),
                 }
             }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
@@ -3461,7 +3571,7 @@ impl Session {
             hits_id,
             flash: (self.ed.last_yank.0 > 0).then(|| {
                 let (id, a, b, _) = self.ed.last_yank;
-                ((a.row, a.col), (b.row, b.col), id)
+                (mapa_pos(a.row, a.col), mapa_pos(b.row, b.col), id)
             }),
             clip: self.clip.clone(),
             layout: None,
@@ -4536,6 +4646,40 @@ mod testes {
         assert_eq!(m.tabs.len(), 3);
         w.feed(":Astrograph foo<CR>");
         assert!(w.view_model().toast.is_some_and(|t| t.1.contains("desconhecido")));
+    }
+
+    #[test]
+    fn dobras_fechadas_somem_do_texto_e_as_coordenadas_acompanham() {
+        let texto: String = (0..10).map(|i| format!("linha {i}\n")).collect();
+        let mut s = Session::new(&texto, None);
+        s.resize(80, 20.0);
+        // zfj na linha 2 (real 1): dobra das linhas 1 e 2, fechada
+        s.feed("jzfj");
+        let m = modelo(&mut s);
+        assert_eq!(m.lines, 9);
+        assert_eq!(m.line(1), "linha 1  ⋯ 2 linhas");
+        assert_eq!(m.line(2), "linha 3", "a linha 2 do arquivo está escondida");
+        assert_eq!(m.cursor, (1, 0));
+        assert_eq!(m.row_map.as_ref().map(|r| r[..4].to_vec()), Some(vec![0, 1, 3, 4]), "a margem usa os números do arquivo");
+        // o aviso da dobra vem em cinza (comentário)
+        assert!(m.spans.iter().flatten().any(|sp| sp.cls == crate::design::Cls::Comment && sp.start == 7), "{:?}", m.spans);
+        // j pula a dobra; k volta nela
+        s.feed("j");
+        assert_eq!((s.ed.cursor.row, modelo(&mut s).cursor), (3, (2, 0)));
+        s.feed("k");
+        assert_eq!(s.ed.cursor.row, 1);
+        // clicar na linha mostrada 2 leva ao arquivo, linha 3
+        s.click(2, 0);
+        assert_eq!(s.ed.cursor.row, 3);
+        // dd na dobra apaga as duas linhas de uma vez
+        s.feed("kdd");
+        assert_eq!(s.ed.buf.line(1), "linha 3");
+        assert_eq!(modelo(&mut s).lines, 8);
+        // zR abre tudo: a tela volta a mostrar as linhas todas
+        s.feed("uzR");
+        let m = modelo(&mut s);
+        assert!(m.row_map.is_none());
+        assert_eq!((m.lines, m.line(2).as_str()), (10, "linha 2"));
     }
 
     #[test]

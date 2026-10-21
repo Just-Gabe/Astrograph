@@ -574,7 +574,7 @@ impl Scene {
         self.hit_fade.target = if vm.hits_id != 0 { 1.0 } else { 0.0 };
         // pílula: largura-alvo
         let label_w = self.ui_semi.measure(&self.mode_label, 12.5 * s);
-        let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
+        let pos = format!("{}:{}", vm.row_map.as_ref().and_then(|m| m.get(vm.cursor.0).copied()).unwrap_or(vm.cursor.0) + 1, vm.cursor.1 + 1);
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
         let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
@@ -766,8 +766,9 @@ impl Scene {
             // mostra o número se `number` está ligado, senão 0)
             let num = match (vm.numero, vm.relativo) {
                 (false, false) => String::new(),
-                (_, false) => (row + 1).to_string(),
-                (true, true) if row == cur_row => (row + 1).to_string(),
+                // com dobras fechadas, `row` é a linha mostrada e o número vem do arquivo
+                (_, false) => (vm.row_map.as_ref().map_or(row, |m| m.get(row).copied().unwrap_or(row)) + 1).to_string(),
+                (true, true) if row == cur_row => (vm.row_map.as_ref().map_or(row, |m| m.get(row).copied().unwrap_or(row)) + 1).to_string(),
                 (false, true) if row == cur_row => "0".to_string(),
                 (_, true) => row.abs_diff(cur_row).to_string(),
             };

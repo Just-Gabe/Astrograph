@@ -155,6 +155,8 @@ pub struct ViewModel {
     pub progress: Option<String>,
     /// menu de atalhos depois da líder (aparece ao esperar): (tecla, o que faz)
     pub whichkey: Vec<(String, String)>,
+    /// com dobras fechadas: o número da linha do arquivo de cada linha mostrada (a margem usa isto)
+    pub row_map: Option<std::sync::Arc<Vec<usize>>>,
     /// `:set number` / `relativenumber`
     pub numero: bool,
     pub relativo: bool,
@@ -222,6 +224,7 @@ impl ViewModel {
             hover: None,
             progress: None,
             whichkey: Vec::new(),
+            row_map: None,
             numero: true,
             relativo: false,
             sig: None,
