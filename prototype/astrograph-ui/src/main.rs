@@ -85,6 +85,11 @@ enum UiCommand {
     Tab(i64),
     /// clique numa linha do explorador (índice na lista)
     TreeClick(usize),
+    /// tela inicial: clique / mouse sobre uma ação do menu
+    DashClick(usize),
+    /// o botão de fechar da janela (o motor nativo decide se há o que salvar)
+    Close,
+    DashHover(usize),
     /// tamanho de cada painel (id, colunas, linhas) das janelas divididas
     Panes(Vec<(u32, i64, i64)>),
     /// clique (pressionar) num painel: foca e posiciona o cursor
@@ -465,7 +470,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::DashClick(_) | UiCommand::DashHover(_) | UiCommand::Close | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -1097,6 +1102,11 @@ impl App {
     /// Fechar a janela pede ao Neovim (`:confirm qa`): arquivos nao salvos
     /// perguntam antes. So fecha a forca se o Neovim parou de responder.
     fn request_close(&mut self, event_loop: &ActiveEventLoop) {
+        // motor nativo: a sessão decide (sai direto, ou avisa das alterações não salvas)
+        if self.native.is_some() {
+            let _ = self.tx.send(UiCommand::Close);
+            return;
+        }
         let now = Instant::now();
         if let Some(at) = self.close_at {
             if now.duration_since(at) > Duration::from_secs(2) && self.last_redraw < at {
@@ -1321,6 +1331,18 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(window) = &self.window {
                     window.set_cursor_visible(true);
                 }
+                // tela inicial: passar o mouse por cima de uma ação leva o destaque para ela
+                if self.last_vm.dash {
+                    let hit = self.scene.as_ref().and_then(|sc| sc.dash_hit(position.x as f32, position.y as f32));
+                    if let Some(i) = hit {
+                        if i != self.last_vm.dash_sel {
+                            let _ = self.tx.send(UiCommand::DashHover(i));
+                        }
+                    }
+                    if let Some(window) = &self.window {
+                        window.set_cursor(if hit.is_some() { CursorIcon::Pointer } else { CursorIcon::Text });
+                    }
+                }
                 // seleção no terminal: o arrasto continua mesmo fora dele
                 if let Some(b) = self.term_down {
                     if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(position.x as f32, position.y as f32, true)) {
@@ -1469,6 +1491,13 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tab_hit(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32)) {
                         let _ = self.tx.send(UiCommand::Tab(i as i64));
                         return;
+                    }
+                    // tela inicial: clicar numa ação do menu a executa
+                    if self.last_vm.dash {
+                        if let Some(i) = self.scene.as_ref().and_then(|sc| sc.dash_hit(self.mouse_pos.0 as f32, self.mouse_pos.1 as f32)) {
+                            let _ = self.tx.send(UiCommand::DashClick(i));
+                            return;
+                        }
                     }
                 }
                 if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {

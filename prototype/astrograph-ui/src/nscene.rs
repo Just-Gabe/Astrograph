@@ -146,6 +146,12 @@ pub struct Scene {
     last_top: f32,
     scrolled_at: Instant,
     last_paint: Option<Instant>,
+    /// passo (s) do último quadro, para molas que só conhecem o alvo ao pintar
+    last_dt: f32,
+    /// tela inicial: área clicável de cada ação (x0, y0, x1, y1) e o bloco de destaque que desliza até a escolhida
+    dash_rects: Vec<(f32, f32, f32, f32)>,
+    dash_y: Spring,
+    dash_y_vivo: bool,
     /// pintura mais lenta do último segundo (para `ASTROGRAPH_PERF`)
     pub paint_ms: f32,
 }
@@ -240,6 +246,10 @@ impl Scene {
             last_top: 0.0,
             scrolled_at: now,
             last_paint: None,
+            last_dt: 0.0,
+            dash_rects: Vec::new(),
+            dash_y: Spring::new(0.0, 40.0, 1.0),
+            dash_y_vivo: false,
             paint_ms: 0.0,
         };
         s.set_metrics(font_px, scale);
@@ -378,6 +388,11 @@ impl Scene {
         Some(((fy.max(0.0) as usize).min(rows.saturating_sub(1)), (fx.max(0.0) as usize).min(cols.saturating_sub(1))))
     }
 
+    /// Ação da tela inicial sob o ponto (índice no menu).
+    pub fn dash_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.dash_rects.iter().position(|&(x0, y0, x1, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
+    }
+
     /// Linha (índice na lista do explorador) sob o ponto, se ele cair numa linha do explorador.
     pub fn tree_hit(&self, x: f32, y: f32) -> Option<usize> {
         if !self.in_side(x) {
@@ -430,6 +445,7 @@ impl Scene {
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
         self.last_paint = Some(now);
+        self.last_dt = dt;
 
         self.update_targets(vm, &lay, now);
         if self.first {
@@ -462,9 +478,10 @@ impl Scene {
                     self.dash_at = Some(now);
                     self.ready_ms = crate::nview::T0.get().map_or(0, |t| t.elapsed().as_millis() as u32);
                 }
-                self.paint_dash(c, now, (w, h, s));
+                self.paint_dash(c, vm, now, (w, h, s));
             } else {
                 self.dash_at = None;
+                self.dash_y_vivo = false;
                 self.paint_content(c, vm, &lay, now);
             }
         }
@@ -694,7 +711,8 @@ impl Scene {
     }
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
-        let springs = [&self.term, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let dash_anim = vm.dash && !self.dash_y.settled();
+        let springs = dash_anim || [&self.term, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -962,7 +980,7 @@ impl Scene {
         }
     }
 
-    fn paint_cursor(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, top_px: f32, now: Instant) {
+    fn paint_cursor(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, _top_px: f32, now: Instant) {
         let s = self.scale;
         let (alpha, _) = self.blink(now);
         // o cursor do texto some enquanto o teclado está no terminal
@@ -1099,7 +1117,7 @@ impl Scene {
 
     /// Tela inicial: estrela, nome em traço fino, linha discreta, menu e rodapé.
     /// Mesma composição do dashboard do Neovim; entra com fade escalonado (~0,6 s).
-    fn paint_dash(&mut self, c: &mut Canvas, now: Instant, (w, h, s): (f32, f32, f32)) {
+    fn paint_dash(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
         let p = self.dash_at.map_or(1.0, |t| (now.saturating_duration_since(t).as_secs_f32() / 0.6).min(1.0));
         let at = |start: f32, len: f32| ease_out_cubic(((p - start) / len).clamp(0.0, 1.0));
         let fg = d::text();
@@ -1161,9 +1179,10 @@ impl Scene {
         y += pitch * 3.0;
 
         // menu: ícone, descrição e atalho à direita (coluna de 50 células)
-        let menu: [(&str, &str, &str); 6] = [
+        let menu: [(&str, &str, &str); 7] = [
             ("\u{f0415}", "Novo arquivo", "n"),
             ("\u{f002}", "Buscar arquivo", "f"),
+            ("\u{f0770}", "Abrir pasta", "p"),
             ("\u{f0214}", "Recentes", "o"),
             ("\u{f0b9a}", "Buscar palavra", "w"),
             ("\u{f06a9}", "Agentes de IA", "a"),
@@ -1172,23 +1191,49 @@ impl Scene {
         let left = cx - 25.0 * cw;
         let right = cx + 25.0 * cw;
         // em janelas baixas o menu se aperta para não encostar no rodapé
-        let step = (px * 3.2).min((h * 0.88 - pitch * 2.0 - y) / 5.0).round().max(pitch);
+        let step = (px * 3.2).min((h * 0.88 - pitch * 2.0 - y) / (menu.len() - 1) as f32).round().max(pitch);
         let m = at(0.45, 0.55);
+        let sel = vm.dash_sel.min(menu.len() - 1);
+        // o bloco de destaque desliza até a ação escolhida (teclado ou mouse)
+        let alvo_y = y + sel as f32 * step - asc;
+        self.dash_y.target = alvo_y;
+        if !self.dash_y_vivo {
+            self.dash_y.snap(alvo_y);
+            self.dash_y_vivo = true;
+        } else {
+            self.dash_y.step(self.last_dt);
+        }
+        let bloco_y = self.dash_y.x;
+        let alt = asc + desc_h(&self.mono, px);
+        self.dash_rects.clear();
+        let folga = ((step - alt) / 2.0).max(0.0);
+        for i in 0..menu.len() {
+            let topo = y + i as f32 * step - asc - folga;
+            self.dash_rects.push((left - 2.0 * cw, topo, right + 2.0 * cw, topo + step));
+        }
+        // faixa suave sob a ação destacada
+        c.rrect(left - cw, bloco_y - folga * 0.6, right - left + 2.0 * cw, alt + folga * 1.2, 8.0 * s, d::white(), 0.045 * m);
+        c.rrect(left + 3.0 * cw, bloco_y, cw, alt, 2.0 * s, mix_color(d::bg(), d::text(), m), 0.85);
         for (i, (icon, desc, key)) in menu.iter().enumerate() {
             let base = y + i as f32 * step;
-            if i == 0 {
-                // cursor sobre a primeira ação, como no dashboard
-                c.rrect(left + 3.0 * cw, base - asc, cw, asc + desc_h(&self.mono, px), 2.0 * s, mix_color(d::bg(), d::text(), m), 0.85);
-            }
+            // quanto o bloco está em cima desta linha (0..1): a primeira letra inverte a cor sobre ele
+            let perto = (1.0 - ((bloco_y + asc) - base).abs() / step).clamp(0.0, 1.0);
             let ic = icon.chars().next().unwrap_or(' ');
             if self.mono.has(ic) {
-                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::bg(), secondary, m), 1.0);
+                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::bg(), mix_color(secondary, fg, perto), m), 1.0);
             }
             for (j, ch) in desc.chars().enumerate() {
-                let col = if i == 0 && j == 0 { d::bg() } else { mix_color(d::bg(), fg, m) };
+                let col = if j == 0 { mix_color(mix_color(d::bg(), fg, m), d::bg(), perto) } else { mix_color(d::bg(), fg, m) };
                 c.glyph_at(&mut self.mono, px, left + (3.0 + j as f32) * cw, base, ch, col, 1.0);
             }
-            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::bg(), tertiary, m), 1.0);
+            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::bg(), mix_color(tertiary, fg, perto), m), 1.0);
+        }
+
+        // pasta do projeto
+        if !vm.dash_pasta.is_empty() {
+            let pasta = format!("pasta: {}", vm.dash_pasta);
+            let pw = self.mono.measure(&pasta, px);
+            c.text(&mut self.mono, px, cx - pw / 2.0, (h * 0.88 + pitch * 1.5).round(), &pasta, mix_color(d::bg(), tertiary, m), 1.0);
         }
 
         // rodapé
@@ -2661,5 +2706,26 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(200 + 8 * i));
         }
         assert!((sc.cur_y.x - sc.cur_y.target).abs() < 0.5, "sem animação o cursor chega em ~3 quadros");
+    }
+
+    #[test]
+    fn tela_inicial_tem_uma_area_de_clique_por_acao() {
+        let Some(mut sc) = cena() else { return };
+        let mut s = Session::new("", None);
+        let lay = sc.layout(1000, 700, 1);
+        s.resize(lay.cols, lay.rows.floor());
+        let mut vm = s.view_model();
+        vm.dash = true;
+        quadro(&mut sc, &vm, 1000, 700, Instant::now());
+        assert_eq!(sc.dash_rects.len(), crate::native::DASH_ACOES.len());
+        // cada área é uma faixa na vertical, uma acima da outra, no meio da janela
+        for (i, &(x0, y0, x1, y1)) in sc.dash_rects.iter().enumerate() {
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            assert_eq!(sc.dash_hit(cx, cy), Some(i));
+            if i > 0 {
+                assert!(y0 >= sc.dash_rects[i - 1].1, "em ordem");
+            }
+        }
+        assert_eq!(sc.dash_hit(5.0, 5.0), None);
     }
 }

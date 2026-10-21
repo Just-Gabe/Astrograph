@@ -143,6 +143,10 @@ pub struct ViewModel {
     pub hits_id: u64,
     /// tela inicial (nenhum arquivo, buffer vazio) em vez do texto
     pub dash: bool,
+    /// ação destacada no menu da tela inicial (teclado ou mouse)
+    pub dash_sel: usize,
+    /// pasta do projeto (para mostrar na tela inicial)
+    pub dash_pasta: String,
     pub picker: Option<PickerView>,
     pub tree: Option<TreeView>,
     pub term: Option<TermView>,
@@ -220,6 +224,8 @@ impl ViewModel {
             hits: Vec::new(),
             hits_id: 0,
             dash: false,
+            dash_sel: 0,
+            dash_pasta: String::new(),
             picker: None,
             tree: None,
             term: None,

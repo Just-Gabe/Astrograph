@@ -43,6 +43,9 @@ enum Destino {
     Agente(&'static str),
     Modo(&'static str),
     Sessao { id: String, pasta: PathBuf },
+    /// navegar para dentro de uma pasta / abrir a pasta como projeto
+    Pasta(PathBuf),
+    AbrirPasta(PathBuf),
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +124,9 @@ struct Comp {
 const COMP_LINHAS: usize = 8;
 /// quanto esperar depois da líder para mostrar o menu de atalhos
 const LIDER_MENU_MS: u64 = 450;
+
+/// Ações do menu da tela inicial, na ordem em que aparecem (a letra é o atalho).
+pub const DASH_ACOES: [char; 7] = ['n', 'f', 'p', 'o', 'w', 'a', 's'];
 
 /// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
 /// ainda está selecionado.
@@ -219,6 +225,8 @@ pub struct Session {
     toast_id: u64,
     seq: u64,
     dash: bool,
+    /// ação destacada no menu da tela inicial
+    dash_sel: usize,
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
@@ -377,6 +385,7 @@ impl Session {
             lang,
             doc: None,
             dash: false,
+            dash_sel: 0,
             picker: None,
             tree: None,
             tree_focus: false,
@@ -536,6 +545,11 @@ impl Session {
 
     pub fn modified(&self) -> bool {
         self.ed.buf.rev != self.saved_rev
+    }
+
+    /// O nome mostrado na aba.
+    fn nome_curto(&self) -> String {
+        self.nome_fixo.clone().or_else(|| self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into())
     }
 
     /// Este painel ou algum outro da aba tem alterações não salvas.
@@ -727,6 +741,7 @@ impl Session {
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
+                [Key::Char('f'), Key::Char('p')] => self.pasta_navegar(self.root.clone()),
                 _ => {
                     // não é atalho: devolve as teclas ao editor
                     let all = std::mem::take(&mut self.leader);
@@ -775,26 +790,17 @@ impl Session {
         }
         if self.dash && livre {
             match k {
-                Key::Char('n') => {
-                    self.dash = false;
-                    self.ed.feed(&[Key::Char('i')]);
+                // j/k, Ctrl+N/P e as setas movem o destaque; Enter faz a ação destacada
+                Key::Char('j') | Key::Ctrl('n') => {
+                    self.dash_sel = (self.dash_sel + 1).min(DASH_ACOES.len() - 1);
                     return;
                 }
-                Key::Char('f') => return self.pick_open(PickKind::Arquivos),
-                Key::Char('o') => return self.pick_open(PickKind::Recentes),
-                Key::Char('w') => return self.pick_open(PickKind::Texto),
-                Key::Char('a') => return self.open_agent(),
-                Key::Char('s') => {
-                    // última conversa do Claude Code deste projeto
-                    let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
-                    // só retoma sozinho a conversa deste projeto; sem ela, mostra a lista para escolher
-                    // (não abre de surpresa uma conversa de outro projeto)
-                    match lista.iter().find(|s| s.pasta == self.root).cloned() {
-                        Some(s) => self.retomar_sessao(&s.id, &s.pasta),
-                        None => self.agente_sessoes(),
-                    }
+                Key::Char('k') | Key::Ctrl('p') => {
+                    self.dash_sel = self.dash_sel.saturating_sub(1);
                     return;
                 }
+                Key::Enter => return self.dash_acao(DASH_ACOES[self.dash_sel.min(DASH_ACOES.len() - 1)]),
+                Key::Char(c) if DASH_ACOES.contains(&c) => return self.dash_acao(c),
                 _ => {}
             }
         }
@@ -802,6 +808,96 @@ impl Session {
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
         }
+    }
+
+    /// Faz a ação da tela inicial identificada pela letra (a mesma tecla do atalho).
+    fn dash_acao(&mut self, c: char) {
+        if let Some(i) = DASH_ACOES.iter().position(|&a| a == c) {
+            self.dash_sel = i;
+        }
+        match c {
+            'n' => {
+                self.dash = false;
+                self.ed.feed(&[Key::Char('i')]);
+            }
+            'f' => self.pick_open(PickKind::Arquivos),
+            'p' => self.pasta_navegar(self.root.clone()),
+            'o' => self.pick_open(PickKind::Recentes),
+            'w' => self.pick_open(PickKind::Texto),
+            'a' => self.open_agent(),
+            's' => {
+                // última conversa do Claude Code deste projeto; sem ela, mostra a lista para escolher
+                // (não abre de surpresa uma conversa de outro projeto)
+                let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
+                match lista.iter().find(|s| s.pasta == self.root).cloned() {
+                    Some(s) => self.retomar_sessao(&s.id, &s.pasta),
+                    None => self.agente_sessoes(),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Clique num item do menu da tela inicial.
+    pub fn dash_click(&mut self, i: usize) {
+        if !self.dash || self.picker.is_some() || i >= DASH_ACOES.len() {
+            return;
+        }
+        self.dash_acao(DASH_ACOES[i]);
+    }
+
+    /// O mouse passou por cima de um item do menu da tela inicial: o destaque vai para ele.
+    pub fn dash_hover(&mut self, i: usize) {
+        if self.dash && self.picker.is_none() && i < DASH_ACOES.len() {
+            self.dash_sel = i;
+        }
+    }
+
+    /// Lista as pastas de `dir` para escolher: a primeira linha abre a própria pasta, `..` sobe, as outras entram.
+    fn pasta_navegar(&mut self, dir: PathBuf) {
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let dir = crate::busca::sem_prefixo_unc(&dir);
+        let mut itens = vec![ListaItem { texto: "Abrir esta pasta".into(), detalhe: crate::busca::encurtar_home(&dir), destino: Destino::AbrirPasta(dir.clone()) }];
+        if let Some(pai) = dir.parent() {
+            itens.push(ListaItem { texto: ".. (pasta acima)".into(), detalhe: crate::busca::encurtar_home(pai), destino: Destino::Pasta(pai.to_path_buf()) });
+        }
+        let mut subs: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                    .filter(|(n, _)| !n.starts_with('.'))
+                    .collect()
+            })
+            .unwrap_or_default();
+        subs.sort_by_key(|(n, _)| n.to_lowercase());
+        itens.extend(subs.into_iter().take(1000).map(|(n, p)| ListaItem { texto: format!("  {n}/"), detalhe: String::new(), destino: Destino::Pasta(p) }));
+        self.pick_lista(&format!("Abrir pasta · {}", crate::busca::encurtar_home(&dir)), itens);
+    }
+
+    /// Abre o Astrograph nesta pasta: ela vira a raiz do projeto (buscas, explorador, git, terminal e agentes).
+    pub fn abrir_pasta(&mut self, dir: PathBuf) {
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let dir = crate::busca::sem_prefixo_unc(&dir);
+        if !dir.is_dir() {
+            self.say(format!("Não é uma pasta: {}", dir.display()), ToastKind::Error);
+            return;
+        }
+        if self.modified() {
+            self.say("Alterações não salvas. Salve com :w antes de trocar de pasta.".into(), ToastKind::Error);
+            return;
+        }
+        let _ = std::env::set_current_dir(&dir);
+        self.root = dir.clone();
+        self.picker = None;
+        // o explorador acompanha a pasta nova; o git é lido de novo
+        if self.tree.is_some() {
+            self.tree = Some(Arvore::nova(&dir));
+            self.tree_git_load();
+        }
+        self.tree_clip = None;
+        self.git_load();
+        self.say(format!("Pasta aberta: {}", crate::busca::encurtar_home(&dir)), ToastKind::Done);
     }
 
     // ------------------------------------------------------------------
@@ -2870,6 +2966,8 @@ impl Session {
                     Destino::Agente(bin) => self.escolher_agente(bin),
                     Destino::Modo(id) => self.escolher_modo(id),
                     Destino::Sessao { id, pasta } => self.retomar_sessao(&id, &pasta),
+                    Destino::Pasta(d) => self.pasta_navegar(d),
+                    Destino::AbrirPasta(d) => self.abrir_pasta(d),
                 }
                 return;
             }
@@ -3320,6 +3418,20 @@ impl Session {
                 }
             }
             "wq" | "x" | "xit" | "exit" => self.write_sair(arg, true),
+            "cd" | "chdir" | "lcd" => {
+                // `:cd pasta` abre o Astrograph naquela pasta (`~` é a home; sem argumento, mostra a lista)
+                if arg.is_empty() {
+                    return self.pasta_navegar(self.root.clone());
+                }
+                let alvo = match arg.strip_prefix('~') {
+                    Some(r) => crate::busca::pasta_home().map(|h| h.join(r.trim_start_matches(['/', '\\']))).unwrap_or_else(|| PathBuf::from(arg)),
+                    None => {
+                        let p = PathBuf::from(arg);
+                        if p.is_absolute() { p } else { self.root.join(p) }
+                    }
+                };
+                self.abrir_pasta(alvo);
+            }
             "e" | "edit" => {
                 if arg.is_empty() {
                     return;
@@ -3756,6 +3868,8 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
+            dash_sel: self.dash_sel,
+            dash_pasta: crate::busca::encurtar_home(&self.root),
             diags,
             hover: self.hover_text.clone(),
             whichkey: self.menu_lider(),
@@ -3887,6 +4001,8 @@ pub struct Workspace {
     /// tamanho da área de texto (colunas, linhas)
     dims: (usize, f32),
     pub sair: bool,
+    /// a janela pediu para fechar com alterações não salvas: um segundo pedido logo depois descarta
+    fechar_armado: Option<std::time::Instant>,
 }
 
 impl Workspace {
@@ -3901,7 +4017,7 @@ impl Workspace {
         s.set_notify(notify.clone());
         s.modo_abas = true;
         s.lsp_attach();
-        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false }
+        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false, fechar_armado: None }
     }
 
     fn atual(&mut self) -> &mut Session {
@@ -4297,6 +4413,19 @@ impl Workspace {
     }
 
     /// Resolve o que a aba ativa pediu (abrir arquivo, comandos de aba, sair).
+    /// O botão de fechar da janela. Sem alterações não salvas sai; com elas avisa quais arquivos e só sai
+    /// no segundo pedido (em até 6 s), como o `confirm qa` do Neovim.
+    pub fn pedido_de_fechar(&mut self) {
+        let sujas: Vec<String> = self.abas.iter().filter(|s| s.tem_alteracoes()).map(|s| s.nome_curto()).collect();
+        if sujas.is_empty() || self.fechar_armado.is_some_and(|t| t.elapsed().as_secs() < 6) {
+            self.sair = true;
+            return;
+        }
+        self.fechar_armado = Some(std::time::Instant::now());
+        let lista = sujas.join(", ");
+        self.atual().say(format!("Alterações não salvas em {lista}. Salve com :w ou feche a janela de novo para descartar."), ToastKind::Error);
+    }
+
     fn depois(&mut self) {
         for _ in 0..8 {
             // as edições do painel focado chegam aos irmãos antes de qualquer pedido (fechar, dividir)
@@ -4467,6 +4596,9 @@ pub async fn native_task(
             UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
             UiCommand::TreeClick(i) => w.atual().tree_click(i),
+            UiCommand::Close => w.pedido_de_fechar(),
+            UiCommand::DashClick(i) => w.atual().dash_click(i),
+            UiCommand::DashHover(i) => w.atual().dash_hover(i),
             UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
             UiCommand::Paste(t) => w.atual().colar(&t),
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
@@ -6282,5 +6414,81 @@ mod testes {
         // o teclado do explorador segue funcionando
         s.feed(" ejk<CR>");
         assert_eq!(modelo(&mut s).name, "beta.rs");
+    }
+
+    #[test]
+    fn tela_inicial_clique_teclado_e_abrir_pasta() {
+        let d = projeto("dash");
+        let outro = projeto("dash-outra");
+        // j/k movem o destaque, Enter faz a ação destacada
+        let mut s = Session::new("", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.dash = true;
+        s.feed("jj");
+        assert_eq!(modelo(&mut s).dash_sel, 2, "terceira ação = Abrir pasta");
+        s.feed("k");
+        assert_eq!(modelo(&mut s).dash_sel, 1);
+        // mouse por cima leva o destaque; clicar faz a ação (Abrir pasta abre a lista de pastas)
+        s.dash_hover(2);
+        assert_eq!(modelo(&mut s).dash_sel, 2);
+        s.dash_click(2);
+        let m = modelo(&mut s);
+        let p = m.picker.expect("lista de pastas");
+        assert!(p.title.starts_with("Abrir pasta"), "{}", p.title);
+        assert_eq!(p.items[0].text, "Abrir esta pasta");
+        // digitar filtra; Enter na primeira linha abre a pasta atual como projeto
+        s.feed("<CR>");
+        assert!(modelo(&mut s).picker.is_none());
+        // entrar numa pasta e abri-la
+        let mut s2 = Session::new("", None);
+        s2.root = d.clone();
+        s2.resize(80, 20.0);
+        s2.dash = true;
+        s2.feed("p");
+        let itens: Vec<String> = modelo(&mut s2).picker.unwrap().items.iter().map(|i| i.text.clone()).collect();
+        assert!(itens.iter().any(|t| t.contains("src/")), "{itens:?}");
+        s2.feed("src<CR>");
+        let p = modelo(&mut s2).picker.expect("dentro de src");
+        assert!(p.title.contains("src"), "{}", p.title);
+        s2.feed("<CR>");
+        assert!(s2.root.ends_with("src"), "{:?}", s2.root);
+        // `:cd` troca de pasta direto
+        s2.dash = true;
+        s2.feed(&format!(":cd {}<CR>", outro.display()));
+        assert_eq!(s2.root.canonicalize().unwrap(), outro.canonicalize().unwrap());
+        // com o explorador aberto, ele passa a mostrar a pasta nova
+        s2.feed(" e");
+        let t = modelo(&mut s2).tree.unwrap();
+        assert_eq!(t.root, outro.file_name().unwrap().to_string_lossy());
+        // pasta que não existe: avisa e não muda
+        let antes = s2.root.clone();
+        s2.abrir_pasta(outro.join("nao-existe"));
+        assert_eq!(s2.root, antes);
+        // "Novo arquivo" (primeira ação) por clique entra no modo de inserção
+        let mut s3 = Session::new("", None);
+        s3.resize(80, 20.0);
+        s3.dash = true;
+        s3.dash_click(0);
+        let m = modelo(&mut s3);
+        assert!(!m.dash && m.mode == ModeKind::Insert);
+    }
+
+    #[test]
+    fn fechar_a_janela_sai_ou_avisa_das_alteracoes() {
+        let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
+        // sem alterações: sai direto
+        let mut w = Workspace::new(None, ' ', notify.clone());
+        w.pedido_de_fechar();
+        assert!(w.sair);
+        // com alterações: avisa e só sai no segundo pedido
+        let mut w = Workspace::new(None, ' ', notify);
+        w.atual().feed("ixy<Esc>");
+        w.pedido_de_fechar();
+        assert!(!w.sair, "não sai de primeira com alterações não salvas");
+        let vm = w.view_model();
+        assert!(vm.toast.as_ref().is_some_and(|(_, t, _)| t.contains("não salvas")), "{:?}", vm.toast);
+        w.pedido_de_fechar();
+        assert!(w.sair, "o segundo pedido descarta");
     }
 }
