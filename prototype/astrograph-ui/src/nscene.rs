@@ -115,6 +115,9 @@ pub struct Scene {
     term_geom: Option<(f32, f32, usize, usize)>,
     term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
+    /// duração do deslize do cursor e da rolagem (ms; 0 desliga), de `[cursor]` e `[scroll]` do config
+    anim_cursor_ms: u64,
+    anim_rolagem_ms: u64,
     /// (topo, altura da linha, fundo) do explorador no último quadro, para o clique
     tree_geom: Option<(f32, f32, f32)>,
     tree_top: Spring,
@@ -208,6 +211,8 @@ impl Scene {
             term_geom: None,
             term_cache: None,
             tree_cache: None,
+            anim_cursor_ms: 80,
+            anim_rolagem_ms: 160,
             tree_geom: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
             tree_sel: Spring::new(0.0, 34.0, 1.0),
@@ -270,6 +275,30 @@ impl Scene {
         let area_h = h as f32 - text_y - d::M.bottom * s - self.term.target.max(0.0);
         let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
+    }
+
+    /// Duração do deslize do cursor e da rolagem em ms (`[cursor] animation_ms`, `[scroll] animation_ms`); 0 desliga.
+    pub fn set_animacao(&mut self, cursor_ms: u64, rolagem_ms: u64) {
+        self.anim_cursor_ms = cursor_ms;
+        self.anim_rolagem_ms = rolagem_ms;
+    }
+
+    pub fn animacao(&self) -> (u64, u64) {
+        (self.anim_cursor_ms, self.anim_rolagem_ms)
+    }
+
+    /// Y do cursor (ou da faixa da linha) na tela, relativo ao topo do texto. Enquanto a rolagem ainda chega
+    /// ao destino (a mola do cursor é mais rápida que a da tela), ele fica preso à área visível em vez de
+    /// sair da janela, desde que o destino final esteja dentro dela.
+    fn y_na_tela(&self, lay: &Layout, y_doc: f32) -> f32 {
+        let y = y_doc - (self.top.x - self.over.x);
+        let max = ((lay.rows.floor() - 1.0).max(0.0)) * lay.line_h;
+        let alvo = self.cur_y.target - self.top.target;
+        if alvo >= -1.0 && alvo <= max + 1.0 {
+            y.clamp(0.0, max)
+        } else {
+            y
+        }
     }
 
     /// Hora para o canto inferior direito (`None` desliga o relógio).
@@ -455,6 +484,13 @@ impl Scene {
 
     fn update_targets(&mut self, vm: &ViewModel, lay: &Layout, now: Instant) {
         let s = self.scale;
+        // rapidez das molas do cursor e da rolagem vem do config (0 = sem animação: chega no quadro seguinte)
+        let (w_cur, w_rol) = (Spring::omega_para_ms(self.anim_cursor_ms), Spring::omega_para_ms(self.anim_rolagem_ms));
+        for sp in [&mut self.cur_x, &mut self.cur_y, &mut self.hl_y] {
+            sp.set_omega(w_cur);
+        }
+        self.cur_w.set_omega(w_cur * 1.15);
+        self.top.set_omega(w_rol);
         self.top.target = vm.top * lay.line_h;
         // cursor em coordenadas do documento (a rolagem não o arrasta)
         let line = vm.line(vm.cursor.0);
@@ -469,6 +505,10 @@ impl Scene {
         let beam = insert || vm.cmd.is_some();
         let x = lay.text_x + (v as f32 - vm.left as f32) * lay.char_w;
         self.cur_x.target = x;
+        // digitando: o cursor acompanha o texto na hora (a mola atrasada parece lag); só os saltos deslizam
+        if insert && !self.first && vm.cursor.0 == self.last_cursor.0 && self.mode == ModeKind::Insert {
+            self.cur_x.snap(x);
+        }
         self.cur_y.target = vm.cursor.0 as f32 * lay.line_h;
         self.cur_w.target = if beam { 2.0 * s } else { cells * lay.char_w };
         self.hl_y.target = self.cur_y.target;
@@ -504,6 +544,15 @@ impl Scene {
                 }
                 self.shift.target = 0.0;
             }
+        }
+        // `animation_ms = 0`: sem deslize, direto no alvo (uma mola com rapidez enorme não é estável)
+        if self.anim_cursor_ms == 0 {
+            for sp in [&mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y] {
+                sp.snap(sp.target);
+            }
+        }
+        if self.anim_rolagem_ms == 0 {
+            self.top.snap(self.top.target);
         }
         self.last_lines = vm.lines;
         self.last_cursor = vm.cursor;
@@ -686,7 +735,7 @@ impl Scene {
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
-        let hl_y = lay.text_y + self.hl_y.x - top_px;
+        let hl_y = lay.text_y + self.y_na_tela(lay, self.hl_y.x);
         if vm.mode != ModeKind::Visual && vm.mode != ModeKind::VisualLine {
             c.rrect(10.0 * s, hl_y, w - 20.0 * s, lay.line_h, 8.0 * s, d::white(), 0.045);
         }
@@ -921,7 +970,7 @@ impl Scene {
             return;
         }
         let x = self.cur_x.x;
-        let y = lay.text_y + self.cur_y.x - top_px;
+        let y = lay.text_y + self.y_na_tela(lay, self.cur_y.x);
         let wpx = self.cur_w.x.max(2.0 * s);
         let color = self.mode_color(now);
         let insert = vm.mode == ModeKind::Insert;
@@ -1211,7 +1260,7 @@ impl Scene {
         let row_h = 27.0 * s;
         let linha = vm.line(cv.anchor.0);
         let ax = lay.text_x + (vcol_start(&linha, cv.anchor.1) as f32 - vm.left as f32) * lay.char_w - 38.0 * s;
-        let cur_top = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
+        let cur_top = lay.text_y + self.y_na_tela(lay, self.cur_y.x);
         let maior = cv.items.iter().map(|i| i.label.chars().count() as f32 * lay.char_w + if i.detail.is_empty() { 0.0 } else { self.ui.measure(&i.detail.chars().take(28).collect::<String>(), 11.5 * s) + 28.0 * s }).fold(0.0, f32::max);
         let cw = (maior + 74.0 * s).clamp(240.0 * s, 560.0 * s);
         let ch = cv.items.len() as f32 * row_h + 12.0 * s;
@@ -1265,9 +1314,9 @@ impl Scene {
         let largura = linhas.iter().map(|l| l.chars().take(90).map(|ch| self.ui.advance(ch, px)).sum::<f32>()).fold(0.0, f32::max).clamp(160.0 * s, 620.0 * s);
         let (cw, ch_h) = (largura + 32.0 * s, linhas.len() as f32 * px * 1.5 + 22.0 * s);
         let x = (self.cur_x.x).min(w - cw - 16.0 * s).max(self.side.x + 12.0 * s);
-        let mut y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x) + lay.line_h + 6.0 * s;
+        let mut y = lay.text_y + self.y_na_tela(lay, self.cur_y.x) + lay.line_h + 6.0 * s;
         if y + ch_h > h - d::M.bottom * s {
-            y = (lay.text_y + self.cur_y.x - (self.top.x - self.over.x) - ch_h - 6.0 * s).max(lay.text_y);
+            y = (lay.text_y + self.y_na_tela(lay, self.cur_y.x) - ch_h - 6.0 * s).max(lay.text_y);
         }
         c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, d::k_sombra() * 0.5);
         c.rrect(x, y, cw, ch_h, 12.0 * s, d::surface_hi(), 0.98);
@@ -1296,7 +1345,7 @@ impl Scene {
         let cw = (larg.max(doc_larg) + 32.0 * s).clamp(160.0 * s, w - 24.0 * s);
         let ch_h = if sig.doc.is_empty() { px * 1.5 + 20.0 * s } else { px * 3.0 + 22.0 * s };
         let x = (self.cur_x.x).min(w - cw - 16.0 * s).max(self.side.x + 12.0 * s);
-        let linha_y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
+        let linha_y = lay.text_y + self.y_na_tela(lay, self.cur_y.x);
         // acima da linha (o completar fica abaixo)
         let y = (linha_y - ch_h - 6.0 * s).max(lay.text_y);
         c.shadow(x, y, cw, ch_h, 10.0 * s, 20.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5);
@@ -2519,5 +2568,98 @@ mod testes {
             }
             println!("{w}x{h}: {:.2} ms/quadro", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
         }
+    }
+
+    /// Tempo (ms, quadros de ~8 ms) até o cursor chegar a menos de meio pixel do alvo depois de `teclas`.
+    fn ms_ate_chegar(texto: &str, antes: &str, teclas: &str) -> (f32, f32) {
+        let mut sc = cena().expect("fontes");
+        let mut s = Session::new(texto, Some("a.rs".into()));
+        let lay = sc.layout(800, 600, 30);
+        s.resize(lay.cols, lay.rows.floor());
+        s.feed(antes);
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        for i in 0..40 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(8 * i));
+        }
+        s.feed(teclas);
+        let vm = s.view_model();
+        let t1 = t0 + Duration::from_millis(400);
+        let (mut chegou, mut hl) = (None, None);
+        for i in 0..200u64 {
+            quadro(&mut sc, &vm, 800, 600, t1 + Duration::from_millis(8 * i));
+            let dx = (sc.cur_x.x - sc.cur_x.target).abs();
+            let dy = (sc.cur_y.x - sc.cur_y.target).abs();
+            if chegou.is_none() && dx < 0.5 && dy < 0.5 {
+                chegou = Some(8.0 * (i as f32 + 1.0));
+            }
+            if hl.is_none() && (sc.hl_y.x - sc.hl_y.target).abs() < 0.5 {
+                hl = Some(8.0 * (i as f32 + 1.0));
+            }
+        }
+        (chegou.unwrap_or(9999.0), hl.unwrap_or(9999.0))
+    }
+
+    #[test]
+    fn cursor_chega_rapido_e_a_faixa_da_linha_acompanha() {
+        let texto: String = (0..30).map(|i| format!("    let linha_{i} = valor + {i}; // comentario\n")).collect();
+        for (nome, antes, teclas, max_ms) in [("j", "", "j", 100.0), ("w", "", "w", 100.0), ("5j", "", "5j", 140.0), ("G", "", "G", 200.0), ("l", "", "l", 64.0), ("$", "", "$", 170.0)] {
+            let (c, h) = ms_ate_chegar(&texto, antes, teclas);
+            assert!(c <= max_ms, "{nome}: o cursor levou {c} ms (máx. {max_ms})");
+            assert!(h <= c + 16.0, "{nome}: a faixa da linha ({h} ms) atrasou em relação ao cursor ({c} ms)");
+        }
+        // digitar: o cursor acompanha o texto no mesmo quadro
+        let (c, _) = ms_ate_chegar(&texto, "i", "abc");
+        assert!(c <= 16.0, "digitando, o cursor atrasou {c} ms");
+    }
+
+    #[test]
+    fn cursor_nao_sai_da_janela_enquanto_a_tela_rola() {
+        let texto: String = (0..120).map(|i| format!("linha {i}\n")).collect();
+        let mut sc = cena().expect("fontes");
+        let mut s = Session::new(&texto, Some("a.rs".into()));
+        let lay = sc.layout(800, 400, 120);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        for i in 0..20 {
+            quadro(&mut sc, &vm, 800, 400, t0 + Duration::from_millis(8 * i));
+        }
+        s.feed("G");
+        let vm = s.view_model();
+        let area = lay.rows.floor() * lay.line_h;
+        let mut fora_ms = 0.0f32;
+        let mut max_fora = 0.0f32;
+        for i in 0..120u64 {
+            quadro(&mut sc, &vm, 800, 400, t0 + Duration::from_millis(200 + 8 * i));
+            let y = sc.y_na_tela(&lay, sc.cur_y.x);
+            let fora = (y - (area - lay.line_h)).max(-y).max(0.0);
+            if fora > 1.0 {
+                fora_ms += 8.0;
+            }
+            max_fora = max_fora.max(fora);
+        }
+        assert!(fora_ms == 0.0, "o cursor ficou {fora_ms} ms fora da janela (até {max_fora:.0} px)");
+    }
+
+    #[test]
+    fn animation_ms_zero_no_config_desliga_o_deslize_do_cursor() {
+        let mut sc = cena().expect("fontes");
+        sc.set_animacao(0, 0);
+        let texto: String = (0..30).map(|i| format!("linha {i}\n")).collect();
+        let mut s = Session::new(&texto, Some("a.rs".into()));
+        let lay = sc.layout(800, 600, 30);
+        s.resize(lay.cols, lay.rows.floor());
+        let t0 = Instant::now();
+        let vm = s.view_model();
+        for i in 0..10 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(8 * i));
+        }
+        s.feed("5j");
+        let vm = s.view_model();
+        for i in 0..3 {
+            quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(200 + 8 * i));
+        }
+        assert!((sc.cur_y.x - sc.cur_y.target).abs() < 0.5, "sem animação o cursor chega em ~3 quadros");
     }
 }

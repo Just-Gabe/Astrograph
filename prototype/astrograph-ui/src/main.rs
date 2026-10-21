@@ -141,7 +141,9 @@ fn paint_paineis(
     };
     for (id, r) in &rects {
         if !pool.contains_key(id) {
-            if let Some(sc) = nscene::Scene::new(font_px, scale) {
+            if let Some(mut sc) = nscene::Scene::new(font_px, scale) {
+                let (cur, rol) = shell.animacao();
+                sc.set_animacao(cur, rol);
                 pool.insert(*id, sc);
             }
         }
@@ -1184,6 +1186,9 @@ impl ApplicationHandler<UserEvent> for App {
         let _ = self.tx.send(UiCommand::Resize(lay.cols as i64, lay.rows as i64));
         if self.native.is_some() {
             self.scene = nscene::Scene::new(self.base_font * scale, scale);
+            if let Some(scene) = self.scene.as_mut() {
+                scene.set_animacao(self.cfg.cursor.animation_ms, self.cfg.scroll.animation_ms);
+            }
             if let Some(scene) = &self.scene {
                 let lay = scene.layout(size.width, size.height, 1);
                 self.last_grid = (lay.cols, lay.rows.floor() as usize);

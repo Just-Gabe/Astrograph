@@ -43,6 +43,16 @@ impl Spring {
         Spring { x, v: 0.0, target: x, omega, zeta }
     }
 
+    /// Troca a rapidez da mola (1/s) sem mexer na posição.
+    pub fn set_omega(&mut self, omega: f32) {
+        self.omega = omega;
+    }
+
+    /// Rapidez de uma mola criticamente amortecida que chega (a ~1% do caminho) em `ms` milissegundos.
+    pub fn omega_para_ms(ms: u64) -> f32 {
+        4.6 / (ms.max(1) as f32 / 1000.0)
+    }
+
     pub fn snap(&mut self, x: f32) {
         self.x = x;
         self.target = x;
