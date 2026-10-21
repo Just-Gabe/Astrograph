@@ -202,7 +202,7 @@ impl Default for WindowCfg {
 impl Default for FontCfg {
     fn default() -> Self {
         FontCfg {
-            size: 18.0,
+            size: 22.0,
             line_height: 1.2,
             regular: None,
             bold: None,

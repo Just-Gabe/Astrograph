@@ -18,8 +18,8 @@ padding = 10
 # A janela nunca passa do tamanho da tela; abre centralizada.
 
 [font]
-# Tamanho em pixels da EM (tamanho "nominal" da fonte).
-size = 18.0
+# Tamanho em pixels da EM (tamanho "nominal" da fonte). Ctrl +/- muda na hora.
+size = 22.0
 # Multiplicador de altura de linha (0.8 a 3.0). 1.2 da respiro ao texto.
 line_height = 1.2
 # Fonte por estilo: caminho absoluto ou nome de arquivo (procura em
