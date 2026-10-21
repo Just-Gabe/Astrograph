@@ -35,6 +35,7 @@ menor trecho de teclas. Os casos que concordam viram regressão
 | Objetos de texto `iw aw iW aW ip ap i( a( ib i[ i{ iB i< i\" i' i\``, com contagem | **99,9%** (2500 casos) |
 | Visual `v` e `V` (movimentos, objetos, `d y c x X D Y C s S < > ~ u U J r o`), com as regras do Vim (cursor sobre a quebra de linha, `ip` que estende) | 99,2% (2500 casos) |
 | Busca (`/ ? n N * #`, realce animado, `:noh`) | pronto |
+| **Folds** (`zf zF zo zO zc zC za zA zv zx zX zR zM zr zm zd zD zE zn zN zi zj zk`; `:set foldmethod=indent\|syntax`, `foldlevel`, `[editor] foldmethod`): a dobra fechada some do texto com um aviso `⋯ N linhas`, `j`/`k` pulam por cima, operadores por linhas levam a dobra inteira e a margem mostra os números do arquivo | **99%** (`dob`) |
 | Marcas (`m a-z`, `'x`, `` `x ``, `''`, `'<` `'>`, `'.` `'^` `'[` `']`), **jumplist** (`<C-o>`/`<C-i>`), **changelist** (`g;`/`g,`), `gi`, com reajuste por linhas e desfazer | **99%** (`marc`) e 97% (`marc2`) |
 | Macros (`q`, `@`, `@@`) | **100%** (400 casos) |
 | `p`/`P`/`gp`/`gP` no visual (substitui a seleção; linha x caractere, registrador, um passo de desfazer) | **97%** (145/150) |
@@ -70,11 +71,31 @@ objetos de texto, visual, desfazer e `.` descritos acima, mais `:w`, `:q`, `:q!`
 (`n` novo, `f` buscar arquivo, `o` recentes, `w` buscar palavra). O padrão do app é o motor nativo; `ASTROGRAPH_ENGINE=nvim` (ou `[engine] native = false`)
 volta ao Neovim.
 
+## Desempenho
+
+Medido no motor nativo com um arquivo de **200 mil linhas** (14 MB), CPU, sem animações
+(`cargo test --release bench_arquivo_grande -- --ignored --nocapture` em `prototype/astrograph-ui`; cada número
+inclui montar o modelo da tela depois da tecla):
+
+| Operação | Custo |
+| --- | --- |
+| abrir o texto na sessão | ~60 ms |
+| primeiro quadro | ~3 ms |
+| `j`, `20j`, `G` e `gg` | menos de 10 µs |
+| digitar um caractere (`Ax<Esc>`) | ~1 ms |
+| `u` (desfazer) | ~1 ms |
+| `dd` | ~3 ms |
+| `/padrão` até o fim do arquivo | ~95 ms |
+| `:%s/a/b/g` nas 200 mil linhas | ~0,8 s |
+
+O quadro de pixels (1280×800) custa ~2 ms; sem animação o app não repinta. As buscas de arquivos e de texto rodam em
+threads (a lista de arquivos tem cache por raiz), então não travam a digitação.
+
 ## Divergências conhecidas
 
 - Mapeamentos: sem `timeoutlen` (um prefixo pendente espera a próxima tecla; `<Esc>` solta), sem `omap`/`cmap`/`<expr>`,
   e os feitos com `:map` valem só até fechar o app (os permanentes vão em `[keys.normal]` etc.).
-- Ainda não existem: **folds** (`zf`, `za`...), quebra de linha (`wrap`) e rolagem horizontal suave, IME/teclas mortas validados
+- Ainda não existem: quebra de linha (`wrap`) e rolagem horizontal suave, IME/teclas mortas validados
   no Windows e no macOS, modelo de plugins sem Lua, abreviações, `=`/`!` (filtros), `:r`, `:w !cmd`, `"%`, `:registers`.
 - Git: o branch e o `HEAD` são lidos em thread; arquivos com mais de 5000 linhas têm os sinais da margem
   calculados em segundo plano (os sinais antigos ficam até o cálculo terminar).

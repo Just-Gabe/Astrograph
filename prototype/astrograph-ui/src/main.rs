@@ -44,7 +44,7 @@ use softbuffer::{Context, Rect, Surface};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Fullscreen, Icon, Window, WindowId};
@@ -1165,6 +1165,10 @@ impl ApplicationHandler<UserEvent> for App {
         if self.cfg.theme.mode == "auto" {
             design::set_light(window.theme() == Some(winit::window::Theme::Light));
         }
+        // o motor nativo recebe texto de IMEs (composição de CJK, teclas mortas do sistema)
+        if self.native.is_some() {
+            window.set_ime_allowed(true);
+        }
         let mut renderer =
             Renderer::new(&self.cfg.font, self.cfg.cursor.animation_ms).expect("renderer");
         renderer.set_size(self.base_font * scale);
@@ -1264,6 +1268,13 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => self.request_close(event_loop),
             WindowEvent::Resized(_) => self.request_redraw(),
+            // texto composto por um IME (chinês, japonês, coreano...) ou pelo sistema: entra como se fosse digitado
+            WindowEvent::Ime(Ime::Commit(texto)) => {
+                if !texto.is_empty() {
+                    self.wake_cursor();
+                    let _ = self.tx.send(UiCommand::Keys(escape_text(&texto)));
+                }
+            }
             WindowEvent::ThemeChanged(tema) => {
                 if self.cfg.theme.mode == "auto" {
                     design::set_light(tema == winit::window::Theme::Light);

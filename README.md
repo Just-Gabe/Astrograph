@@ -93,7 +93,7 @@ O Neovim com a config do Astrograph continua como espelho para quem prefere o te
 
 - **Vim completo**: movimentos, operadores, objetos de texto (inclusive de tree-sitter: `if af ic ac ia aa`), visual
   (caractere, linha e bloco), registradores, macros, marcas, jumplist e changelist, `.`, desfazer, busca, `:s :g :normal :sort :t :m`,
-  `gq`, `gf`, `gx`, mapeamentos (`:map`, `[keys]` no `config.toml`) e `:set`.
+  `gq`, `gf`, `gx`, folds (`za`, `zM`, `foldmethod=indent|syntax`), mapeamentos (`:map`, `[keys]` no `config.toml`) e `:set`.
 - **Navegação**: buscador próprio com trecho do arquivo (`<Espaço>ff` arquivos, `fw` texto, `fo` recentes; sem `fd`/`ripgrep`),
   explorador que cria, renomeia, copia, move e apaga arquivos e marca o estado do git (`<Espaço>e`), abas e janelas
   divididas, menu de atalhos ao esperar depois da líder (configurável: `[keys] leader`).
@@ -109,7 +109,7 @@ O Neovim com a config do Astrograph continua como espelho para quem prefere o te
 - **`:Astrograph`**: `atualizar` (transacional, com desfazer automático), `saude`, `agentes`, `modo`, `configurar`, `login`,
   `sessoes`, `atalhos` e `docs`, como no Neovim.
 
-Ainda faltam: folds, quebra de linha (`wrap`) e validação do app no Windows e no macOS; a lista completa está em
+Ainda faltam: quebra de linha (`wrap`) e validação do app no Windows e no macOS; a lista completa está em
 [`docs/motor-nativo.md`](docs/motor-nativo.md).
 
 Um quadro completo custa ~2 ms em 1280×800 (CPU); sem animação, o app não repinta.

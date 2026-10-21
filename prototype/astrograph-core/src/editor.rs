@@ -739,8 +739,7 @@ impl Editor {
             let l = old.line(r).to_string();
             l.strip_suffix('\n').unwrap_or(&l).to_string()
         };
-        let common = n0.min(n1);
-        let f = (0..common).find(|&r| old_line(r) != self.buf.line(r)).unwrap_or(common);
+        let f = primeira_linha_diferente(old, &self.buf.rope);
         let shift = |row: usize, d: i64| (row as i64 + d).max(0) as usize;
         if n1 < n0 {
             let k = n0 - n1;
@@ -862,10 +861,7 @@ impl Editor {
             l.strip_suffix('\n').unwrap_or(&l).to_string()
         };
         let common = n0.min(n1);
-        let mut f = 0;
-        while f < common && old_line(f) == self.buf.line(f) {
-            f += 1;
-        }
+        let mut f = primeira_linha_diferente(old, &self.buf.rope);
         if f >= common && n0 == n1 {
             return;
         }
@@ -876,11 +872,16 @@ impl Editor {
                 if cand >= f {
                     continue;
                 }
-                let ok = if n1 > n0 {
-                    (0..cand).all(|r| old_line(r) == self.buf.line(r)) && (cand..n0).all(|r| old_line(r) == self.buf.line(r + k))
-                } else {
-                    (0..cand).all(|r| old_line(r) == self.buf.line(r)) && (cand..n1).all(|r| old_line(r + k) == self.buf.line(r))
-                };
+                // as linhas antes de `f` já são iguais; só confere o trecho repetido entre `cand` e `f` e que o
+                // resto é o mesmo texto deslocado
+                let resto = if n1 > n0 { n0 } else { n1 };
+                let deslocado = linhas_iguais_no_fim(old, &self.buf.rope, f) >= resto.saturating_sub(f);
+                let ok = deslocado
+                    && if n1 > n0 {
+                        (cand..f).all(|r| old_line(r) == self.buf.line(r + k))
+                    } else {
+                        (cand..f).all(|r| old_line(r + k) == self.buf.line(r))
+                    };
                 if ok {
                     f = cand;
                     break;
@@ -888,10 +889,7 @@ impl Editor {
             }
         }
         // sufixo de linhas iguais
-        let mut suf = 0;
-        while suf < common - f.min(common) && old_line(n0 - 1 - suf) == self.buf.line(n1 - 1 - suf) && n1 - 1 - suf > f.saturating_sub(0) {
-            suf += 1;
-        }
+        let suf = linhas_iguais_no_fim(old, &self.buf.rope, f);
         let row_new = f.min(n1 - 1);
         let col_ini = if f < n0 && f < n1 {
             let (a, b): (Vec<char>, Vec<char>) = (old_line(f).chars().collect(), self.buf.line(f).chars().collect());
@@ -3167,12 +3165,23 @@ impl Editor {
     /// Linhas iguais no começo e no fim dos dois textos (prefixo, sufixo).
     fn common_lines(a: &Rope, b: &Rope) -> (usize, usize) {
         let (la, lb) = (a.len_lines(), b.len_lines());
-        let mut p = 0;
-        while p < la.min(lb) && a.line(p) == b.line(p) {
+        let minimo = la.min(lb);
+        // por pedaços de memória; depois só acerta as poucas linhas de borda
+        let pb = prefixo_comum(a, b);
+        let mut p = a.byte_to_line(pb.min(a.len_bytes())).min(minimo);
+        while p < minimo && a.line(p) == b.line(p) {
             p += 1;
         }
-        let mut q = 0;
-        while q < la.min(lb) - p.min(la.min(lb)) && a.line(la - 1 - q) == b.line(lb - 1 - q) {
+        let limite_q = minimo - p.min(minimo);
+        let sb = sufixo_comum(a, b, a.len_bytes().min(b.len_bytes()));
+        let ini_b = b.len_bytes() - sb;
+        let k = b.byte_to_line(ini_b);
+        let primeira = if b.line_to_byte(k) < ini_b { k + 1 } else { k };
+        let mut q = lb.saturating_sub(primeira).min(limite_q);
+        while q > 0 && a.line(la - q) != b.line(lb - q) {
+            q -= 1;
+        }
+        while q < limite_q && a.line(la - 1 - q) == b.line(lb - 1 - q) {
             q += 1;
         }
         (p, q)
@@ -3381,6 +3390,114 @@ impl Editor {
 }
 
 /// Movimentos que gravam a posição anterior na marca de contexto (`''`).
+/// Quantos bytes iguais há no começo dos dois textos (compara pedaço por pedaço, na velocidade da memória).
+fn prefixo_comum(a: &Rope, b: &Rope) -> usize {
+    let (mut ia, mut ib) = (a.chunks(), b.chunks());
+    let (mut ca, mut cb): (&[u8], &[u8]) = (&[], &[]);
+    let mut pos = 0;
+    loop {
+        if ca.is_empty() {
+            match ia.next() {
+                Some(c) => ca = c.as_bytes(),
+                None => return pos,
+            }
+            continue;
+        }
+        if cb.is_empty() {
+            match ib.next() {
+                Some(c) => cb = c.as_bytes(),
+                None => return pos,
+            }
+            continue;
+        }
+        let n = ca.len().min(cb.len());
+        if ca[..n] == cb[..n] {
+            pos += n;
+            ca = &ca[n..];
+            cb = &cb[n..];
+        } else {
+            return pos + ca.iter().zip(cb.iter()).take_while(|(x, y)| x == y).count();
+        }
+    }
+}
+
+/// Quantos bytes iguais há no fim dos dois textos, sem passar de `limite`.
+fn sufixo_comum(a: &Rope, b: &Rope, limite: usize) -> usize {
+    let (mut ia, _, _, _) = a.chunks_at_byte(a.len_bytes());
+    let (mut ib, _, _, _) = b.chunks_at_byte(b.len_bytes());
+    let (mut ca, mut cb): (&[u8], &[u8]) = (&[], &[]);
+    let mut n_total = 0;
+    loop {
+        if n_total >= limite {
+            return limite;
+        }
+        if ca.is_empty() {
+            match ia.prev() {
+                Some(c) => ca = c.as_bytes(),
+                None => return n_total,
+            }
+            continue;
+        }
+        if cb.is_empty() {
+            match ib.prev() {
+                Some(c) => cb = c.as_bytes(),
+                None => return n_total,
+            }
+            continue;
+        }
+        let n = ca.len().min(cb.len()).min(limite - n_total);
+        let (ta, tb) = (&ca[ca.len() - n..], &cb[cb.len() - n..]);
+        if ta == tb {
+            n_total += n;
+            ca = &ca[..ca.len() - n];
+            cb = &cb[..cb.len() - n];
+        } else {
+            return n_total + ta.iter().rev().zip(tb.iter().rev()).take_while(|(x, y)| x == y).count();
+        }
+    }
+}
+
+fn linha_sem_quebra(r: &Rope, row: usize) -> ropey::RopeSlice<'_> {
+    let l = r.line(row);
+    let n = l.len_chars();
+    if n > 0 && l.char(n - 1) == '\n' { l.slice(..n - 1) } else { l }
+}
+
+/// Primeira linha que difere entre dois textos (ou o tamanho do menor, se um é prefixo do outro em linhas).
+fn primeira_linha_diferente(old: &Rope, new: &Rope) -> usize {
+    let (n0, n1) = (old.len_lines(), new.len_lines());
+    let common = n0.min(n1);
+    let pb = prefixo_comum(old, new);
+    let mut f = new.byte_to_line(pb.min(new.len_bytes())).min(common);
+    // a quebra de linha da última linha pode ser a única diferença: as linhas ainda são iguais
+    while f < common && linha_sem_quebra(old, f) == linha_sem_quebra(new, f) {
+        f += 1;
+    }
+    f
+}
+
+/// Linhas iguais no fim dos dois textos, contando só as depois da linha `f` e sem passar das que sobram.
+fn linhas_iguais_no_fim(old: &Rope, new: &Rope, f: usize) -> usize {
+    let (n0, n1) = (old.len_lines(), new.len_lines());
+    let common = n0.min(n1);
+    let maximo = common.saturating_sub(f).min(n1.saturating_sub(1).saturating_sub(f));
+    if maximo == 0 {
+        return 0;
+    }
+    // só as linhas do fim que cabem dentro dos bytes iguais precisam de conferência linha a linha
+    let inicio_f = new.line_to_byte(f);
+    let limite = new.len_bytes().saturating_sub(inicio_f).min(old.len_bytes().saturating_sub(old.line_to_byte(f.min(n0 - 1))));
+    let sb = sufixo_comum(old, new, limite);
+    let k = new.byte_to_line(new.len_bytes() - sb);
+    let primeira = if new.line_to_byte(k) < new.len_bytes() - sb { k + 1 } else { k };
+    let mut suf = n1.saturating_sub(primeira).min(maximo);
+    // conferência final (a última linha não tem quebra): ajusta no máximo uma linha
+    while suf > 0 && linha_sem_quebra(old, n0 - suf) != linha_sem_quebra(new, n1 - suf) {
+        suf -= 1;
+    }
+    suf
+}
+
 fn is_jump(m: &Mo) -> bool {
     match m.c {
         'G' | 'n' | 'N' | '*' | '#' | '%' | '{' | '}' | '/' | '?' | '\'' | '`' => true,
@@ -3501,6 +3618,68 @@ fn parse_motion(keys: &[Key]) -> MParse {
 
 #[cfg(test)]
 mod testes_sincronizar {
+    /// A comparação por pedaços (prefixo e sufixo) dá o mesmo que comparar linha a linha, em edições aleatórias.
+    #[test]
+    fn diferenca_rapida_igual_a_comparacao_por_linhas() {
+        fn lcg(x: &mut u64) -> u64 {
+            *x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *x >> 33
+        }
+        let mut sem = 12345u64;
+        for caso in 0..600 {
+            let n = 1 + (lcg(&mut sem) % 30) as usize;
+            let linhas: Vec<String> = (0..n)
+                .map(|_| {
+                    let t = lcg(&mut sem) % 4;
+                    "ab ".chars().cycle().skip((lcg(&mut sem) % 3) as usize).take((t * 3) as usize).collect()
+                })
+                .collect();
+            let velho = Rope::from_str(&linhas.join("\n"));
+            let mut novas = linhas.clone();
+            // 1 a 3 edições: trocar, apagar ou inserir linhas
+            for _ in 0..1 + lcg(&mut sem) % 3 {
+                let r = (lcg(&mut sem) as usize) % novas.len().max(1);
+                match lcg(&mut sem) % 3 {
+                    0 if !novas.is_empty() => novas[r].push('x'),
+                    1 if novas.len() > 1 => {
+                        novas.remove(r);
+                    }
+                    _ => novas.insert(r, "ab".repeat((lcg(&mut sem) % 3) as usize)),
+                }
+            }
+            let novo = Rope::from_str(&novas.join("\n"));
+            let (n0, n1) = (velho.len_lines(), novo.len_lines());
+            let l = |r: &Rope, i: usize| linha_sem_quebra(r, i).to_string();
+            // referência: por linhas
+            let common = n0.min(n1);
+            let mut f_ref = 0;
+            while f_ref < common && l(&velho, f_ref) == l(&novo, f_ref) {
+                f_ref += 1;
+            }
+            assert_eq!(primeira_linha_diferente(&velho, &novo), f_ref, "caso {caso}: {linhas:?} -> {novas:?}");
+            let mut suf_ref = 0;
+            while suf_ref < common - f_ref.min(common) && l(&velho, n0 - 1 - suf_ref) == l(&novo, n1 - 1 - suf_ref) && n1 - 1 - suf_ref > f_ref {
+                suf_ref += 1;
+            }
+            if f_ref < common || n0 != n1 {
+                assert_eq!(linhas_iguais_no_fim(&velho, &novo, f_ref), suf_ref, "sufixo, caso {caso}: {linhas:?} -> {novas:?}");
+            }
+            // `common_lines` (usado pelo desfazer) também
+            let (p_ref, q_ref) = {
+                let mut p = 0;
+                while p < n0.min(n1) && velho.line(p) == novo.line(p) {
+                    p += 1;
+                }
+                let mut q = 0;
+                while q < n0.min(n1) - p.min(n0.min(n1)) && velho.line(n0 - 1 - q) == novo.line(n1 - 1 - q) {
+                    q += 1;
+                }
+                (p, q)
+            };
+            assert_eq!(Editor::common_lines(&velho, &novo), (p_ref, q_ref), "common_lines, caso {caso}: {linhas:?} -> {novas:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

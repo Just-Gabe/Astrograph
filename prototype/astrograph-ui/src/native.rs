@@ -4763,6 +4763,42 @@ mod testes {
         assert_eq!(m.lines, 3, "{:?}", m.rope.to_string());
     }
 
+    /// `cargo test --release bench_arquivo_grande -- --ignored --nocapture`: custo de abrir, rolar, editar, buscar
+    /// e trocar texto num arquivo de 200 mil linhas.
+    #[test]
+    #[ignore]
+    fn bench_arquivo_grande() {
+        let n = 200_000;
+        let texto: String = (0..n).map(|i| format!("    let valor_{i} = calcular({i}, \"texto numero {i}\"); // comentario\n")).collect();
+        let t = std::time::Instant::now();
+        let mut s = Session::new(&texto, None);
+        s.resize(120, 40.0);
+        let abrir = t.elapsed();
+        let medir = |s: &mut Session, teclas: &str, vezes: u32| {
+            let t = std::time::Instant::now();
+            for _ in 0..vezes {
+                s.feed(teclas);
+                let _ = s.view_model();
+            }
+            t.elapsed() / vezes
+        };
+        let primeiro = { let t = std::time::Instant::now(); let _ = s.view_model(); t.elapsed() };
+        let j = medir(&mut s, "j", 200);
+        let pagina = medir(&mut s, "20j", 100);
+        let g = medir(&mut s, "Ggg", 20);
+        let digitar = medir(&mut s, "Ax<Esc>", 100);
+        let desfazer = medir(&mut s, "u", 50);
+        let busca = medir(&mut s, "/valor_199999<CR>gg", 3);
+        let troca = {
+            let t = std::time::Instant::now();
+            s.feed(":%s/calcular/computar/g<CR>");
+            let _ = s.view_model();
+            t.elapsed()
+        };
+        let dd = medir(&mut s, "dd", 100);
+        println!("BENCH {n} linhas: abrir {abrir:?} · 1º quadro {primeiro:?} · j {j:?} · 20j {pagina:?} · G+gg {g:?} · digitar {digitar:?} · u {desfazer:?} · /busca {busca:?} · :%s {troca:?} · dd {dd:?}");
+    }
+
     #[test]
     fn menu_de_atalhos_aparece_depois_de_esperar_a_lider() {
         let mut s = Session::new("abc\n", None);

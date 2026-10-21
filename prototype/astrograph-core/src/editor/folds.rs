@@ -341,8 +341,7 @@ impl Editor {
             let l = old.line(r).to_string();
             l.strip_suffix('\n').unwrap_or(&l).to_string()
         };
-        let common = n0.min(n1);
-        let f = (0..common).find(|&r| old_line(r) != self.buf.line(r)).unwrap_or(common);
+        let f = super::primeira_linha_diferente(old, &self.buf.rope);
         if n1 < n0 {
             let k = n0 - n1;
             let pure = f >= n1 || old_line(f + k) == self.buf.line(f);
