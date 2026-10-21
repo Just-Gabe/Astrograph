@@ -1609,8 +1609,18 @@ impl Scene {
                 }
             }
             let nx = x + 15.0 * s;
-            let (font_semi, color) = if it.dir { (true, d::text_strong()) } else { (false, if abs == tv.sel { d::text_strong() } else { d::text() }) };
-            let maxw = sw - nx - 12.0 * s;
+            let (font_semi, mut color) = if it.dir { (true, d::text_strong()) } else { (false, if abs == tv.sel { d::text_strong() } else { d::text() }) };
+            // git: o nome ganha a cor do estado e uma letra à direita
+            let git_cor = match it.git {
+                'M' | 'R' => Some(d::ORANGE),
+                'A' | '?' => Some(d::GREEN),
+                'D' | 'U' => Some(d::RED),
+                _ => None,
+            };
+            if let (Some(gc), false) = (git_cor, it.dir) {
+                color = gc;
+            }
+            let maxw = sw - nx - 12.0 * s - if git_cor.is_some() { 16.0 * s } else { 0.0 };
             let mut name = it.name.clone();
             while self.ui.measure(&name, npx) > maxw && name.chars().count() > 3 {
                 name.pop();
@@ -1622,6 +1632,11 @@ impl Scene {
                 c.text(&mut self.ui_semi, npx, nx, base, &name, color, 1.0);
             } else {
                 c.text(&mut self.ui, npx, nx, base, &name, color, 0.92);
+            }
+            if let Some(gc) = git_cor {
+                let marca = if it.dir { "•".to_string() } else if it.git == '?' { "U".to_string() } else { it.git.to_string() };
+                let mw = self.ui_semi.measure(&marca, 11.0 * s);
+                c.text(&mut self.ui_semi, 11.0 * s, sw - 14.0 * s - mw, base, &marca, gc, 0.9);
             }
         }
         c.clip = prev_clip;

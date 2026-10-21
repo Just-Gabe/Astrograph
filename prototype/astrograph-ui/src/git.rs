@@ -27,6 +27,61 @@ pub fn raiz(dir: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8_lossy(&o).trim()))
 }
 
+/// Estado de cada arquivo alterado em `dir` (caminho absoluto -> `M` modificado, `A` novo no índice,
+/// `?` não rastreado, `D` apagado, `R` renomeado, `U` conflito). As pastas herdam o estado mais
+/// forte do que há dentro delas.
+pub fn estados(dir: &Path) -> std::collections::HashMap<PathBuf, char> {
+    let mut mapa = std::collections::HashMap::new();
+    let Some(topo) = raiz(dir) else { return mapa };
+    let Some(o) = git(&topo, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return mapa };
+    let texto = String::from_utf8_lossy(&o).into_owned();
+    let mut itens = texto.split('\0').filter(|s| !s.is_empty());
+    let forca = |c: char| match c {
+        'U' => 5,
+        'D' => 4,
+        'M' => 3,
+        'R' => 3,
+        'A' => 2,
+        _ => 1,
+    };
+    while let Some(it) = itens.next() {
+        let cs: Vec<char> = it.chars().collect();
+        if cs.len() < 4 {
+            continue;
+        }
+        let (x, y) = (cs[0], cs[1]);
+        let caminho: String = cs[3..].iter().collect();
+        // renomear/copiar traz o nome antigo como próximo item
+        if x == 'R' || x == 'C' {
+            let _ = itens.next();
+        }
+        let c = if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+            'U'
+        } else if x == '?' {
+            '?'
+        } else if y == 'D' || x == 'D' {
+            'D'
+        } else if y == 'M' || x == 'M' {
+            'M'
+        } else if x == 'R' {
+            'R'
+        } else {
+            'A'
+        };
+        let mut p = topo.join(&caminho);
+        loop {
+            let atual = mapa.get(&p).copied();
+            if atual.is_none_or(|a| forca(c) > forca(a)) {
+                mapa.insert(p.clone(), c);
+            }
+            if p == topo || !p.pop() || !p.starts_with(&topo) || p == topo {
+                break;
+            }
+        }
+    }
+    mapa
+}
+
 /// Nome do branch (ou os 7 primeiros caracteres do commit, com HEAD solto).
 pub fn branch(dir: &Path) -> Option<String> {
     let o = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;

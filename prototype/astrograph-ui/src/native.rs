@@ -202,6 +202,9 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// estado de git de cada arquivo (decoração do explorador) e a leitura em andamento
+    tree_git: std::collections::HashMap<PathBuf, char>,
+    tree_git_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<PathBuf, char>>>,
     /// snippet em andamento (Tab pula de parada em parada)
     snip: Option<Snip>,
     /// `.editorconfig`: limpar o espaço do fim das linhas e o que fazer com a última quebra ao gravar
@@ -335,6 +338,8 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            tree_git: Default::default(),
+            tree_git_rx: None,
             snip: None,
             ec_trim: false,
             ec_final_nl: None,
@@ -1424,8 +1429,30 @@ impl Session {
         self.git_rx = Some(rx);
     }
 
+    /// Lê o estado do git dos arquivos para o explorador (em segundo plano).
+    fn tree_git_load(&mut self) {
+        let Some(t) = self.tree.as_ref() else { return };
+        let dir = t.raiz.clone();
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(git::estados(&dir));
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.tree_git_rx = Some(rx);
+    }
+
     /// Pega o branch e a base que a thread do git acabou de ler.
     fn git_poll(&mut self) {
+        if let Some(rx) = self.tree_git_rx.as_ref() {
+            if let Ok(m) = rx.try_recv() {
+                self.tree_git = m;
+                self.tree_git_rx = None;
+                self.seq += 1;
+            }
+        }
         let Some(rx) = self.git_rx.as_ref() else { return };
         if let Ok((branch, base)) = rx.try_recv() {
             self.git_branch = branch;
@@ -1966,6 +1993,7 @@ impl Session {
                 }
                 self.tree = Some(t);
                 self.tree_focus = true;
+                self.tree_git_load();
             }
             (Some(_), true) => {
                 self.tree = None;
@@ -2012,6 +2040,7 @@ impl Session {
                 }
                 let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 self.say(format!("{verbo}: {nome}"), ToastKind::Done);
+                self.tree_git_load();
             }
             Err(e) => self.say(format!("Não deu: {e}"), ToastKind::Error),
         }
@@ -2710,6 +2739,7 @@ impl Session {
                     self.path = Some(p);
                 }
                 self.saved_rev = self.ed.buf.rev;
+                self.tree_git_load();
             }
             Err(e) => self.say(format!("Não consegui salvar: {e}"), ToastKind::Error),
         }
@@ -2891,7 +2921,7 @@ impl Session {
                 let first = t.sel.saturating_sub(100);
                 TreeView {
                     root: t.raiz.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t.raiz.display().to_string()),
-                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta }).collect(),
+                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
                     first,
                     sel: t.sel,
                     total: t.nos.len(),
@@ -3849,6 +3879,34 @@ mod testes {
         let marcada: Vec<_> = pv.preview.iter().filter(|l| l.2).collect();
         assert_eq!(marcada.len(), 1);
         assert_eq!(marcada[0].1, "linha 30");
+    }
+
+    #[test]
+    fn explorador_marca_o_estado_do_git() {
+        let d = projeto("tree-git");
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git").args(args).current_dir(&d).output().unwrap();
+            assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "x"]);
+        std::fs::write(d.join("src/alfa.rs"), "mudou\n").unwrap();
+        std::fs::write(d.join("novo.txt"), "").unwrap();
+        let mut s = Session::new("x\n", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed(" e");
+        let t = espera_term(&mut s, |m| m.tree.as_ref().is_some_and(|t| t.items.iter().any(|i| i.git != ' '))).tree.unwrap();
+        let g = |nome: &str| t.items.iter().find(|i| i.name == nome).map(|i| i.git);
+        assert_eq!(g("src"), Some('M'), "a pasta herda o estado do que há dentro");
+        assert_eq!(g("novo.txt"), Some('?'));
+        s.feed("l");
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items.iter().find(|i| i.name == "alfa.rs").map(|i| i.git), Some('M'));
+        assert_eq!(t.items.iter().find(|i| i.name == "beta.rs").map(|i| i.git), Some(' '));
     }
 
     #[test]

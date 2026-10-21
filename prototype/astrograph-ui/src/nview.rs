@@ -51,6 +51,8 @@ pub struct TreeItem {
     pub level: usize,
     pub dir: bool,
     pub open: bool,
+    /// estado no git (`M`, `A`, `?`, `D`, `R`, `U`) ou espaço
+    pub git: char,
 }
 
 /// Explorador: janela de itens (`first` é o índice absoluto do primeiro) e seleção absoluta.
