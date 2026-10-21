@@ -135,6 +135,8 @@ pub type LspPool = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Str
 #[derive(Clone, Debug, PartialEq)]
 pub enum PedidoAba {
     Nova(Option<PathBuf>),
+    /// aba sem arquivo com um texto pronto (a resposta da IA)
+    NovaComTexto(String),
     Fechar { forcar: bool },
     Proxima,
     Anterior,
@@ -166,6 +168,20 @@ pub struct Splits {
 }
 
 static PROXIMO_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// O que a IA vai fazer com o pedido digitado.
+#[derive(Clone, Debug)]
+enum IaTipo {
+    /// trocar o trecho `[ini, fim)` (o buffer tinha a revisão `rev`)
+    Editar { ini: Pos, fim: Pos, codigo: String, rev: u64 },
+    /// responder numa aba nova (com o trecho selecionado como contexto, se houver)
+    Perguntar { trecho: Option<String> },
+}
+
+struct IaJob {
+    rx: std::sync::mpsc::Receiver<Result<String, String>>,
+    tipo: IaTipo,
+}
 
 /// Pergunta aberta no explorador.
 #[derive(Clone, Debug)]
@@ -203,6 +219,14 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
+    ia_prompt: Option<(IaTipo, String)>,
+    ia_job: Option<IaJob>,
+    /// teste: programa e argumentos no lugar do agente (o pedido entra como último argumento)
+    ia_cmd: Option<(String, Vec<String>)>,
+    /// texto para uma aba nova (resposta da IA) e o nome fixo desta sessão
+    ia_resposta: Option<String>,
+    nome_fixo: Option<String>,
     /// estado de git de cada arquivo (decoração do explorador) e a leitura em andamento
     tree_git: std::collections::HashMap<PathBuf, char>,
     tree_git_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<PathBuf, char>>>,
@@ -339,6 +363,11 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            ia_prompt: None,
+            ia_job: None,
+            ia_cmd: None,
+            ia_resposta: None,
+            nome_fixo: None,
             tree_git: Default::default(),
             tree_git_rx: None,
             snip: None,
@@ -646,6 +675,7 @@ impl Session {
                 [Key::Char('A'), Key::Char('w')] => self.agente_modo(),
                 [Key::Char('A'), Key::Char('S')] => self.agente_sessoes(),
                 [Key::Char('A'), Key::Char('x')] => self.agente_corrigir(),
+                [Key::Char('A'), Key::Char('E')] => self.ia_abrir(),
                 [Key::Char('A'), Key::Char('i')] => self.agente_explicar(),
                 [Key::Char('A'), Key::Char('r')] => self.agente_enviar(crate::agentes::pedido_revisar()),
                 [Key::Char('A'), Key::Char('m')] => self.agente_enviar(crate::agentes::pedido_commit()),
@@ -670,6 +700,9 @@ impl Session {
 
     /// Tecla já sem líder: vai para o explorador (se ele tem o foco), a tela inicial ou o editor.
     fn dispatch(&mut self, k: Key) {
+        if self.ia_prompt.is_some() {
+            return self.ia_prompt_key(k);
+        }
         if self.tree_focus && self.tree.is_some() {
             self.tree_key(k);
             return;
@@ -1792,6 +1825,163 @@ impl Session {
         self.agente_enviar(crate::agentes::pedido_explicar(&rel, de + 1, ate + 1));
     }
 
+    /// Abre um terminal e roda `comando` nele (instalar ou fazer login de um agente).
+    fn terminal_rodando(&mut self, comando: &str) {
+        self.term_spawn(term::shell_padrao());
+        if let Some(t) = self.term.as_mut() {
+            t.colar(comando);
+            t.write(b"\r");
+        }
+    }
+
+    /// `:AgentInstall [agente]`: instala o CLI do agente (o escolhido, se não disser qual) com o npm.
+    fn agente_instalar(&mut self, arg: &str) {
+        let alvo = match arg.trim() {
+            "" => crate::agentes::ler_config(&self.pasta_agentes())["agent"].as_str().and_then(|b| crate::agentes::AGENTES.iter().find(|a| a.bin == b)).or_else(|| crate::agentes::AGENTES.iter().find(|a| !self.agente_instalado(a.bin))),
+            b => crate::agentes::AGENTES.iter().find(|a| a.bin == b),
+        };
+        let Some(a) = alvo else {
+            self.say("Uso: :AgentInstall claude|opencode|codex|gemini".into(), ToastKind::Info);
+            return;
+        };
+        if self.agente_instalado(a.bin) {
+            self.say(format!("{} já está instalado. Use :AgentLogin para entrar.", a.label), ToastKind::Info);
+            return;
+        }
+        if !self.agente_instalado("npm") && !crate::agentes::instalado("npm") {
+            self.say("Falta o npm (instale o Node.js) para instalar os agentes.".into(), ToastKind::Error);
+            return;
+        }
+        self.terminal_rodando(&crate::agentes::comando_instalar(a));
+        self.say(format!("Instalando {}… quando acabar, rode :AgentLogin", a.label), ToastKind::Info);
+    }
+
+    /// `:AgentLogin`: faz o login do agente escolhido no terminal.
+    fn agente_login(&mut self) {
+        let Some(a) = self.agente_atual() else {
+            self.say("Nenhum agente instalado: use :AgentInstall.".into(), ToastKind::Info);
+            return;
+        };
+        self.terminal_rodando(&crate::agentes::comando_login(a));
+    }
+
+    /// `<Líder>AE`: com uma seleção pede uma edição à IA (a proposta troca o trecho, `u` desfaz); sem ela,
+    /// faz uma pergunta sobre o arquivo e a resposta abre numa aba.
+    fn ia_abrir(&mut self) {
+        if self.ia_job.is_some() {
+            self.say("A IA ainda está trabalhando no pedido anterior.".into(), ToastKind::Info);
+            return;
+        }
+        if self.agente_atual().is_none() && self.ia_cmd.is_none() {
+            self.say("Nenhum agente instalado (claude, opencode, codex ou gemini).".into(), ToastKind::Info);
+            return;
+        }
+        let sel = self.ed.selection().map(|(k, anc)| (k, anc, self.ed.cursor));
+        let tipo = match sel {
+            Some((k, anc, cur)) => {
+                let (lo, hi) = if anc <= cur { (anc, cur) } else { (cur, anc) };
+                let (ini, fim) = if k == VKind::Char {
+                    (lo, Pos::new(hi.row, (hi.col + 1).min(self.ed.buf.line_len(hi.row))))
+                } else {
+                    (Pos::new(lo.row, 0), Pos::new(hi.row, self.ed.buf.line_len(hi.row)))
+                };
+                let codigo = (ini.row..=fim.row)
+                    .map(|r| {
+                        let l = self.ed.buf.line(r);
+                        let a = if r == ini.row { ini.col } else { 0 };
+                        let b = if r == fim.row { fim.col } else { l.chars().count() };
+                        l.chars().skip(a).take(b.saturating_sub(a)).collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.ed.feed(&[Key::Esc]);
+                IaTipo::Editar { ini, fim, codigo, rev: self.ed.buf.rev }
+            }
+            None => IaTipo::Perguntar { trecho: None },
+        };
+        self.ia_prompt = Some((tipo, String::new()));
+    }
+
+    fn ia_prompt_key(&mut self, k: Key) {
+        let Some((tipo, mut texto)) = self.ia_prompt.take() else { return };
+        match k {
+            Key::Esc | Key::Ctrl('c') => return,
+            Key::Backspace => {
+                texto.pop();
+            }
+            Key::Char(c) => texto.push(c),
+            Key::Enter => return self.ia_enviar(tipo, texto),
+            _ => {}
+        }
+        self.ia_prompt = Some((tipo, texto));
+    }
+
+    fn ia_enviar(&mut self, tipo: IaTipo, instrucao: String) {
+        let instrucao = instrucao.trim().to_string();
+        if instrucao.is_empty() {
+            return;
+        }
+        let arq = self.path.as_ref().map(|p| relativo(&self.root, &p.to_string_lossy())).unwrap_or_else(|| "(sem nome)".into());
+        let pedido = match &tipo {
+            IaTipo::Editar { codigo, .. } => crate::agentes::pedido_editar(&arq, &instrucao, codigo),
+            IaTipo::Perguntar { trecho } => crate::agentes::pedido_perguntar(&arq, &instrucao, trecho.as_deref()),
+        };
+        let (prog, mut args) = match (&self.ia_cmd, self.agente_atual()) {
+            (Some((p, a)), _) => (p.clone(), a.clone()),
+            (None, Some(a)) => {
+                let (p, mut v) = crate::agentes::comando_direto(a, &pedido);
+                v.pop();
+                (p, v)
+            }
+            (None, None) => return,
+        };
+        args.push(pedido);
+        let pasta = self.root.clone();
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = crate::agentes::rodar_direto(&prog, &args, &pasta, std::time::Duration::from_secs(300));
+            let _ = tx.send(r);
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.ia_job = Some(IaJob { rx, tipo });
+        self.say("IA trabalhando no pedido…".into(), ToastKind::Info);
+    }
+
+    /// Resposta da IA: troca o trecho (um passo só no desfazer) ou abre a resposta numa aba.
+    fn ia_poll(&mut self) {
+        let Some(job) = self.ia_job.as_ref() else { return };
+        let Ok(r) = job.rx.try_recv() else { return };
+        let job = self.ia_job.take().unwrap();
+        let out = match r {
+            Ok(o) => o,
+            Err(e) => return self.say(format!("A IA falhou: {e}"), ToastKind::Error),
+        };
+        match job.tipo {
+            IaTipo::Editar { ini, fim, rev, .. } => {
+                if self.ed.buf.rev != rev {
+                    return self.say("O texto mudou enquanto a IA pensava: proposta descartada.".into(), ToastKind::Error);
+                }
+                let novo = crate::agentes::limpar_resposta(&out);
+                if novo.is_empty() {
+                    return self.say("A IA não devolveu código.".into(), ToastKind::Error);
+                }
+                self.ed.aplicar_edicoes(&[(ini, fim, novo)]);
+                self.ed.set_cursor(ini.row, ini.col);
+                self.say("Edição da IA aplicada · u desfaz".into(), ToastKind::Done);
+            }
+            IaTipo::Perguntar { .. } => {
+                let t = out.trim().to_string();
+                if t.is_empty() {
+                    return self.say("A IA não respondeu.".into(), ToastKind::Error);
+                }
+                self.ia_resposta = Some(t);
+            }
+        }
+    }
+
     /// Recarrega o arquivo se ele mudou no disco (o agente editou). Com alterações não salvas só avisa.
     fn recarregar_se_mudou(&mut self) {
         let Some(p) = self.path.clone() else { return };
@@ -2700,6 +2890,8 @@ impl Session {
                 self.lsp_formatar(false, false);
             }
             "CodeAction" | "LspCodeAction" => self.lsp_acoes(),
+            "AgentInstall" => self.agente_instalar(arg),
+            "AgentLogin" => self.agente_login(),
             "Symbols" | "LspSymbols" => self.lsp_consulta(PedidoLsp::Simbolos),
             "WorkspaceSymbol" | "LspWorkspaceSymbols" => {
                 let Some((c, _, _, _)) = self.lsp_ctx() else { return };
@@ -2825,6 +3017,7 @@ impl Session {
             self.copiar_clip(t);
         }
         self.pick_poll();
+        self.ia_poll();
         self.agente_fila_poll();
         self.recarregar_se_mudou();
         self.git_poll();
@@ -2888,7 +3081,7 @@ impl Session {
         let signs = self.git_signs();
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
-        } else if self.ed.cmdline().is_some() || self.tree_prompt.is_some() {
+        } else if self.ed.cmdline().is_some() || self.tree_prompt.is_some() || self.ia_prompt.is_some() {
             ModeKind::Command
         } else if search.is_some() {
             ModeKind::Search
@@ -2904,9 +3097,10 @@ impl Session {
             }
         };
         let cmd = self
-            .tree_prompt
+            .ia_prompt
             .as_ref()
-            .map(|(op, t)| ('›', format!("{}{t}", op.rotulo())))
+            .map(|(tipo, t)| ('✦', format!("{}{t}", if matches!(tipo, IaTipo::Editar { .. }) { "Editar a seleção: " } else { "Perguntar à IA: " })))
+            .or_else(|| self.tree_prompt.as_ref().map(|(op, t)| ('›', format!("{}{t}", op.rotulo()))))
             .or_else(|| self.ed.cmdline().map(|c| (':', c.to_string())))
             .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
         ViewModel {
@@ -2925,7 +3119,7 @@ impl Session {
             mode,
             selection: sel,
             sel_eol: self.ed.bloco_ate_o_fim(),
-            name: self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()),
+            name: self.nome_fixo.clone().or_else(|| self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into()),
             modified: self.modified(),
             cmd,
             toast: self.toast.clone(),
@@ -2941,7 +3135,7 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
-            progress: self.lsp_progresso(),
+            progress: if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
             sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),
@@ -3497,6 +3691,16 @@ impl Workspace {
                         self.abas.insert(self.ativa + 1, nova);
                         self.ativa += 1;
                     }
+                    PedidoAba::NovaComTexto(t) => {
+                        let mut nova = self.nova_sessao(None);
+                        nova.ed.sincronizar(&ropey::Rope::from_str(&t));
+                        nova.saved_rev = nova.ed.buf.rev;
+                        nova.nome_fixo = Some("Resposta da IA".into());
+                        let ativa = self.ativa;
+                        mover_paineis(&mut self.abas[ativa], &mut nova);
+                        self.abas.insert(self.ativa + 1, nova);
+                        self.ativa += 1;
+                    }
                     PedidoAba::Fechar { forcar } => self.fechar_aba(forcar),
                     PedidoAba::Proxima => {
                         let n = self.abas.len();
@@ -3512,6 +3716,10 @@ impl Workspace {
                         self.ativa = 0;
                     }
                 }
+                continue;
+            }
+            if let Some(t) = s.ia_resposta.take() {
+                s.aba_pedido = Some(PedidoAba::NovaComTexto(t));
                 continue;
             }
             if let Some(p) = s.jan_pedido.take() {
@@ -3578,7 +3786,7 @@ impl Workspace {
         let mut vm = self.abas[self.ativa].view_model();
         // respostas do servidor chegam sozinhas (renomear, formatar e gravar, `:wq`...): resolve já
         let s = &self.abas[self.ativa];
-        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() {
+        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() || s.ia_resposta.is_some() {
             self.depois();
             if !self.sair {
                 vm = self.abas[self.ativa].view_model();
@@ -3587,7 +3795,7 @@ impl Workspace {
         vm.tabs = self
             .abas
             .iter()
-            .map(|s| crate::nview::TabInfo { name: s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
+            .map(|s| crate::nview::TabInfo { name: s.nome_fixo.clone().or_else(|| s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
             .collect();
         vm.tab_active = self.ativa;
         if let Some(sp) = self.abas[self.ativa].splits.as_mut() {
@@ -4272,6 +4480,48 @@ mod testes {
 
     fn motion_reset() {
         astrograph_core::motion::set_tabstop(8);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ia_edita_a_selecao_e_responde_perguntas_numa_aba() {
+        let d = projeto("ia");
+        let arq = d.join("src/ia.py");
+        std::fs::write(&arq, "a = 1\nb = 1\nc = 1\n").unwrap();
+        let mut w = Workspace::new(Some(arq), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d.clone();
+        // o "agente" devolve o código dentro de uma cerca de markdown, como costumam fazer
+        w.atual().ia_cmd = Some(("sh".into(), vec!["-c".into(), "printf 'Claro:\\n```python\\nb = 2\\n```\\n'".into(), "sh".into()]));
+        w.feed("jV");
+        w.feed(" AE");
+        let m = w.view_model();
+        assert_eq!(m.cmd.as_ref().map(|c| c.0), Some('✦'));
+        assert!(m.cmd.unwrap().1.starts_with("Editar a seleção"));
+        w.feed("troque por 2<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut m = w.view_model();
+        while m.rope.to_string() == "a = 1\nb = 1\nc = 1" && std::time::Instant::now() < fim {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            m = w.view_model();
+        }
+        assert_eq!(m.rope.to_string(), "a = 1\nb = 2\nc = 1");
+        w.feed("u");
+        assert_eq!(w.view_model().rope.to_string(), "a = 1\nb = 1\nc = 1", "um `u` desfaz a edição inteira");
+        // sem seleção: pergunta; a resposta abre numa aba
+        w.atual().ia_cmd = Some(("sh".into(), vec!["-c".into(), "printf 'Esta função soma.\\n'".into(), "sh".into()]));
+        w.feed(" AE");
+        assert!(w.view_model().cmd.unwrap().1.starts_with("Perguntar à IA"));
+        w.feed("o que faz?<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut m = w.view_model();
+        while m.name != "Resposta da IA" && std::time::Instant::now() < fim {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            m = w.view_model();
+        }
+        assert_eq!(m.name, "Resposta da IA");
+        assert_eq!(m.rope.to_string(), "Esta função soma.");
+        assert_eq!(m.tabs.len(), 2);
     }
 
     #[test]
