@@ -63,6 +63,7 @@ enum PedidoLsp {
     Implementacao,
     TipoDaDefinicao,
     Simbolos,
+    SimbolosDoProjeto,
 }
 
 struct Pendente {
@@ -630,6 +631,12 @@ impl Session {
                     self.lsp_formatar(false, false);
                 }
                 [Key::Char('l'), Key::Char('s')] => self.lsp_consulta(PedidoLsp::Simbolos),
+                [Key::Char('l'), Key::Char('S')] => {
+                    // abre a linha de comando já com o comando, para digitar o nome do símbolo
+                    self.leader.clear();
+                    self.ed.feed_str(":WorkspaceSymbol ");
+                    return;
+                }
                 [Key::Char('l'), Key::Char('i')] => self.lsp_consulta(PedidoLsp::Implementacao),
                 [Key::Char('l'), Key::Char('y')] => self.lsp_consulta(PedidoLsp::TipoDaDefinicao),
                 [Key::Char('l'), Key::Char('r')] => self.lsp_consulta(PedidoLsp::Referencias),
@@ -1302,6 +1309,21 @@ impl Session {
                     }
                 }
             }
+            PedidoLsp::SimbolosDoProjeto => {
+                let itens: Vec<ListaItem> = lsp::simbolos_de(&v)
+                    .into_iter()
+                    .filter_map(|s| {
+                        let arq = s.arquivo?;
+                        let rel = arq.strip_prefix(&self.root).map(|r| r.display().to_string()).unwrap_or_else(|_| arq.display().to_string());
+                        Some(ListaItem { texto: format!("{} {}", tipo_simbolo(s.tipo), s.nome), detalhe: format!("{rel}:{}", s.row + 1), destino: Destino::Local(arq, s.row, s.col) })
+                    })
+                    .collect();
+                if itens.is_empty() {
+                    self.say("Nenhum símbolo encontrado.".into(), ToastKind::Info);
+                } else {
+                    self.pick_lista("Símbolos do projeto", itens);
+                }
+            }
             PedidoLsp::Simbolos => {
                 let simbolos = lsp::simbolos_de(&v);
                 let Some(path) = self.path.clone() else { return };
@@ -1427,6 +1449,16 @@ impl Session {
             }
         });
         self.git_rx = Some(rx);
+    }
+
+    /// Texto do trabalho que o servidor de linguagem está fazendo (indexando...), se houver.
+    fn lsp_progresso(&self) -> Option<String> {
+        let cl = self.lsp.as_ref()?;
+        let c = cl.lock().ok()?;
+        let st = c.estado.lock().ok()?;
+        let mut v: Vec<String> = st.progresso.values().map(lsp::Progresso::texto).filter(|t| !t.is_empty()).collect();
+        v.sort();
+        v.first().map(|t| format!("{}: {t}", c.nome))
     }
 
     /// Lê o estado do git dos arquivos para o explorador (em segundo plano).
@@ -2669,6 +2701,11 @@ impl Session {
             }
             "CodeAction" | "LspCodeAction" => self.lsp_acoes(),
             "Symbols" | "LspSymbols" => self.lsp_consulta(PedidoLsp::Simbolos),
+            "WorkspaceSymbol" | "LspWorkspaceSymbols" => {
+                let Some((c, _, _, _)) = self.lsp_ctx() else { return };
+                let id = c.lock().unwrap().simbolos_do_projeto(arg.trim());
+                self.lsp_esperar(id, PedidoLsp::SimbolosDoProjeto);
+            }
             "References" | "LspReferences" => self.lsp_consulta(PedidoLsp::Referencias),
             "Diagnostics" | "LspDiagnostics" => self.diag_lista(),
             "clo" | "close" => self.jan_pedido = Some(PedidoJanela::Fechar { forcar: bang }),
@@ -2904,6 +2941,7 @@ impl Session {
             dash: self.dash,
             diags: self.lsp_diags.clone(),
             hover: self.hover_text.clone(),
+            progress: self.lsp_progresso(),
             numero: self.numero,
             relativo: self.relativo,
             sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),

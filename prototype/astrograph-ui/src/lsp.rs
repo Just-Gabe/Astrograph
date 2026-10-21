@@ -128,6 +128,31 @@ enum Tipo {
     Generico,
 }
 
+/// Um trabalho do servidor (`$/progress`): título, mensagem e porcentagem.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progresso {
+    pub titulo: String,
+    pub mensagem: String,
+    pub pct: Option<u64>,
+}
+
+impl Progresso {
+    /// "Indexando - src 40%"
+    pub fn texto(&self) -> String {
+        let mut t = self.titulo.clone();
+        if !self.mensagem.is_empty() {
+            if !t.is_empty() {
+                t.push_str(" - ");
+            }
+            t.push_str(&self.mensagem);
+        }
+        if let Some(p) = self.pct {
+            t.push_str(&format!(" {p}%"));
+        }
+        t
+    }
+}
+
 /// O que o servidor já contou (lido pela UI).
 #[derive(Default)]
 pub struct Estado {
@@ -141,6 +166,8 @@ pub struct Estado {
     pub edicoes_externas: Vec<Value>,
     /// `window/showMessage`: (tipo 1 erro..4 log, texto)
     pub mensagens: Vec<(u8, String)>,
+    /// trabalhos em andamento (`$/progress`): token -> texto ("Indexando 40%")
+    pub progresso: HashMap<String, Progresso>,
     pub pronto: bool,
 }
 
@@ -218,6 +245,21 @@ pub fn servidor_para(arquivo: &Path) -> Option<(String, Vec<String>, &'static st
         "c" | "h" => (&[("clangd", &[])], "c"),
         "cpp" | "cc" | "hpp" => (&[("clangd", &[])], "cpp"),
         "sh" | "bash" => (&[("bash-language-server", &["start"])], "shellscript"),
+        "json" | "jsonc" => (&[("vscode-json-language-server", &["--stdio"])], "json"),
+        "html" | "htm" => (&[("vscode-html-language-server", &["--stdio"])], "html"),
+        "css" | "scss" => (&[("vscode-css-language-server", &["--stdio"])], "css"),
+        "yaml" | "yml" => (&[("yaml-language-server", &["--stdio"])], "yaml"),
+        "toml" => (&[("taplo", &["lsp", "stdio"])], "toml"),
+        "md" | "markdown" => (&[("marksman", &["server"])], "markdown"),
+        "zig" => (&[("zls", &[])], "zig"),
+        "java" => (&[("jdtls", &[])], "java"),
+        "rb" => (&[("ruby-lsp", &[]), ("solargraph", &["stdio"])], "ruby"),
+        "php" => (&[("intelephense", &["--stdio"])], "php"),
+        "cs" => (&[("csharp-ls", &[])], "csharp"),
+        "kt" | "kts" => (&[("kotlin-language-server", &[])], "kotlin"),
+        "swift" => (&[("sourcekit-lsp", &[])], "swift"),
+        "dart" => (&[("dart", &["language-server"])], "dart"),
+        "ex" | "exs" => (&[("elixir-ls", &[])], "elixir"),
         _ => return None,
     };
     cmds.iter().find_map(|(nome, args)| achar(nome).map(|p| (p.to_string_lossy().into_owned(), args.iter().map(|a| a.to_string()).collect(), lang)))
@@ -342,6 +384,31 @@ impl Cliente {
                                 estado.lock().unwrap().mensagens.push((p["type"].as_u64().unwrap_or(3) as u8, t.to_string()));
                                 notify();
                             }
+                        }
+                        if m == "$/progress" {
+                            let p = &msg["params"];
+                            let token = p["token"].as_str().map(str::to_string).or_else(|| p["token"].as_i64().map(|n| n.to_string())).unwrap_or_default();
+                            let v = &p["value"];
+                            match v["kind"].as_str() {
+                                Some("end") => {
+                                    estado.lock().unwrap().progresso.remove(&token);
+                                }
+                                Some(k) => {
+                                    let mut e = estado.lock().unwrap();
+                                    let pr = e.progresso.entry(token).or_default();
+                                    if k == "begin" || !v["title"].is_null() {
+                                        pr.titulo = v["title"].as_str().unwrap_or("").to_string();
+                                    }
+                                    if let Some(m) = v["message"].as_str() {
+                                        pr.mensagem = m.to_string();
+                                    }
+                                    if let Some(p) = v["percentage"].as_u64() {
+                                        pr.pct = Some(p);
+                                    }
+                                }
+                                None => {}
+                            }
+                            notify();
                         }
                         if m == "textDocument/publishDiagnostics" {
                             let p = &msg["params"];
@@ -568,6 +635,11 @@ impl Cliente {
 
     pub fn simbolos(&self, arquivo: &Path) -> i64 {
         self.requisitar("textDocument/documentSymbol", json!({"textDocument": {"uri": uri(arquivo)}}))
+    }
+
+    /// `workspace/symbol`: símbolos de todo o projeto que casam com `consulta`.
+    pub fn simbolos_do_projeto(&self, consulta: &str) -> i64 {
+        self.requisitar("workspace/symbol", json!({"query": consulta}))
     }
 
     pub fn executar(&self, comando: &str, args: Vec<Value>) -> i64 {
@@ -813,6 +885,8 @@ pub fn acoes_de(r: &Value) -> Vec<Acao> {
 /// Um símbolo do documento (função, struct...), em ordem de leitura; `nivel` é o aninhamento.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Simbolo {
+    /// arquivo do símbolo (só nas respostas de `workspace/symbol`)
+    pub arquivo: Option<PathBuf>,
     pub nome: String,
     pub tipo: u8,
     pub detalhe: String,
@@ -828,7 +902,7 @@ pub fn simbolos_de(r: &Value) -> Vec<Simbolo> {
         let rg = v.get("selectionRange").or_else(|| v.get("range")).or_else(|| v["location"].get("range"));
         if let Some(rg) = rg {
             if let (Some(row), Some(col)) = (rg["start"]["line"].as_u64(), rg["start"]["character"].as_u64()) {
-                out.push(Simbolo { nome: nome.to_string(), tipo: v["kind"].as_u64().unwrap_or(0) as u8, detalhe: v["detail"].as_str().unwrap_or("").to_string(), row: row as usize, col: col as usize, nivel });
+                out.push(Simbolo { arquivo: v["location"]["uri"].as_str().and_then(de_uri), nome: nome.to_string(), tipo: v["kind"].as_u64().unwrap_or(0) as u8, detalhe: v["detail"].as_str().unwrap_or("").to_string(), row: row as usize, col: col as usize, nivel });
             }
         }
         if let Some(f) = v["children"].as_array() {
@@ -945,9 +1019,14 @@ while True:
     meth = m.get('method'); i = m.get('id')
     if meth == 'textDocument/didOpen': ultimo = m['params']['textDocument']['uri']
     if meth == 'initialize': enviar({'jsonrpc':'2.0','id':i,'result':{'capabilities':{}}})
+    if meth == 'initialized':
+        enviar({'jsonrpc':'2.0','method':'$/progress','params':{'token':'t1','value':{'kind':'begin','title':'Indexando','percentage':10}}})
+        enviar({'jsonrpc':'2.0','method':'$/progress','params':{'token':'t1','value':{'kind':'report','message':'src','percentage':40}}})
     elif meth == 'textDocument/didOpen' or meth == 'textDocument/didChange':
         td = m['params']['textDocument']
         enviar({'jsonrpc':'2.0','method':'textDocument/publishDiagnostics','params':{'uri':td['uri'],'diagnostics':[{'range':{'start':{'line':0,'character':1},'end':{'line':0,'character':3}},'severity':2,'message':'cuidado aqui'}]}})
+    elif meth == 'workspace/symbol':
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'name':'Foo','kind':5,'location':{'uri':'file:///tmp/sym%20a.py','range':{'start':{'line':2,'character':1},'end':{'line':2,'character':4}}}}]})
     elif meth == 'textDocument/completion': enviar({'jsonrpc':'2.0','id':i,'result':{'isIncomplete':False,'items':[{'label':'println!','kind':3,'detail':'macro','insertText':'println!("$1")$0','insertTextFormat':2},{'label':'print','kind':3,'detail':'fn print()'},{'label':'private','kind':14},{'label':'zeta','kind':6}]}})
     elif meth == 'textDocument/hover': enviar({'jsonrpc':'2.0','id':i,'result':{'contents':{'kind':'markdown','value':'```rust\nfn x()\n```\ndoc da x'}}})
     elif meth == 'textDocument/rename':
@@ -1054,6 +1133,26 @@ while True:
 
     fn resposta(c: &Cliente, id: i64) -> Value {
         esperar(|| c.resposta(id)).expect("resposta do servidor")
+    }
+
+    #[test]
+    fn progresso_e_simbolos_do_projeto() {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+            return;
+        }
+        let (mut c, _d, _arq) = cliente_falso();
+        // `$/progress` do servidor: begin + report (o título do begin fica)
+        let p = esperar(|| {
+            let st = c.estado.lock().unwrap();
+            st.progresso.values().find(|t| t.pct == Some(40)).cloned()
+        });
+        assert_eq!(p.map(|t| t.texto()).as_deref(), Some("Indexando - src 40%"));
+        let id = c.simbolos_do_projeto("Fo");
+        let sims = simbolos_de(&resposta(&c, id));
+        assert_eq!(sims.len(), 1);
+        assert_eq!((sims[0].nome.as_str(), sims[0].row, sims[0].col), ("Foo", 2, 1));
+        assert_eq!(sims[0].arquivo, Some(PathBuf::from("/tmp/sym a.py")));
+        c.encerrar();
     }
 
     #[test]

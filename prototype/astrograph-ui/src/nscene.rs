@@ -1006,17 +1006,18 @@ impl Scene {
         }
     }
 
-    fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+    fn paint_overlays(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
         self.paint_clock(c, (w, h, s));
+        self.paint_progress(c, vm, (w, h, s));
         // escurece o fundo atrás da paleta
         let veil = self.cmd.v.max(self.pick.v);
         if veil > 0.01 {
             c.rect(0, 0, w as i32, h as i32, d::BLACK, d::k_sombra() * 0.20 * veil);
         }
         if self.camada != Camada::Casca {
-            self.paint_completion(c, _vm, lay, (w, h, s));
-            self.paint_hover(c, _vm, lay, (w, h, s));
-            self.paint_sig(c, _vm, lay, (w, h, s));
+            self.paint_completion(c, vm, lay, (w, h, s));
+            self.paint_hover(c, vm, lay, (w, h, s));
+            self.paint_sig(c, vm, lay, (w, h, s));
         }
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
@@ -1314,6 +1315,23 @@ impl Scene {
         // mesma linha da pílula: centro a 37 px (em escala 1) da borda de baixo
         let mid = h - 20.0 * s - 17.0 * s;
         c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::dim(), 0.85);
+    }
+
+    /// Trabalho do servidor de linguagem (indexando...), logo acima do relógio.
+    fn paint_progress(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        let Some(text) = vm.progress.as_ref() else { return };
+        let px = 11.5 * s;
+        let mut t = text.clone();
+        let maxw = w * 0.4;
+        while self.ui.measure(&t, px) > maxw && t.chars().count() > 8 {
+            t.pop();
+        }
+        let tw = self.ui.measure(&t, px);
+        let x = (w - d::M.pad_x * s - tw).round();
+        let mid = h - 20.0 * s - 17.0 * s - 22.0 * s;
+        c.rrect(x - 12.0 * s, mid - 11.0 * s, tw + 24.0 * s, 22.0 * s, 11.0 * s, d::surface(), 0.9);
+        c.rrect(x - 3.0 * s - 6.0 * s, mid - 2.5 * s, 5.0 * s, 5.0 * s, 2.5 * s, d::ACCENT, 0.9);
+        c.text(&mut self.ui, px, x + 4.0 * s, (mid + px * 0.36).round(), &t, d::dim(), 0.95);
     }
 
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {

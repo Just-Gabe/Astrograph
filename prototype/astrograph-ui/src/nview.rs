@@ -151,6 +151,8 @@ pub struct ViewModel {
     pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
+    /// trabalho do servidor de linguagem em andamento ("rust-analyzer: Indexando 40%")
+    pub progress: Option<String>,
     /// `:set number` / `relativenumber`
     pub numero: bool,
     pub relativo: bool,
@@ -216,6 +218,7 @@ impl ViewModel {
             git: None,
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
+            progress: None,
             numero: true,
             relativo: false,
             sig: None,
