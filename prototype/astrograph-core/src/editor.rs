@@ -208,6 +208,10 @@ pub struct Editor {
     /// última substituição (`:s`): padrão, substituto, flags
     last_sub: Option<(String, String, String)>,
     last_cmdline: Option<String>,
+    /// `:set textwidth` (0: o `gq` usa 79)
+    textwidth: usize,
+    /// o operador acabou de ter o fim ajustado pela regra `o_v` (movimento exclusivo que termina na coluna 0)
+    end_adjusted: bool,
     /// padrão do comando em execução (`/texto<CR>`)
     search_now: Option<(String, bool)>,
     /// mensagem da última busca ("search hit BOTTOM..." ou erro)
@@ -310,6 +314,8 @@ impl Editor {
             last_search: None,
             last_sub: None,
             last_cmdline: None,
+            textwidth: 0,
+            end_adjusted: false,
             search_now: None,
             msg: String::new(),
             vis: None,
@@ -396,6 +402,34 @@ impl Editor {
     /// Há teclas de um comando ainda incompleto (`d`, `2`, `"`...).
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Teclas de um comando incompleto, como o operador (`d`, `c`, `y`...) e `i`/`a` do objeto de texto.
+    pub fn pendentes(&self) -> Vec<Key> {
+        self.pending.clone()
+    }
+
+    /// Aplica o operador `op` a `[ini, fim)` (fim exclusivo; `linhas`: por linhas inteiras), como se o
+    /// movimento tivesse sido digitado. Para os objetos de texto que o núcleo não conhece (tree-sitter).
+    pub fn operar_intervalo(&mut self, op: char, ini: Pos, fim: Pos, linhas: bool) {
+        self.pending.clear();
+        self.failed = false;
+        self.cursor = ini;
+        self.fix_cursor();
+        self.ops_change = op == 'c';
+        let kind = if linhas { Kind::Line } else { Kind::Excl };
+        self.apply_operator(op, ini, fim, kind, None);
+        self.ops_change = false;
+    }
+
+    /// No modo visual: seleciona de `ini` até `fim` (inclusive), por caracteres.
+    pub fn selecionar(&mut self, ini: Pos, fim: Pos) {
+        self.pending.clear();
+        self.vis = Some(VState { kind: VKind::Char, anchor: ini });
+        self.mode = Mode::Visual;
+        self.cursor = fim;
+        self.fix_cursor();
+        self.curswant = self.want_here();
     }
 
     /// Seleção do modo visual: (tipo, ponta fixa).
@@ -1042,7 +1076,7 @@ impl Editor {
         let done_s = |cmd: Cmd, search: Option<(String, bool)>| Parse::Done(Parsed { reg, count, cmd, prefix, search });
         // `gu`, `gU`, `g~`, `g?`: operadores de caixa (o operador é a segunda tecla)
         let caso = match (k, keys.get(i)) {
-            (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?')))) => Some(*o),
+            (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?' | 'q' | 'w')))) => Some(*o),
             _ => None,
         };
         if caso.is_some() {
@@ -1611,6 +1645,7 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn operator(&mut self, op: char, count: Option<usize>, target: Target, reg: Option<char>) {
+        self.end_adjusted = false;
         // lembra f/t para ; e ,
         if let Target::Motion(m) = target {
             if !m.g && matches!(m.c, 'f' | 'F' | 't' | 'T') {
@@ -1695,6 +1730,7 @@ impl Editor {
                 let mut kind = r.kind;
                 // exclusivo terminando na coluna 0 de outra linha: volta ao fim da anterior
                 if kind == Kind::Excl && e.col == 0 && e.row > s.row {
+                    self.end_adjusted = true;
                     e = Pos::new(e.row - 1, self.buf.line_len(e.row - 1));
                     // ...e se o início está no recuo, vira por linhas
                     if s.col <= self.buf.first_nonblank(s.row) {
@@ -1851,6 +1887,36 @@ impl Editor {
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }
+            'q' | 'w' => {
+                // `gq` reformata as linhas (cursor na última); `gw` deixa o cursor onde estava
+                let origem = self.cursor;
+                let (r1, r2) = (a.row, b.row.max(a.row));
+                let marca = (origem.row >= r1 && origem.row <= r2).then(|| self.nao_brancos_ate(r1, origem));
+                let ultimo = self.formatar_linhas(r1, r2);
+                if op == 'q' {
+                    // com o fim ajustado (`gq}`), o cursor vai para a linha depois do trecho
+                    let mut alvo = ultimo;
+                    if std::mem::take(&mut self.end_adjusted) && alvo < self.last_row() {
+                        alvo += 1;
+                    }
+                    self.cursor = Pos::new(alvo, self.buf.first_nonblank(alvo));
+                } else {
+                    // `gw`: o cursor fica no mesmo caractere do texto
+                    self.cursor = match marca {
+                        Some((k, em_branco)) => {
+                            let alvo = if em_branco { k.saturating_sub(1) } else { k };
+                            match self.pos_do_nao_branco(r1, ultimo, alvo) {
+                                Some(p) if em_branco => Pos::new(p.row, p.col + 1),
+                                Some(p) => p,
+                                None => origem,
+                            }
+                        }
+                        None => origem,
+                    };
+                }
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             '>' | '<' => {
                 self.checkpoint();
                 let (r1, r2) = (a.row, b.row);
@@ -1863,6 +1929,137 @@ impl Editor {
             }
             _ => {}
         }
+    }
+
+    /// Quantos caracteres que não são espaço vêm antes de `p` nas linhas `r1..` (e se `p` está num espaço).
+    fn nao_brancos_ate(&self, r1: usize, p: Pos) -> (usize, bool) {
+        let mut n = 0;
+        for r in r1..=p.row {
+            let l = self.buf.line(r);
+            let lim = if r == p.row { p.col } else { usize::MAX };
+            n += l.chars().take(lim).filter(|c| !c.is_whitespace()).count();
+        }
+        let em_branco = self.buf.char_at(p).is_none_or(char::is_whitespace);
+        (n, em_branco)
+    }
+
+    /// A posição do `k`-ésimo caractere que não é espaço (de 0) nas linhas `r1..=r2`.
+    fn pos_do_nao_branco(&self, r1: usize, r2: usize, k: usize) -> Option<Pos> {
+        let mut n = 0;
+        for r in r1..=r2.min(self.last_row()) {
+            for (c, ch) in self.buf.line(r).chars().enumerate() {
+                if !ch.is_whitespace() {
+                    if n == k {
+                        return Some(Pos::new(r, c));
+                    }
+                    n += 1;
+                }
+            }
+        }
+        None
+    }
+
+    /// Reformata as linhas `r1..=r2` (como o `gq`): cada parágrafo (separado por linhas em branco) é
+    /// junto e quebrado de novo na largura `textwidth` (79 se for 0), mantendo o recuo da primeira linha.
+    /// Devolve a última linha do trecho depois de formatado.
+    fn formatar_linhas(&mut self, r1: usize, r2: usize) -> usize {
+        let tw = if self.textwidth == 0 { 79 } else { self.textwidth };
+        let ts = motion::tabstop();
+        let _ = ts;
+        // largura em colunas (tab, caracteres largos); o espaço no fim da linha não conta
+        let largura = |t: &str| {
+            let t = t.trim_end_matches([' ', '\t']);
+            motion::vcol_start(t, t.chars().count())
+        };
+        let linhas: Vec<String> = (r1..=r2.min(self.last_row())).map(|r| self.buf.line(r)).collect();
+        let mut saida: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < linhas.len() {
+            if linhas[i].trim().is_empty() {
+                saida.push(linhas[i].clone());
+                i += 1;
+                continue;
+            }
+            let mut j = i;
+            while j < linhas.len() && !linhas[j].trim().is_empty() {
+                j += 1;
+            }
+            let indent: String = linhas[i].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            // junta como o `J`: sem o recuo das seguintes e com um espaço entre elas
+            let mut texto = linhas[i].clone();
+            for l in &linhas[i + 1..j] {
+                let resto = l.trim_start_matches([' ', '\t']);
+                if !texto.ends_with([' ', '\t']) && !resto.starts_with(')') {
+                    texto.push(' ');
+                }
+                texto.push_str(resto);
+            }
+            // quebra no último espaço que deixa a linha dentro da largura
+            let mut atual = texto;
+            loop {
+                if largura(&atual) <= tw {
+                    saida.push(atual);
+                    break;
+                }
+                let cs: Vec<char> = atual.chars().collect();
+                let ini_texto = cs.iter().take_while(|c| **c == ' ' || **c == '\t').count();
+                // começo de cada trecho de espaços depois do texto, dentro da largura
+                let mut quebra: Option<(usize, usize)> = None;
+                let mut k = ini_texto;
+                while k < cs.len() {
+                    if cs[k] == ' ' || cs[k] == '\t' {
+                        let a = k;
+                        while k < cs.len() && (cs[k] == ' ' || cs[k] == '\t') {
+                            k += 1;
+                        }
+                        if k < cs.len() {
+                            let antes: String = cs[..a].iter().collect();
+                            if largura(&antes) <= tw {
+                                quebra = Some((a, k));
+                            } else if quebra.is_none() {
+                                // palavra mais longa que a linha: quebra no primeiro espaço depois dela
+                                quebra = Some((a, k));
+                                break;
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        k += 1;
+                    }
+                }
+                match quebra {
+                    Some((a, b)) => {
+                        saida.push(cs[..a].iter().collect());
+                        let resto: String = cs[b..].iter().collect();
+                        atual = format!("{indent}{resto}");
+                    }
+                    None => {
+                        saida.push(atual);
+                        break;
+                    }
+                }
+            }
+            i = j;
+        }
+        let antes: Vec<String> = linhas;
+        if saida == antes {
+            return r2.min(self.last_row());
+        }
+        self.checkpoint();
+        let old = self.buf.rope.clone();
+        let fim = r2.min(self.last_row());
+        self.buf.delete_lines(r1, fim);
+        // o buffer ficou vazio (era o texto todo): a linha vazia que sobrou é a primeira
+        let ate_aqui = if self.buf.line_count() == 1 && self.buf.line(0).is_empty() && r1 == 0 && fim + 1 >= old.len_lines() { Some(0usize) } else { None };
+        for (k, l) in saida.iter().enumerate() {
+            match ate_aqui {
+                Some(_) if k == 0 => self.buf.insert(Pos::new(0, 0), l),
+                _ => self.buf.insert_line(r1 + k, l),
+            }
+        }
+        self.adjust_marks(&old);
+        r1 + saida.len() - 1
     }
 
     fn range_text(&self, a: Pos, b: Pos, kind: Kind) -> (String, bool) {
@@ -2227,6 +2424,10 @@ impl Editor {
                 let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
                 VParse::Done(VCmd::Put(*c == 'p', count, true))
             }
+            Key::Char('g') if matches!(keys.get(i + 1), Some(Key::Char('q' | 'w'))) => {
+                let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
+                VParse::Done(VCmd::Op(*c, count))
+            }
             Key::Char(op @ ('d' | 'x' | 'X' | 'D' | 'y' | 'Y' | 'c' | 's' | 'S' | 'C' | 'R' | '<' | '>' | '~' | 'u' | 'U' | 'J')) => VParse::Done(VCmd::Op(op, count)),
             Key::Delete => VParse::Invalid,
             Key::Char('r') => match keys.get(i + 1) {
@@ -2453,6 +2654,30 @@ impl Editor {
                     self.cursor = lw_start;
                 }
                 self.apply_operator(op, s, e, kind, reg);
+            }
+            'q' | 'w' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                let origem = self.cursor;
+                let marca = (origem.row >= a.row && origem.row < a.row + rows).then(|| self.nao_brancos_ate(a.row, origem));
+                let ultimo = self.formatar_linhas(a.row, a.row + rows - 1);
+                self.cursor = if op == 'q' {
+                    Pos::new(ultimo, self.buf.first_nonblank(ultimo))
+                } else {
+                    match marca {
+                        Some((k, em_branco)) => {
+                            let alvo = if em_branco { k.saturating_sub(1) } else { k };
+                            match self.pos_do_nao_branco(a.row, ultimo, alvo) {
+                                Some(p) if em_branco => Pos::new(p.row, p.col + 1),
+                                Some(p) => p,
+                                None => origem,
+                            }
+                        }
+                        None => origem,
+                    }
+                };
+                self.fix_cursor();
+                self.curswant = self.want_here();
             }
             '>' | '<' => {
                 self.vis = None;

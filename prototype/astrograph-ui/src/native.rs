@@ -1500,6 +1500,56 @@ impl Session {
         self.git_rx = Some(rx);
     }
 
+    /// Objetos de texto de tree-sitter (`if`/`af` função, `ic`/`ac` classe, `ia`/`aa` parâmetro) com um
+    /// operador (`d`, `c`, `y`, `<`, `>`) ou no visual. `true` se a tecla foi tratada aqui.
+    fn objeto_sintaxe(&mut self, k: Key) -> bool {
+        let Key::Char(obj @ ('f' | 'c' | 'a')) = k else { return false };
+        let pend = self.ed.pendentes();
+        let visual = self.ed.mode() == Mode::Visual;
+        let (op, incl) = match (pend.as_slice(), visual) {
+            ([Key::Char(i @ ('i' | 'a'))], true) => (None, *i == 'a'),
+            ([.., Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')), Key::Char(i @ ('i' | 'a'))], false) => (Some(*op), *i == 'a'),
+            _ => return false,
+        };
+        if self.ed.mode() == Mode::Insert || self.lang.is_none() {
+            return false;
+        }
+        self.refresh_syntax();
+        let Some((doc, _)) = self.doc.as_ref() else { return false };
+        let nome = match obj {
+            'f' => "function",
+            'c' => "class",
+            _ => "parameter",
+        };
+        let captura = format!("@{nome}.{}", if incl { "outer" } else { "inner" });
+        if !doc.has_textobject(&captura) && !doc.has_textobject(&format!("@{nome}.outer")) {
+            return false;
+        }
+        let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        let linha = self.ed.buf.line(row);
+        let bcol = linha.char_indices().nth(col).map_or(linha.len(), |(b, _)| b);
+        let Some(r) = doc.textobject_at(&captura, row, bcol, true, false) else {
+            self.ed.feed(&[Key::Esc]);
+            return true;
+        };
+        // bytes -> caracteres
+        let (n0, n1) = (self.ed.buf.line(r.srow), self.ed.buf.line(r.erow.min(self.ed.buf.line_count() - 1)));
+        let ch = |l: &str, b: usize| l.char_indices().take_while(|(i, _)| *i < b).count();
+        let ini = Pos::new(r.srow, ch(&n0, r.scol));
+        let fim = Pos::new(r.erow.min(self.ed.buf.line_count() - 1), ch(&n1, r.ecol));
+        match op {
+            None => {
+                // visual: do começo ao último caractere do trecho
+                let ultimo = if fim.col > 0 { Pos::new(fim.row, fim.col - 1) } else if fim.row > ini.row { Pos::new(fim.row - 1, self.ed.buf.line_len(fim.row - 1).saturating_sub(1)) } else { fim };
+                self.ed.selecionar(ini, ultimo);
+            }
+            Some(op) => {
+                self.ed.operar_intervalo(op, ini, fim, false);
+            }
+        }
+        true
+    }
+
     /// Menu de atalhos: depois da líder, esperando um tempo, mostra o que cada tecla faz.
     fn menu_lider(&self) -> Vec<(String, String)> {
         if self.leader.is_empty() || self.leader_desde.is_none_or(|t| t.elapsed().as_millis() < LIDER_MENU_MS as u128) {
@@ -2702,6 +2752,9 @@ impl Session {
         }
         let antes_snip = (self.ed.cursor.row, self.ed.cursor.col, self.ed.buf.line_len(self.ed.cursor.row));
         let tinha_snip = self.snip.is_some();
+        if self.objeto_sintaxe(k) {
+            return;
+        }
         let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
@@ -4253,6 +4306,30 @@ mod testes {
         s.feed("Gp");
         let t = modelo(&mut s).tree.unwrap();
         assert!(t.items.iter().any(|i| i.name == "novo.txt" && i.level == 0), "{:?}", t.items.iter().map(|i| (&i.name, i.level)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn objetos_de_texto_de_tree_sitter_com_operador_e_no_visual() {
+        let d = projeto("objs");
+        let arq = d.join("src/obj.rs");
+        std::fs::write(&arq, "fn a() {\n    let x = 1;\n    let y = 2;\n}\n\nfn b(p: i32, q: i32) {}\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        // daf: apaga a função inteira em que o cursor está
+        s.feed("jdaf");
+        assert_eq!(s.ed.buf.text(), "\nfn b(p: i32, q: i32) {}", "{:?}", s.ed.buf.text());
+        s.feed("u");
+        // yif: o corpo da função (sem as chaves)
+        s.feed("jyif");
+        assert_eq!(s.ed.register('"').map(|r| r.text.clone()), Some("let x = 1;\n    let y = 2;".to_string()));
+        // visual: vaf seleciona a função toda
+        s.feed("vaf");
+        let (k, anc) = s.ed.selection().unwrap();
+        assert_eq!((k, anc, s.ed.cursor), (VKind::Char, Pos::new(0, 0), Pos::new(3, 0)));
+        s.feed("<Esc>");
+        // dia: o parâmetro sob o cursor (e a vírgula que o separa)
+        s.feed("5Gwwwdia");
+        assert!(s.ed.buf.line(5).starts_with("fn b("), "{:?}", s.ed.buf.line(5));
     }
 
     #[test]

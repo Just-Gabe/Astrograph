@@ -296,6 +296,7 @@ impl Editor {
             let num = valor.and_then(|v| v.parse::<usize>().ok());
             match (base, num) {
                 ("shiftwidth" | "sw", Some(n)) if n > 0 => self.shiftwidth = n,
+                ("textwidth" | "tw", Some(n)) => self.textwidth = n,
                 ("tabstop" | "ts", Some(n)) if n > 0 => motion::set_tabstop(n),
                 ("ignorecase" | "ic", _) => self.ignorecase = if inverte { !self.ignorecase } else { liga },
                 ("smartcase" | "scs", _) => self.smartcase = if inverte { !self.smartcase } else { liga },

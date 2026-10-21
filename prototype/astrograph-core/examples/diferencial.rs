@@ -127,6 +127,16 @@ fn vocabulario_ins() -> Vec<&'static str> {
     v
 }
 
+fn vocabulario_gq() -> Vec<&'static str> {
+    let mut v = vec![
+        "gqq", "gqj", "gqip", "gqap", "gqG", "gqgg", "gq2j", "gqiw", "gww", "gwip", "gwj", "gwgw", "gqgq", "Vgq", "Vjgq", "vipgq", "Vipgw", "2gqq", "gq}", "gq{", "gqk",
+        ":set tw=20<CR>gqq", ":set tw=20<CR>gqj", ":set tw=20<CR>gqip", ":set tw=12<CR>gqG", ":set tw=30<CR>gqap", ":set tw=15<CR>gww", ":set tw=10<CR>gwip", ":set tw=25<CR>gqq", ":set tw=8<CR>gqq",
+        "J", "o<Esc>", "ox y z<Esc>", "u", ".",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
 fn vocabulario_bloco() -> Vec<&'static str> {
     let inicio = ["<C-v>"];
     let mov = ["", "l", "j", "jl", "jj", "jjl", "2l", "3j", "$", "j$", "jj$", "w", "e", "b", "0", "^", "ll", "jw", "je", "G", "gg", "k", "h", "jh", "jjh", "fo", "}", "jlj", "lj"];
@@ -213,6 +223,7 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
         "pct" => return vocabulario_pct(),
         "blk" => return vocabulario_bloco(),
         "ins" => return vocabulario_ins(),
+        "gq" => return vocabulario_gq(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),
