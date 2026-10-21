@@ -30,10 +30,35 @@ impl Editor {
     pub(super) fn cmdline_key(&mut self, k: Key) -> bool {
         let Some(cl) = self.cmdline.as_mut() else { return false };
         match k {
-            Key::Esc | Key::Ctrl('c') => self.cmdline = None,
+            Key::Esc | Key::Ctrl('c') => {
+                self.cmdline = None;
+                self.cmd_hist_idx = None;
+            }
+            // `<C-p>`/`<C-n>` (e as setas): linhas de comando anteriores
+            Key::Ctrl('p') | Key::Ctrl('n') => {
+                let n = self.cmd_hist.len();
+                let novo = match (k, self.cmd_hist_idx) {
+                    (Key::Ctrl('p'), None) if n > 0 => Some(n - 1),
+                    (Key::Ctrl('p'), Some(i)) => Some(i.saturating_sub(1)),
+                    (Key::Ctrl('n'), Some(i)) if i + 1 < n => Some(i + 1),
+                    (Key::Ctrl('n'), Some(_)) => None,
+                    _ => self.cmd_hist_idx,
+                };
+                if novo != self.cmd_hist_idx || k == Key::Ctrl('n') {
+                    self.cmd_hist_idx = novo;
+                    *cl = novo.map(|i| self.cmd_hist[i].clone()).unwrap_or_default();
+                }
+            }
             Key::Enter => {
                 let linha = self.cmdline.take().unwrap_or_default();
+                self.cmd_hist_idx = None;
                 if !linha.is_empty() {
+                    if self.cmd_hist.last() != Some(&linha) {
+                        self.cmd_hist.push(linha.clone());
+                        if self.cmd_hist.len() > 200 {
+                            self.cmd_hist.remove(0);
+                        }
+                    }
                     self.last_cmdline = Some(linha.clone());
                     self.regs.insert(':', super::Reg { text: linha.clone(), linewise: false, block: false, bwidth: 0 });
                 }
@@ -182,12 +207,12 @@ impl Editor {
         // `s/x/y/`, `g/x/d`, `>`, `<`: o nome é uma letra seguida do delimitador
         if nome.is_empty() {
             if let Some(&c) = s.get(i) {
-                if c == '>' || c == '<' || c == '&' || c == '~' {
+                if c == '>' || c == '<' || c == '&' || c == '~' || c == '!' {
                     nome = c.to_string();
                     i += 1;
                 }
             }
-        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap" | "t" | "co" | "copy" | "m" | "move" | "sort" | "sor") {
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap" | "t" | "co" | "copy" | "m" | "move" | "sort" | "sor" | "reg" | "registers" | "di" | "display" | "marks" | "delm" | "delmarks" | "let" | "r" | "read") {
             // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
             let primeiro = nome.chars().next().unwrap();
             if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {
@@ -247,6 +272,23 @@ impl Editor {
                 self.fix_cursor();
             }
             "set" | "se" => self.ex_set(&resto),
+            "reg" | "registers" | "di" | "display" => self.ex_listar_registradores(),
+            "marks" => self.ex_listar_marcas(),
+            "delm" | "delmarks" => self.ex_delmarks(&resto),
+            "let" => self.ex_let(&resto),
+            "r" | "read" => {
+                // quem hospeda lê o arquivo (ou roda o comando): `<linha depois da qual entra>r <arg>`
+                let depois = if faixa.dado { faixa.b + 1 } else { self.cursor.row + 1 };
+                self.host_cmd = Some(format!("{depois}r {}", resto.trim()));
+            }
+            "!" => {
+                // `:!cmd` roda e mostra; `:{faixa}!cmd` filtra as linhas pelo comando
+                if faixa.dado {
+                    self.host_cmd = Some(format!("{},{}!{}", faixa.a + 1, faixa.b + 1, resto));
+                } else {
+                    self.host_cmd = Some(format!("!{resto}"));
+                }
+            }
             "t" | "co" | "copy" => self.ex_copiar(faixa.a, faixa.b, &resto),
             "m" | "move" => self.ex_mover(faixa.a, faixa.b, &resto),
             "sort" | "sor" => {
@@ -501,6 +543,135 @@ impl Editor {
         self.cursor = Pos::new(r, self.buf.first_nonblank(r));
         self.fix_cursor();
         self.curswant = self.want_here();
+    }
+
+    fn ex_listar_registradores(&mut self) {
+        let mut t = String::from("Tipo  Nome  Conteúdo\n");
+        let mostra = |r: &super::Reg| -> String {
+            let tipo = if r.block { "b" } else if r.linewise { "l" } else { "c" };
+            let txt: String = r.text.chars().map(|c| if c == '\n' { '↵' } else { c }).take(60).collect();
+            format!("{tipo}     {{}}     {txt}\n")
+        };
+        let mut nomes: Vec<char> = self.regs.keys().copied().collect();
+        nomes.sort();
+        if let Some(r) = &self.unnamed {
+            t.push_str(&mostra(r).replace("{}", "\""));
+        }
+        for n in nomes {
+            if let Some(r) = self.regs.get(&n) {
+                t.push_str(&mostra(r).replace("{}", &format!("\"{n}")));
+            }
+        }
+        for (n, v) in [('%', self.nome_arquivo.clone()), ('/', self.last_search.as_ref().map(|(p, _)| p.clone())), ('.', (!self.last_insert.is_empty()).then(|| self.last_insert.clone()))] {
+            if let Some(v) = v {
+                t.push_str(&format!("c     \"{n}     {v}\n"));
+            }
+        }
+        self.host_aba = Some(("Registradores".into(), t));
+    }
+
+    fn ex_listar_marcas(&mut self) {
+        let mut t = String::from("marca  linha  col  texto\n");
+        let mut itens: Vec<(char, Pos)> = self.marks.iter().map(|(c, p)| (*c, *p)).collect();
+        if let Some(p) = self.pcmark {
+            itens.push(('\'', p));
+        }
+        if let Some((a, b, _)) = self.vmarks {
+            itens.push(('<', a.min(b)));
+            itens.push(('>', a.max(b)));
+        }
+        for (c, p, ) in [('.', self.last_change), ('^', self.insert_stop), ('[', self.brk_ini), (']', self.brk_fim)].into_iter().filter_map(|(c, p)| p.map(|p| (c, p))).map(|(c, p)| (c, p)) {
+            itens.push((c, p));
+        }
+        itens.sort_by_key(|(c, _)| *c);
+        for (c, p) in itens {
+            let row = p.row.min(self.last_row());
+            let linha: String = self.buf.line(row).trim().chars().take(50).collect();
+            t.push_str(&format!(" {c}     {:>5}  {:>3}  {linha}\n", row + 1, p.col));
+        }
+        self.host_aba = Some(("Marcas".into(), t));
+    }
+
+    /// `:delmarks a b`, `:delmarks a-d`, `:delmarks!` (todas as minúsculas).
+    fn ex_delmarks(&mut self, args: &str) {
+        let a = args.trim();
+        if a == "!" {
+            self.marks.retain(|c, _| !c.is_ascii_lowercase());
+            return;
+        }
+        let cs: Vec<char> = a.chars().filter(|c| !c.is_whitespace()).collect();
+        if cs.is_empty() {
+            self.failed = true;
+            return;
+        }
+        let mut i = 0;
+        while i < cs.len() {
+            if i + 2 < cs.len() && cs[i + 1] == '-' {
+                for c in cs[i]..=cs[i + 2] {
+                    self.marks.remove(&c);
+                }
+                i += 3;
+            } else {
+                match cs[i] {
+                    '<' | '>' => self.vmarks = None,
+                    c => {
+                        self.marks.remove(&c);
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /// `:let @a = "texto"` e `:let @a .= "mais"`.
+    fn ex_let(&mut self, args: &str) {
+        let a = args.trim();
+        let Some(rest) = a.strip_prefix('@') else {
+            self.failed = true;
+            return;
+        };
+        let mut cs = rest.chars();
+        let Some(reg) = cs.next() else {
+            self.failed = true;
+            return;
+        };
+        let resto: String = cs.collect();
+        let resto = resto.trim_start();
+        let (anexar, valor) = match resto.strip_prefix(".=") {
+            Some(v) => (true, v),
+            None => match resto.strip_prefix('=') {
+                Some(v) => (false, v),
+                None => {
+                    self.failed = true;
+                    return;
+                }
+            },
+        };
+        let v = valor.trim();
+        let texto = match (v.chars().next(), v.chars().last()) {
+            (Some(q @ ('"' | '\'')), Some(f)) if q == f && v.len() >= 2 => {
+                let interno = &v[1..v.len() - 1];
+                if q == '"' { interno.replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"").replace("\\\\", "\\") } else { interno.replace("''", "'") }
+            }
+            _ => {
+                self.failed = true;
+                return;
+            }
+        };
+        let linhas = texto.ends_with('\n');
+        let nome = reg.to_ascii_lowercase();
+        let atual = self.regs.get(&nome).cloned();
+        let novo = match (anexar, atual) {
+            (true, Some(r)) => super::Reg { text: format!("{}{}", r.text, texto.trim_end_matches('\n')), linewise: r.linewise || linhas, block: false, bwidth: 0 },
+            _ => super::Reg { text: texto.trim_end_matches('\n').to_string(), linewise: linhas, block: false, bwidth: 0 },
+        };
+        match reg {
+            '"' => self.unnamed = Some(novo),
+            c if c.is_ascii_alphanumeric() => {
+                self.regs.insert(nome, novo);
+            }
+            _ => self.failed = true,
+        }
     }
 
     fn ex_apagar(&mut self, a: usize, b: usize) {

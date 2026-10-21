@@ -212,6 +212,12 @@ pub struct Editor {
     last_cmdline: Option<String>,
     /// `:set textwidth` (0: o `gq` usa 79)
     textwidth: usize,
+    /// nome do arquivo (registrador `"%`) e o texto que um comando `:` quer mostrar numa aba (`:registers`, `:marks`)
+    nome_arquivo: Option<String>,
+    host_aba: Option<(String, String)>,
+    /// histórico da linha de comando (`<C-p>`/`<C-n>` e as setas) e a posição nele
+    cmd_hist: Vec<String>,
+    cmd_hist_idx: Option<usize>,
     /// o operador acabou de ter o fim ajustado pela regra `o_v` (movimento exclusivo que termina na coluna 0)
     end_adjusted: bool,
     /// dobras manuais (`zf`), se estão ligadas (`zn`/`zN`/`zi`) e o nível (`zr`/`zm`/`zR`/`zM`)
@@ -321,6 +327,10 @@ impl Editor {
             last_sub: None,
             last_cmdline: None,
             textwidth: 0,
+            nome_arquivo: None,
+            host_aba: None,
+            cmd_hist: Vec::new(),
+            cmd_hist_idx: None,
             end_adjusted: false,
             folds: Vec::new(),
             foldenable: true,
@@ -552,10 +562,22 @@ impl Editor {
                 }
             }),
             '.' => (!self.last_insert.is_empty()).then(|| simples(self.last_insert.clone())),
+            '%' => self.nome_arquivo.clone().map(simples),
+            ':' => self.last_cmdline.clone().map(simples),
             '/' => self.last_search.as_ref().map(|(p, _)| simples(p.clone())),
             '"' => self.unnamed.clone(),
             c => self.regs.get(&c.to_ascii_lowercase()).cloned(),
         }
+    }
+
+    /// O app informa o nome do arquivo aberto (o registrador `"%`).
+    pub fn set_nome_arquivo(&mut self, nome: Option<String>) {
+        self.nome_arquivo = nome;
+    }
+
+    /// Texto para mostrar numa aba (`:registers`, `:marks`): título e conteúdo.
+    pub fn take_host_aba(&mut self) -> Option<(String, String)> {
+        self.host_aba.take()
     }
 
     /// O app informa o que está no clipboard do sistema (`"+p` e `clipboard=unnamedplus` leem daqui).
