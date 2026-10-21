@@ -21,7 +21,23 @@ pub const AGENTES: &[Agente] = &[
     Agente { bin: "opencode", label: "opencode", npm: "opencode-ai" },
     Agente { bin: "codex", label: "Codex CLI", npm: "@openai/codex" },
     Agente { bin: "gemini", label: "Gemini CLI", npm: "@google/gemini-cli" },
+    // IA local: sem login nem chave; o modelo vem de `ollama_model` no config.json ou do primeiro de `ollama list`
+    Agente { bin: "ollama", label: "Ollama (local)", npm: "" },
 ];
+
+/// O modelo do Ollama: `ollama_model` do config ou o primeiro de `ollama list`.
+pub fn modelo_ollama(pasta: &Path) -> Option<String> {
+    if let Some(m) = ler_config(pasta)["ollama_model"].as_str().filter(|m| !m.is_empty()) {
+        return Some(m.to_string());
+    }
+    let o = std::process::Command::new("ollama").arg("list").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    primeiro_modelo(&String::from_utf8_lossy(&o.stdout))
+}
+
+/// Primeiro nome da saída de `ollama list` (a primeira linha é o cabeçalho).
+pub fn primeiro_modelo(saida: &str) -> Option<String> {
+    saida.lines().skip(1).find_map(|l| l.split_whitespace().next().map(str::to_string))
+}
 
 pub struct Modo {
     pub id: &'static str,
@@ -225,6 +241,9 @@ pub fn pedido_commit() -> String {
 
 /// Comando (para o shell) que instala o CLI do agente.
 pub fn comando_instalar(a: &Agente) -> String {
+    if a.bin == "ollama" {
+        return if cfg!(windows) { "winget install Ollama.Ollama".into() } else { "curl -fsSL https://ollama.com/install.sh | sh".into() };
+    }
     format!("npm install -g {}", a.npm)
 }
 
@@ -232,6 +251,7 @@ pub fn comando_instalar(a: &Agente) -> String {
 pub fn comando_login(a: &Agente) -> String {
     match a.bin {
         "claude" => "claude /login".into(),
+        "ollama" => "ollama list".into(),
         "opencode" => "opencode auth login".into(),
         "codex" => "codex login".into(),
         _ => a.bin.to_string(),
@@ -245,6 +265,7 @@ pub fn comando_direto(a: &Agente, prompt: &str) -> (String, Vec<String>) {
         "opencode" => vec!["run".into(), prompt.into()],
         "codex" => vec!["exec".into(), "--skip-git-repo-check".into(), prompt.into()],
         "gemini" => vec!["-p".into(), prompt.into()],
+        "ollama" => vec!["run".into(), modelo_ollama(&pasta_config()).unwrap_or_else(|| "llama3.2".into()), prompt.into()],
         _ => vec![prompt.into()],
     };
     (a.bin.to_string(), args)
@@ -331,6 +352,18 @@ pub fn rodar_direto(prog: &str, args: &[String], pasta: &Path, limite: std::time
 
 #[cfg(test)]
 mod testes {
+    #[test]
+    fn ollama_modelo_e_comandos() {
+        let saida = "NAME            ID            SIZE    MODIFIED\nllama3.2:3b     a80c4f17acd5  2.0 GB  2 weeks ago\nqwen2.5:7b      845dbda0ea48  4.7 GB  3 weeks ago\n";
+        assert_eq!(super::primeiro_modelo(saida).as_deref(), Some("llama3.2:3b"));
+        assert_eq!(super::primeiro_modelo("NAME ID\n"), None);
+        let o = super::AGENTES.iter().find(|a| a.bin == "ollama").unwrap();
+        let (p, a) = super::comando_direto(o, "oi");
+        assert_eq!(p, "ollama");
+        assert_eq!(a[0], "run");
+        assert_eq!(a.last().unwrap(), "oi");
+    }
+
     #[test]
     fn comandos_de_instalar_e_login() {
         let a = |b: &str| super::AGENTES.iter().find(|a| a.bin == b).unwrap();

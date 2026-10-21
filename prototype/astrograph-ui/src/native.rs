@@ -294,6 +294,7 @@ pub struct Session {
     term_fundo: Vec<(Term, bool)>,
     /// pedido pronto esperando o agente terminar de abrir: (desde quando, texto)
     agente_fila: Option<(std::time::Instant, String)>,
+    agente_fila_enter: bool,
     /// só nos testes: pasta do `config.json` e agentes tidos como instalados
     agentes_pasta: Option<PathBuf>,
     agentes_tem: Option<Vec<&'static str>>,
@@ -420,6 +421,7 @@ impl Session {
             term_agente: false,
             term_fundo: Vec::new(),
             agente_fila: None,
+            agente_fila_enter: true,
             agentes_pasta: None,
             agentes_tem: None,
             mtime: None,
@@ -676,6 +678,7 @@ impl Session {
                 [Key::Char('A'), Key::Char('S')] => self.agente_sessoes(),
                 [Key::Char('A'), Key::Char('x')] => self.agente_corrigir(),
                 [Key::Char('A'), Key::Char('E')] => self.ia_abrir(),
+                [Key::Char('A'), Key::Char('c')] => self.agente_citar(),
                 [Key::Char('A'), Key::Char('i')] => self.agente_explicar(),
                 [Key::Char('A'), Key::Char('r')] => self.agente_enviar(crate::agentes::pedido_revisar()),
                 [Key::Char('A'), Key::Char('m')] => self.agente_enviar(crate::agentes::pedido_commit()),
@@ -1658,7 +1661,16 @@ impl Session {
             return false;
         };
         let modo = crate::agentes::modo_atual_em(&self.pasta_agentes());
-        let (linha, exato) = crate::agentes::linha_de_comando(a, modo.id);
+        let (mut linha, exato) = crate::agentes::linha_de_comando(a, modo.id);
+        if a.bin == "ollama" {
+            match crate::agentes::modelo_ollama(&self.pasta_agentes()) {
+                Some(m) => linha = format!("ollama run {m}"),
+                None => {
+                    self.say("Nenhum modelo do Ollama: rode `ollama pull llama3.2` ou defina ollama_model no config.json.".into(), ToastKind::Info);
+                    return false;
+                }
+            }
+        }
         let mut partes = linha.split_whitespace();
         let mut cmd = portable_pty::CommandBuilder::new(partes.next().unwrap_or(a.bin));
         for p in partes {
@@ -1760,17 +1772,43 @@ impl Session {
 
     /// Manda um pedido pronto ao agente: abre o agente se preciso (o texto espera ele terminar de subir).
     fn agente_enviar(&mut self, pedido: String) {
+        self.agente_enviar_com(pedido, true);
+    }
+
+    /// `enter`: manda o texto e aperta Enter; senão só deixa o texto digitado no agente (citação).
+    fn agente_enviar_com(&mut self, pedido: String, enter: bool) {
         if self.term.is_some() && self.term_agente {
             if let Some(t) = self.term.as_mut() {
                 t.colar(&pedido);
-                t.write(b"\r");
+                if enter {
+                    t.write(b"\r");
+                }
             }
             self.term_focus = true;
             return;
         }
         if self.abrir_agente(&self.root.clone(), &[]) {
             self.agente_fila = Some((std::time::Instant::now(), pedido));
+            self.agente_fila_enter = enter;
         }
+    }
+
+    /// `<Líder>Ac`: cita no agente o arquivo (ou as linhas selecionadas) como `@arquivo#L3-9 `, sem enviar.
+    fn agente_citar(&mut self) {
+        let Some(arq) = self.path.clone() else {
+            self.say("Salve o arquivo antes (o agente precisa do nome).".into(), ToastKind::Info);
+            return;
+        };
+        let rel = relativo(&self.root, &arq.to_string_lossy());
+        let ref_ = match self.ed.selection() {
+            Some((_, anc)) => {
+                let (a, b) = (anc.row.min(self.ed.cursor.row) + 1, anc.row.max(self.ed.cursor.row) + 1);
+                self.ed.feed(&[Key::Esc]);
+                if a == b { format!("@{rel}#L{a} ") } else { format!("@{rel}#L{a}-{b} ") }
+            }
+            None => format!("@{rel} "),
+        };
+        self.agente_enviar_com(ref_, false);
     }
 
     /// Entrega o pedido que esperava o agente abrir: quando ele já desenhou algo e passou um tempo.
@@ -1781,9 +1819,12 @@ impl Session {
             return;
         }
         if let Some((_, pedido)) = self.agente_fila.take() {
+            let enter = std::mem::replace(&mut self.agente_fila_enter, true);
             if let Some(t) = self.term.as_mut() {
                 t.colar(&pedido);
-                t.write(b"\r");
+                if enter {
+                    t.write(b"\r");
+                }
             }
         }
     }
@@ -4321,6 +4362,34 @@ mod testes {
         s.feed(" Ai");
         let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"));
         assert!(linhas_do_terminal(&m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"), "{:?}", linhas_do_terminal(&m));
+        s.term_close();
+        std::env::set_var("PATH", path_antes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn citar_arquivo_e_selecao_no_agente_sem_enviar() {
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (_bin, path_antes) = agentes_falsos("citar");
+        let d = projeto("citar");
+        let arq = d.join("src/alfa.rs");
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.agentes_pasta = Some(d.join("cfg"));
+        s.agentes_tem = Some(vec!["claude"]);
+        s.resize(80, 20.0);
+        s.term_resize(14, 100);
+        // sem seleção: o arquivo inteiro; o agente abre e recebe a citação (sem Enter)
+        s.feed(" Ac");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.contains("@src/alfa.rs")));
+        assert!(linhas_do_terminal(&m).iter().any(|l| l.contains("@src/alfa.rs")), "{:?}", linhas_do_terminal(&m));
+        // com seleção: as linhas
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed("Vj");
+        s.feed(" Ac");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("@src/alfa.rs#L1-2"));
+        assert!(linhas_do_terminal(&m).join("\n").contains("@src/alfa.rs#L1-2"), "{:?}", linhas_do_terminal(&m));
         s.term_close();
         std::env::set_var("PATH", path_antes);
     }
