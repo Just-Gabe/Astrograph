@@ -109,6 +109,17 @@ pub struct Scene {
     tab_rects: Vec<(f32, f32)>,
     side: Spring,
     term: Spring,
+    /// largura do painel lateral do agente (a altura do terminal comum é `term`)
+    termw: Spring,
+    /// o painel aberto é o lateral
+    term_lat: bool,
+    /// retângulo do × que fecha o painel do terminal (`None` com o painel fechado)
+    term_x: Option<(f32, f32, f32, f32)>,
+    /// tamanho do painel como fração da janela (arrastar a borda muda)
+    frac_h: f32,
+    frac_w: f32,
+    /// tamanho da janela no último quadro
+    win: (f32, f32),
     /// modo zen: 0 = normal, 1 = agente em tela cheia
     zen: Spring,
     /// camada em pintura (a barra de abas sobe quando os painéis ocupam a janela)
@@ -219,6 +230,12 @@ impl Scene {
             tab_rects: Vec::new(),
             side: Spring::new(0.0, 24.0, 1.0),
             term: Spring::new(0.0, 22.0, 1.0),
+            termw: Spring::new(0.0, 22.0, 1.0),
+            term_lat: false,
+            term_x: None,
+            frac_h: 0.36,
+            frac_w: 0.38,
+            win: (0.0, 0.0),
             zen: Spring::new(0.0, 22.0, 1.0),
             camada: Camada::Tudo,
             term_geom: None,
@@ -293,7 +310,7 @@ impl Scene {
         // com duas ou mais abas, a barra de abas fica entre o título e o texto
         let text_y = (d::M.title_h * s + if self.tabs_n >= 2 { TAB_H * s } else { 0.0 }).round();
         let area_h = h as f32 - text_y - d::M.bottom * s - self.term.target.max(0.0);
-        let cols = (((w as f32 - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
+        let cols = (((w as f32 - self.termw.target.max(0.0) - text_x_final - d::M.pad_x * s) / self.char_w).floor() as i64).max(10) as usize;
         Layout { text_x, text_y, line_h: self.line_h, char_w: self.char_w, rows: (area_h / self.line_h).max(3.0), cols, gutter_x, gutter_w }
     }
 
@@ -333,7 +350,12 @@ impl Scene {
             let (rows, cols) = self.zen_grid(w as f32, h as f32);
             return (rows, cols);
         }
-        let rows = (((h as f32 * 0.36) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
+        if self.term_lat {
+            let rows = ((h as f32 - d::M.title_h * s - d::M.bottom * s - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
+            let cols = (((w as f32 * self.frac_w) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
+            return (rows, cols);
+        }
+        let rows = (((h as f32 * self.frac_h) - 24.0 * s) / self.line_h).floor().max(3.0) as usize;
         let cols = (((w as f32 - self.side.target.max(0.0)) - 2.0 * 14.0 * s) / self.char_w).floor().max(20.0) as usize;
         (rows, cols)
     }
@@ -372,7 +394,7 @@ impl Scene {
     pub fn area_paineis(&self, w: u32, h: u32) -> crate::janelas::Rect {
         let x = self.side.x.max(0.0);
         let y = if self.tabs_n >= 2 { TAB_H * self.scale } else { 0.0 };
-        crate::janelas::Rect::new(x, y, (w as f32 - x).max(0.0), (h as f32 - y - self.term.x.max(0.0)).max(0.0))
+        crate::janelas::Rect::new(x, y, (w as f32 - x - self.termw.x.max(0.0)).max(0.0), (h as f32 - y - self.term.x.max(0.0)).max(0.0))
     }
 
     /// Espaço entre painéis.
@@ -396,6 +418,44 @@ impl Scene {
             return None;
         }
         Some(((fy.max(0.0) as usize).min(rows.saturating_sub(1)), (fx.max(0.0) as usize).min(cols.saturating_sub(1))))
+    }
+
+    /// Borda arrastável do painel do terminal sob o ponto: `Some(true)` na lateral (agente), `Some(false)` embaixo.
+    pub fn term_borda(&self, x: f32, y: f32) -> Option<bool> {
+        let (w, h) = self.win;
+        let folga = 5.0 * self.scale;
+        if self.termw.x >= 2.0 {
+            let (x0, y0) = (w - self.termw.x, d::M.title_h * self.scale);
+            return ((x - x0).abs() <= folga && y >= y0 && y <= h - d::M.bottom * self.scale).then_some(true);
+        }
+        if self.term.x >= 2.0 {
+            let y0 = h - d::M.bottom * self.scale - self.term.x;
+            return ((y - y0).abs() <= folga && x >= self.side.x.max(0.0)).then_some(false);
+        }
+        None
+    }
+
+    /// Arrastar a borda: o painel passa a ter o tamanho que o mouse mostra (sem deslize, para seguir o dedo).
+    pub fn term_redimensionar(&mut self, lateral: bool, x: f32, y: f32) {
+        let (w, h) = self.win;
+        if w < 1.0 || h < 1.0 {
+            return;
+        }
+        if lateral {
+            let min = 28.0 * self.char_w;
+            let max = (w - self.side.x.max(0.0) - 24.0 * self.char_w).max(min);
+            let pw = (w - x).clamp(min, max);
+            self.frac_w = pw / w;
+            self.termw.target = pw.round();
+            self.termw.x = self.termw.target;
+        } else {
+            let min = 4.0 * self.line_h + 24.0 * self.scale;
+            let max = (h * 0.8).max(min);
+            let ph = (h - d::M.bottom * self.scale - y).clamp(min, max);
+            self.frac_h = ph / h;
+            self.term.target = ph.round();
+            self.term.x = self.term.target;
+        }
     }
 
     /// Ação da tela inicial sob o ponto (índice no menu).
@@ -447,7 +507,7 @@ impl Scene {
 
     pub fn paint_camada(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, camada: Camada) -> Frame {
         self.camada = camada;
-        if camada != Camada::Casca || self.term.x < 2.0 {
+        if camada != Camada::Casca || (self.term.x < 2.0 && self.termw.x < 2.0) {
             self.term_geom = None;
         }
         let t0 = Instant::now();
@@ -462,7 +522,15 @@ impl Scene {
         }
         // o terminal e o zen são da janela, não de um painel
         let da_janela = !matches!(camada, Camada::Painel { .. });
-        self.term.target = if vm.term.is_some() && da_janela { (h * 0.36).round() } else { 0.0 };
+        let (aberto, lateral) = (vm.term.is_some() && da_janela, vm.term.as_ref().is_some_and(|t| t.lateral && !t.zen));
+        if da_janela {
+            self.win = (w, h);
+            if aberto {
+                self.term_lat = lateral;
+            }
+        }
+        self.term.target = if aberto && !lateral { (h * self.frac_h).round() } else { 0.0 };
+        self.termw.target = if aberto && lateral { (w * self.frac_w).round() } else { 0.0 };
         self.zen.target = if vm.term.as_ref().is_some_and(|t| t.zen) && da_janela { 1.0 } else { 0.0 };
         let lay = self.layout(c.w as u32, c.h as u32, vm.lines);
         let dt = self.last_paint.map_or(0.0, |p| now.saturating_duration_since(p).as_secs_f32()).min(0.05);
@@ -474,7 +542,7 @@ impl Scene {
             self.snap_all(vm, &lay);
             self.first = false;
         }
-        for sp in [&mut self.term, &mut self.zen, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
+        for sp in [&mut self.term, &mut self.termw, &mut self.zen, &mut self.side, &mut self.tree_top, &mut self.tree_sel, &mut self.pick_sel, &mut self.over, &mut self.shift, &mut self.top, &mut self.cur_x, &mut self.cur_y, &mut self.cur_w, &mut self.hl_y, &mut self.pill_w] {
             sp.step(dt);
         }
         for ch in [&mut self.wk, &mut self.pick, &mut self.fade, &mut self.sel, &mut self.bar, &mut self.cmd, &mut self.toast, &mut self.hit_fade] {
@@ -743,7 +811,7 @@ impl Scene {
 
     fn frame(&self, vm: &ViewModel, now: Instant) -> Frame {
         let dash_anim = vm.dash && !self.dash_y.settled();
-        let springs = dash_anim || [&self.term, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
+        let springs = dash_anim || [&self.term, &self.termw, &self.zen, &self.side, &self.tree_top, &self.tree_sel, &self.pick_sel, &self.over, &self.shift, &self.top, &self.cur_x, &self.cur_y, &self.cur_w, &self.hl_y, &self.pill_w].iter().any(|s| !s.settled());
         let chases = [&self.pick, &self.fade, &self.sel, &self.bar, &self.cmd, &self.toast, &self.hit_fade].iter().any(|c| !c.settled());
         let mode_anim = now.saturating_duration_since(self.mode_at).as_millis() < 260;
         let toast_wait = self.toast.target > 0.5;
@@ -785,7 +853,7 @@ impl Scene {
         let clip_bottom = (h - d::M.bottom * s * 0.55 - self.term.x.max(0.0)) as i32;
         // o que é do editor (destaques, seleção, cursor) fica preso à área do texto,
         // sem invadir o título nem a base, mesmo quando a mola passa do alvo
-        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (h - d::M.bottom * s - self.term.x.max(0.0)) as i32);
+        let edit = (self.side.x.max(0.0) as i32, lay.text_y as i32, (c.w as f32 - self.termw.x.max(0.0)) as i32, (h - d::M.bottom * s - self.term.x.max(0.0)) as i32);
         c.set_clip(edit.0, edit.1, edit.2, edit.3);
 
         // destaque da linha atual: barra macia que desliza
@@ -1617,13 +1685,29 @@ impl Scene {
     /// Terminal: painel que sobe da base, com a tela do pty em células da fonte do código.
     fn paint_term(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32), now: Instant) {
         let ph = self.term.x;
-        if ph < 2.0 {
-            if self.term.target < 1.0 {
+        let pw = self.termw.x;
+        self.term_x = None;
+        if ph < 2.0 && pw < 2.0 {
+            if self.term.target < 1.0 && self.termw.target < 1.0 {
                 self.term_cache = None;
             }
             return;
         }
         let Some(tv) = self.term_cache.clone() else { return };
+        if pw >= 2.0 {
+            // agente: coluna na lateral direita, da barra de título até a base
+            let x0 = (w - pw).round();
+            let (y0, y1) = ((d::M.title_h * s).round(), h - d::M.bottom * s);
+            let prev = c.clip;
+            c.set_clip(x0 as i32, y0 as i32, w as i32, y1 as i32);
+            c.rect(x0 as i32, y0 as i32, pw as i32 + 1, (y1 - y0) as i32, d::bg(), 1.0);
+            c.rect(x0 as i32, y0 as i32, pw as i32 + 1, (y1 - y0) as i32, d::surface(), 0.9);
+            c.rect(x0 as i32, y0 as i32, 1.max(s as i32), (y1 - y0) as i32, d::white(), if tv.focus { 0.16 } else { 0.08 });
+            self.paint_term_cells(c, &tv, x0 + 14.0 * s, y0 + 12.0 * s, y1, w, 1.0, now);
+            c.clip = prev;
+            self.paint_term_fechar(c, w - 30.0 * s, y0 + 6.0 * s);
+            return;
+        }
         let x0 = self.side.x.max(0.0);
         let y1 = h - d::M.bottom * s;
         let y0 = (y1 - ph).round();
@@ -1634,6 +1718,23 @@ impl Scene {
         c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::white(), if tv.focus { 0.16 } else { 0.08 });
         self.paint_term_cells(c, &tv, x0 + 14.0 * s, y0 + 12.0 * s, y1, w, 1.0, now);
         c.clip = prev;
+        self.paint_term_fechar(c, w - 30.0 * s, y0 + 6.0 * s);
+    }
+
+    /// O × no canto do painel do terminal/agente: um clique fecha.
+    fn paint_term_fechar(&mut self, c: &mut Canvas, x: f32, y: f32) {
+        let s = self.scale;
+        let lado = 22.0 * s;
+        let px = 15.0 * s;
+        c.rrect(x, y, lado, lado, 6.0 * s, d::white(), 0.07);
+        let tw = self.ui_semi.measure("×", px);
+        c.text(&mut self.ui_semi, px, (x + (lado - tw) / 2.0).round(), (y + lado / 2.0 + px * 0.34).round(), "×", d::dim(), 0.95);
+        self.term_x = Some((x, y, x + lado, y + lado));
+    }
+
+    /// O ponto está no × do painel do terminal?
+    pub fn term_fechar_hit(&self, x: f32, y: f32) -> bool {
+        self.term_x.is_some_and(|(x0, y0, x1, y1)| x >= x0 && x <= x1 && y >= y0 && y <= y1)
     }
 
     /// Modo zen: o editor some num véu e o agente ocupa uma coluna centrada, num cartão
@@ -2493,7 +2594,7 @@ mod testes {
         let mut vm = s.view_model();
         let t0 = Instant::now();
         let sem = quadro(&mut sc, &vm, w, h, t0);
-        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, sel: None });
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, lateral: false, sel: None });
         let mut com = sem.clone();
         for i in 1..60 {
             com = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
@@ -2507,6 +2608,62 @@ mod testes {
             quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
         }
         assert!((sc.layout(w, h, 1).rows - rows0).abs() < 0.01, "e volta ao fechar");
+    }
+
+    #[test]
+    fn agente_abre_na_lateral_arrasta_a_borda_e_fecha_no_x() {
+        let Some(mut sc) = cena() else { return };
+        let (w, h) = (900u32, 700u32);
+        let lay0 = sc.layout(w, h, 1);
+        let tela = std::sync::Arc::new(crate::term::TermScreen {
+            rows: vec![vec![crate::term::TCell { ch: 'x', fg: None, bg: None, bold: false, italic: false, underline: false, cont: false }; 40]; 8],
+            cursor: (0, 1),
+            cursor_visible: true,
+            exited: false,
+            scroll: 0,
+            mouse: Default::default(),
+            bracketed: false,
+            alternada: false,
+        });
+        let mut s = Session::new("abc\n", None);
+        s.resize(lay0.cols, lay0.rows.floor());
+        let mut vm = s.view_model();
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, lateral: true, sel: None });
+        let t0 = Instant::now();
+        for i in 0..80 {
+            quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        let lay = sc.layout(w, h, 1);
+        assert!(lay.cols < lay0.cols - 20, "o editor ficou mais estreito: {} -> {}", lay0.cols, lay.cols);
+        assert!((lay.rows - lay0.rows).abs() < 0.01, "e a altura não mudou");
+        let (tr, tc) = sc.term_dims(w, h);
+        assert!(tr > 20 && tc > 30, "{tr}x{tc}");
+        // a borda esquerda do painel é arrastável; arrastar para a esquerda alarga
+        let borda = w as f32 - sc.termw.x;
+        assert_eq!(sc.term_borda(borda, 300.0), Some(true));
+        assert_eq!(sc.term_borda(borda - 100.0, 300.0), None);
+        sc.term_redimensionar(true, borda - 120.0, 300.0);
+        for i in 80..100 {
+            quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        assert!(sc.layout(w, h, 1).cols < lay.cols - 8, "o painel ficou mais largo");
+        // não passa dos limites
+        sc.term_redimensionar(true, 0.0, 0.0);
+        assert!(sc.termw.x <= w as f32 - 24.0 * sc.char_w + 1.0);
+        sc.term_redimensionar(true, w as f32, 0.0);
+        assert!(sc.termw.x >= 28.0 * sc.char_w - 1.0);
+        // o × está no canto do painel
+        let (x0, y0, x1, y1) = sc.term_x.expect("× pintado");
+        assert!(sc.term_fechar_hit((x0 + x1) / 2.0, (y0 + y1) / 2.0));
+        assert!(!sc.term_fechar_hit(10.0, 300.0));
+        // o terminal comum (embaixo) também tem borda e ×
+        vm.term.as_mut().unwrap().lateral = false;
+        for i in 100..220 {
+            quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
+        }
+        let y_borda = h as f32 - d::M.bottom * sc.scale - sc.term.x;
+        assert_eq!(sc.term_borda(400.0, y_borda), Some(false));
+        assert!(sc.term_x.is_some());
     }
 
     #[test]
@@ -2529,7 +2686,7 @@ mod testes {
         let mut vm = s.view_model();
         let t0 = Instant::now();
         assert!(sc.term_hit(100.0, 500.0, false).is_none(), "sem terminal não há célula");
-        vm.term = Some(crate::nview::TermView { screen: tela.clone(), focus: true, zen: false, sel: None });
+        vm.term = Some(crate::nview::TermView { screen: tela.clone(), focus: true, zen: false, lateral: false, sel: None });
         let mut sem = Vec::new();
         for i in 0..70 {
             sem = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));
@@ -2554,7 +2711,7 @@ mod testes {
         let mut t2 = (*tela).clone();
         t2.scroll = 12;
         t2.exited = true;
-        v2.term = Some(crate::nview::TermView { screen: std::sync::Arc::new(t2), focus: true, zen: false, sel: None });
+        v2.term = Some(crate::nview::TermView { screen: std::sync::Arc::new(t2), focus: true, zen: false, lateral: false, sel: None });
         let mut av = com.clone();
         for i in 80..90 {
             av = quadro(&mut sc, &v2, w, h, t0 + Duration::from_millis(16 * i));
@@ -2581,7 +2738,7 @@ mod testes {
         s.resize(lay0.cols, lay0.rows.floor());
         let mut vm = s.view_model();
         let t0 = Instant::now();
-        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, sel: None });
+        vm.term = Some(crate::nview::TermView { screen: tela, focus: true, zen: false, lateral: false, sel: None });
         let mut normal = quadro(&mut sc, &vm, w, h, t0);
         for i in 1..60 {
             normal = quadro(&mut sc, &vm, w, h, t0 + Duration::from_millis(16 * i));

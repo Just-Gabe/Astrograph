@@ -75,6 +75,8 @@ pub struct TermView {
     pub focus: bool,
     /// modo zen: o terminal (agente) ocupa a janela, numa coluna centralizada
     pub zen: bool,
+    /// agente: abre na lateral direita, em coluna (o terminal comum fica embaixo)
+    pub lateral: bool,
     /// trecho selecionado com o mouse: (linha, coluna) de cada ponta
     pub sel: Option<((usize, usize), (usize, usize))>,
 }

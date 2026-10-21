@@ -4010,7 +4010,7 @@ impl Session {
                 }
             }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
-            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen, sel: self.term_sel }),
+            term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen, lateral: self.term_agente, sel: self.term_sel }),
             tree: self.tree.as_ref().map(|t| {
                 // todos os nós visíveis (até um teto): a roda do mouse rola o explorador por conta própria
                 let first = 0;
@@ -4732,6 +4732,7 @@ pub async fn native_task(
             UiCommand::Close => w.pedido_de_fechar(),
             UiCommand::DashClick(i) => w.atual().dash_click(i),
             UiCommand::DashHover(i) => w.atual().dash_hover(i),
+            UiCommand::TermClose => w.atual().term_close(),
             UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
             UiCommand::Paste(t) => w.atual().colar(&t),
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
