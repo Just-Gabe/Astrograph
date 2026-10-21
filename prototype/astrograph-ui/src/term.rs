@@ -122,10 +122,52 @@ pub fn agente_instalado() -> Option<&'static str> {
     ["claude", "opencode", "codex", "gemini"].into_iter().find(|n| em_path(n))
 }
 
+/// Acha `nome` nas pastas `dirs` do jeito que o sistema o executa. No Windows só serve `.exe`, `.com`,
+/// `.cmd` ou `.bat` (nessa ordem): o arquivo sem extensão que o npm deixa ao lado do `.cmd` é um script de
+/// shell e dá "não é um aplicativo Win32 válido" (erro 193) se for aberto direto.
+pub(crate) fn achar_programa(nome: &str, dirs: &[std::path::PathBuf], windows: bool) -> Option<std::path::PathBuf> {
+    const EXTS: [&str; 4] = [".exe", ".com", ".cmd", ".bat"];
+    for d in dirs {
+        if windows {
+            let ja_tem = EXTS.iter().any(|e| nome.to_lowercase().ends_with(e));
+            if ja_tem && d.join(nome).is_file() {
+                return Some(d.join(nome));
+            }
+            if let Some(e) = EXTS.iter().find(|e| d.join(format!("{nome}{e}")).is_file()) {
+                return Some(d.join(format!("{nome}{e}")));
+            }
+        } else if d.join(nome).is_file() {
+            return Some(d.join(nome));
+        }
+    }
+    None
+}
+
+fn dirs_do_path() -> Vec<std::path::PathBuf> {
+    std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default()
+}
+
 pub(crate) fn em_path(nome: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else { return false };
-    let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
-    std::env::split_paths(&path).any(|d| exts.iter().any(|e| d.join(format!("{nome}{e}")).is_file()))
+    achar_programa(nome, &dirs_do_path(), cfg!(windows)).is_some()
+}
+
+/// Caminho do programa a executar (o do PATH, com a extensão certa no Windows); sem achar, o próprio nome.
+pub(crate) fn programa(nome: &str) -> String {
+    achar_programa(nome, &dirs_do_path(), cfg!(windows)).map_or_else(|| nome.to_string(), |p| p.to_string_lossy().into_owned())
+}
+
+/// Comando para abrir `nome` num pty. No Windows os `.cmd`/`.bat` (como os do npm) rodam por `cmd.exe /C`.
+pub(crate) fn comando_pty(nome: &str) -> CommandBuilder {
+    let caminho = programa(nome);
+    let lower = caminho.to_lowercase();
+    if cfg!(windows) && (lower.ends_with(".cmd") || lower.ends_with(".bat")) {
+        let mut c = CommandBuilder::new("cmd.exe");
+        c.arg("/C");
+        c.arg(caminho);
+        c
+    } else {
+        CommandBuilder::new(caminho)
+    }
 }
 
 impl Term {
@@ -560,5 +602,25 @@ mod testes {
         assert_eq!(cor(vt100::Color::Idx(231)), Some(0xffffff));
         assert_eq!(cor(vt100::Color::Idx(244)), Some(0x808080));
         assert_eq!(cor(vt100::Color::Default), None);
+    }
+
+    #[test]
+    fn no_windows_o_script_sem_extensao_do_npm_nao_vale() {
+        let d = std::env::temp_dir().join(format!("astrograph-npm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for f in ["opencode", "opencode.cmd", "outro", "tool", "tool.exe", "tool.cmd"] {
+            std::fs::write(d.join(f), "x").unwrap();
+        }
+        let dirs = vec![d.clone()];
+        // Windows: o .cmd, nunca o arquivo sem extensão; .exe vem antes de .cmd; só o script sem extensão = não achou
+        assert_eq!(achar_programa("opencode", &dirs, true), Some(d.join("opencode.cmd")));
+        assert_eq!(achar_programa("tool", &dirs, true), Some(d.join("tool.exe")));
+        assert_eq!(achar_programa("outro", &dirs, true), None);
+        assert_eq!(achar_programa("opencode.cmd", &dirs, true), Some(d.join("opencode.cmd")));
+        // Linux/macOS: o arquivo com o nome exato
+        assert_eq!(achar_programa("outro", &dirs, false), Some(d.join("outro")));
+        assert_eq!(achar_programa("nada", &dirs, false), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
