@@ -13,6 +13,8 @@ use crate::textobj;
 
 mod bloco;
 mod ex;
+mod folds;
+pub use folds::Fold;
 pub mod mapas;
 mod numero;
 
@@ -212,6 +214,10 @@ pub struct Editor {
     textwidth: usize,
     /// o operador acabou de ter o fim ajustado pela regra `o_v` (movimento exclusivo que termina na coluna 0)
     end_adjusted: bool,
+    /// dobras manuais (`zf`), se estão ligadas (`zn`/`zN`/`zi`) e o nível (`zr`/`zm`/`zR`/`zM`)
+    folds: Vec<Fold>,
+    foldenable: bool,
+    foldlevel: usize,
     /// padrão do comando em execução (`/texto<CR>`)
     search_now: Option<(String, bool)>,
     /// mensagem da última busca ("search hit BOTTOM..." ou erro)
@@ -316,6 +322,9 @@ impl Editor {
             last_cmdline: None,
             textwidth: 0,
             end_adjusted: false,
+            folds: Vec::new(),
+            foldenable: true,
+            foldlevel: 0,
             search_now: None,
             msg: String::new(),
             vis: None,
@@ -830,6 +839,7 @@ impl Editor {
                 self.registrar_mudanca(&old, cur0);
             }
             self.adjust_marks(&old);
+            self.ajustar_folds(&old);
         }
         if let Some(back) = self.marks_back.take() {
             for (c, p) in back {
@@ -1087,13 +1097,15 @@ impl Editor {
         // `gu`, `gU`, `g~`, `g?`: operadores de caixa (o operador é a segunda tecla)
         let caso = match (k, keys.get(i)) {
             (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?' | 'q' | 'w')))) => Some(*o),
+            // `zf{movimento}`: cria uma dobra (o operador interno é `Z`)
+            (Key::Char('z'), Some(Key::Char('f'))) => Some('Z'),
             _ => None,
         };
         if caso.is_some() {
             i += 1;
         }
         match k {
-            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) | Key::Char(op @ 'g') if caso.is_some() || op != 'g' => {
+            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) | Key::Char(op @ 'g') | Key::Char(op @ 'z') if caso.is_some() || !matches!(op, 'g' | 'z') => {
                 let op = caso.unwrap_or(op);
                 let mut count2: Option<usize> = None;
                 loop {
@@ -1110,6 +1122,9 @@ impl Editor {
                     Some(Key::Char(c)) if *c == op => done(Cmd::Op { op, count2, target: Target::Line }),
                     // `gugu`, `gUgU`, `g~g~`, `g?g?`: a linha, como `guu`
                     Some(Key::Char('g')) if caso.is_some() && keys.get(i + 1) == Some(&Key::Char(op)) => done(Cmd::Op { op, count2, target: Target::Line }),
+                    // `zfzf`: como `zF`
+                    Some(Key::Char('z')) if op == 'Z' && keys.get(i + 1) == Some(&Key::Char('f')) => done(Cmd::Op { op, count2, target: Target::Line }),
+                    Some(Key::Char('z')) if op == 'Z' && keys.get(i + 1).is_none() => Parse::Incomplete,
                     Some(Key::Char(ia @ ('i' | 'a'))) => match keys.get(i + 1) {
                         Some(Key::Char(o)) if "wWpP()[]{}<>bB\"'`".contains(*o) => {
                             done(Cmd::Op { op, count2, target: Target::Obj(*ia == 'a', *o) })
@@ -1156,6 +1171,11 @@ impl Editor {
                         Some(_) => Parse::Invalid,
                         None => Parse::Incomplete,
                     },
+                    Key::Char('z') => match keys.get(i) {
+                        Some(Key::Char(c @ ('F' | 'o' | 'O' | 'c' | 'C' | 'a' | 'A' | 'v' | 'x' | 'X' | 'R' | 'M' | 'r' | 'm' | 'd' | 'D' | 'E' | 'n' | 'N' | 'i' | 'j' | 'k'))) => done(Cmd::Simple('z', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
                     Key::Ctrl('o') => done(Cmd::Simple('\u{f}', None)),
                     Key::Ctrl('i') | Key::Tab => done(Cmd::Simple('\t', None)),
                     _ => Parse::Invalid,
@@ -1178,7 +1198,7 @@ impl Editor {
         };
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
-            Cmd::Op { op, .. } => *op != 'y',
+            Cmd::Op { op, .. } => *op != 'y' && *op != 'Z',
             Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}' | '\u{f}' | '\t'),
         };
         self.search_now = p.search.clone();
@@ -1260,6 +1280,18 @@ impl Editor {
         if jump && !falhou_marca {
             self.set_pcmark(pc_before);
         }
+        if !self.folds.is_empty() && self.mode != Mode::Insert {
+            // movimentos horizontais, buscas, marcas e desfazer abrem a dobra onde o cursor caiu; os outros
+            // deixam o cursor no começo dela
+            let abre = match &p.cmd {
+                Cmd::Motion(m) => !m.g && matches!(m.c, 'h' | 'l' | ' ' | '0' | '^' | '$' | 'w' | 'W' | 'b' | 'B' | 'e' | 'E' | 'f' | 'F' | 't' | 'T' | ';' | ',' | '/' | '?' | 'n' | 'N' | '*' | '#' | '%' | '\'' | '`' | '(' | ')' | '{' | '}'),
+                Cmd::Simple('u' | '\u{12}' | 'R', _) => true,
+                _ => false,
+            };
+            if abre {
+                self.abrir_dobras_no_cursor();
+            }
+        }
         if let Some(fim) = self.ins_o.take() {
             if self.mode == Mode::Normal && self.pending.is_empty() {
                 let len = self.buf.line_len(self.cursor.row);
@@ -1281,6 +1313,22 @@ impl Editor {
             's' => self.operator('c', count, Target::Motion(Mo { c: 'l', g: false, arg: None }), reg),
             'S' => self.operator('c', count, Target::Line, reg),
             'Y' => self.operator('y', count, Target::Motion(Mo { c: '$', g: false, arg: None }), reg),
+            'z' => {
+                let c = arg.unwrap();
+                if c == 'F' {
+                    // `zF`: dobra de `N` linhas (contando a atual)
+                    let r1 = self.cursor.row;
+                    let r2 = (r1 + count1 - 1).min(self.last_row());
+                    self.fold_criar(r1, r2);
+                    // uma linha só não vira dobra; o cursor volta à coluna 0
+                    if r2 == r1 {
+                        self.cursor = Pos::new(r1, 0);
+                    }
+                    self.fix_cursor();
+                } else {
+                    self.zcmd(c, count1);
+                }
+            }
             'g' => match arg.unwrap() {
                 ';' => self.change_move(-(count1 as i64)),
                 ',' => self.change_move(count1 as i64),
@@ -1387,7 +1435,17 @@ impl Editor {
 
     fn motion(&self, m: Mo, count: Option<usize>, op_pending: bool) -> Option<Res> {
         let c1 = count.unwrap_or(1);
-        let cur = self.cursor;
+        let mut cur = self.cursor;
+        // dentro de uma dobra fechada, as palavras começam do fim dela (adiante) ou do começo (para trás)
+        if !self.folds.is_empty() {
+            if let Some((ini, fim)) = self.fold_fechada_em(cur.row) {
+                if matches!(m.c, 'w' | 'W' | 'e' | 'E') && !m.g {
+                    cur = Pos::new(fim, self.buf.line_len(fim).saturating_sub(1));
+                } else if matches!(m.c, 'b' | 'B') || (m.g && matches!(m.c, 'e' | 'E')) {
+                    cur = Pos::new(ini, 0);
+                }
+            }
+        }
         let b = &self.buf;
         let len = b.line_len(cur.row);
         let ex = |pos: Pos| Some(Res { pos, kind: Kind::Excl, vertical: false, fail: false });
@@ -1450,7 +1508,7 @@ impl Editor {
                 if cur.row >= self.last_row() {
                     return None;
                 }
-                let row = (cur.row + c1).min(self.last_row());
+                let row = if self.folds.is_empty() { (cur.row + c1).min(self.last_row()) } else { self.descer_visiveis(cur.row, c1)? };
                 let col = if m.c == 'j' { self.col_for_want(row) } else { b.first_nonblank(row).min(b.line_len(row).saturating_sub(1)) };
                 Some(Res { pos: Pos::new(row, col), kind: Kind::Line, vertical: m.c == 'j', fail: false })
             }
@@ -1458,7 +1516,7 @@ impl Editor {
                 if cur.row == 0 {
                     return None;
                 }
-                let row = cur.row.saturating_sub(c1);
+                let row = if self.folds.is_empty() { cur.row.saturating_sub(c1) } else { self.subir_visiveis(cur.row, c1)? };
                 let col = if m.c == 'k' { self.col_for_want(row) } else { b.first_nonblank(row).min(b.line_len(row).saturating_sub(1)) };
                 Some(Res { pos: Pos::new(row, col), kind: Kind::Line, vertical: m.c == 'k', fail: false })
             }
@@ -1675,7 +1733,14 @@ impl Editor {
                     self.failed = true;
                     return;
                 }
-                let r2 = (r1 + n - 1).min(self.last_row());
+                // cada dobra fechada conta como uma linha, e o trecho leva a dobra inteira
+                let (r1, r2) = if self.folds.is_empty() {
+                    (r1, (r1 + n - 1).min(self.last_row()))
+                } else {
+                    let ate = if n > 1 { self.descer_visiveis(r1, n - 1).unwrap_or(r1) } else { r1 };
+                    let ate = if n > 1 && self.descer_visiveis(r1, n - 1).is_none() { self.last_row() } else { ate };
+                    self.expandir_dobras(r1, ate)
+                };
                 // o Vim leva o cursor ao primeiro não-branco antes de operar: o começo do trecho é o menor
                 // entre ele e a posição de partida (com contagem > 1 o trecho ainda começa onde se estava)
                 let col = if n == 1 { self.cursor.col.min(self.buf.first_nonblank(r1)) } else { self.cursor.col };
@@ -1767,6 +1832,21 @@ impl Editor {
             }
         };
         self.ops_change = false;
+        // as dobras fechadas entram inteiras (o Vim faz isso para qualquer operador fora do visual)
+        let (mut a, mut b, mut kind) = (a, b, kind);
+        if !self.folds.is_empty() {
+            if let Some((fs, _)) = self.fold_fechada_em(a.row) {
+                a = Pos::new(fs, 0);
+            }
+            if b.col > 0 || kind != Kind::Excl {
+                if let Some((_, fe)) = self.fold_fechada_em(b.row) {
+                    b = Pos::new(fe, self.buf.line_len(fe));
+                    if kind == Kind::Incl {
+                        kind = Kind::Excl;
+                    }
+                }
+            }
+        }
         self.apply_operator(op, a, b, kind, reg);
     }
 
@@ -1894,6 +1974,14 @@ impl Editor {
                 // (o primeiro não-branco em `guu`, a do cursor em `guj`)
                 let _ = antes;
                 self.cursor = a;
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            'Z' => {
+                // `zf`: dobra de `a` até `b` (por caracteres ou linhas, vale pelas linhas)
+                self.fold_criar(a.row, b.row.max(a.row));
+                self.cursor = Pos::new(a.row, a.col.min(self.buf.line_len(a.row).saturating_sub(1)));
+                self.cursor_fora_das_dobras();
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }
@@ -2267,7 +2355,8 @@ impl Editor {
         }
         if r.linewise {
             let lines: Vec<&str> = r.text.split('\n').collect();
-            let at = if after { self.cursor.row + 1 } else { self.cursor.row };
+            let ate = self.fold_fechada_em(self.cursor.row).map_or(self.cursor.row, |(_, e)| e);
+            let at = if after { ate + 1 } else { self.cursor.row };
             let mut row = at;
             for _ in 0..count {
                 for l in &lines {
@@ -2438,6 +2527,8 @@ impl Editor {
                 let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
                 VParse::Done(VCmd::Op(*c, count))
             }
+            Key::Char('z') if matches!(keys.get(i + 1), Some(Key::Char('f'))) => VParse::Done(VCmd::Op('Z', count)),
+            Key::Char('z') if keys.get(i + 1).is_none() => VParse::Incomplete,
             Key::Char(op @ ('d' | 'x' | 'X' | 'D' | 'y' | 'Y' | 'c' | 's' | 'S' | 'C' | 'R' | '<' | '>' | '~' | 'u' | 'U' | 'J')) => VParse::Done(VCmd::Op(op, count)),
             Key::Delete => VParse::Invalid,
             Key::Char('r') => match keys.get(i + 1) {
@@ -2665,6 +2756,14 @@ impl Editor {
                 }
                 self.apply_operator(op, s, e, kind, reg);
             }
+            'Z' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                self.fold_criar(a.row, a.row + rows - 1);
+                self.cursor = Pos::new(a.row, if linewise { 0 } else { a.col });
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             'q' | 'w' => {
                 self.vis = None;
                 self.mode = Mode::Normal;
@@ -2765,6 +2864,9 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn start_insert(&mut self, c: char, count: usize) {
+        if !matches!(c, 'o' | 'O') {
+            self.abrir_dobras_no_cursor();
+        }
         let len = self.buf.line_len(self.cursor.row);
         match c {
             'i' => {}
@@ -2791,7 +2893,8 @@ impl Editor {
 
     fn open_line(&mut self, below: bool) {
         let indent: String = self.buf.line(self.cursor.row).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
-        let row = if below { self.cursor.row + 1 } else { self.cursor.row };
+        let ate = self.fold_fechada_em(self.cursor.row).map_or(self.cursor.row, |(_, e)| e);
+        let row = if below { ate + 1 } else { self.cursor.row };
         self.buf.insert_line(row, &indent);
         self.cursor = Pos::new(row, indent.chars().count());
     }

@@ -138,6 +138,15 @@ fn vocabulario_gq() -> Vec<&'static str> {
     v
 }
 
+fn vocabulario_dobras() -> Vec<&'static str> {
+    let mut v = vec![
+        "zfj", "zfip", "zfap", "zf2j", "zfG", "zfgg", "zfk", "zF", "2zF", "3zF", "Vjzf", "Vjjzf", "zfzf", "zo", "zO", "zc", "zC", "za", "zA", "zv", "zx", "zX", "zR", "zM", "zr", "zm", "zd", "zD", "zE", "zn", "zN", "zi", "zj", "zk",
+        "j", "k", "2j", "3k", "dd", "yy", "cc<Esc>", "p", "P", "x", "o<Esc>", "O<Esc>", "G", "gg", "l", "$", "w", "u", ".", "J", ">>", "<<", "dj", "dk", "yj", "~", "ix<Esc>", "ma", "'a", "/o<CR>", "n", "}", "{", "5G", "yyp", "ddp",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
 fn vocabulario_bloco() -> Vec<&'static str> {
     let inicio = ["<C-v>"];
     let mov = ["", "l", "j", "jl", "jj", "jjl", "2l", "3j", "$", "j$", "jj$", "w", "e", "b", "0", "^", "ll", "jw", "je", "G", "gg", "k", "h", "jh", "jjh", "fo", "}", "jlj", "lj"];
@@ -225,6 +234,7 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
         "blk" => return vocabulario_bloco(),
         "ins" => return vocabulario_ins(),
         "gq" => return vocabulario_gq(),
+        "dob" => return vocabulario_dobras(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),
