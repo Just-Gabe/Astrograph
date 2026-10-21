@@ -91,6 +91,8 @@ enum UiCommand {
     /// o botão de fechar da janela (o motor nativo decide se há o que salvar)
     Close,
     DashHover(usize),
+    /// o × do painel do terminal/agente
+    TermClose,
     /// tamanho de cada painel (id, colunas, linhas) das janelas divididas
     Panes(Vec<(u32, i64, i64)>),
     /// clique (pressionar) num painel: foca e posiciona o cursor
@@ -471,7 +473,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::DashClick(_) | UiCommand::DashHover(_) | UiCommand::Close | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::DashClick(_) | UiCommand::DashHover(_) | UiCommand::TermClose | UiCommand::Close | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -645,6 +647,8 @@ struct App {
     zoom_px: Option<f32>,
     /// botão apertado sobre o terminal (a seleção continua mesmo se o ponteiro sair dele)
     term_down: Option<u8>,
+    /// arrastando a borda do painel do terminal (`true`: lateral do agente)
+    term_borda_down: Option<bool>,
     /// último id de cópia já enviado ao clipboard do sistema, e o clipboard (mantido vivo)
     clip_visto: u64,
     clipboard: Option<arboard::Clipboard>,
@@ -706,6 +710,7 @@ impl App {
             pane_sizes: Vec::new(),
             drag_div: None,
             term_down: None,
+            term_borda_down: None,
             zoom_px: None,
             clip_visto: 0,
             clipboard: None,
@@ -1344,6 +1349,30 @@ impl ApplicationHandler<UserEvent> for App {
                         window.set_cursor(if hit.is_some() { CursorIcon::Pointer } else { CursorIcon::Text });
                     }
                 }
+                // borda do painel do terminal: arrastar muda o tamanho
+                if let Some(lat) = self.term_borda_down {
+                    if let Some(sc) = self.scene.as_mut() {
+                        sc.term_redimensionar(lat, position.x as f32, position.y as f32);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if self.term_down.is_none() {
+                    if self.scene.as_ref().is_some_and(|sc| sc.term_fechar_hit(position.x as f32, position.y as f32)) {
+                        if let Some(window) = &self.window {
+                            window.set_cursor(CursorIcon::Pointer);
+                        }
+                        return;
+                    }
+                    if let Some(lat) = self.scene.as_ref().and_then(|sc| sc.term_borda(position.x as f32, position.y as f32)) {
+                        if let Some(window) = &self.window {
+                            window.set_cursor(if lat { CursorIcon::ColResize } else { CursorIcon::RowResize });
+                        }
+                        return;
+                    }
+                }
                 // seleção no terminal: o arrasto continua mesmo fora dele
                 if let Some(b) = self.term_down {
                     if let Some((r, c)) = self.scene.as_ref().and_then(|sc| sc.term_hit(position.x as f32, position.y as f32, true)) {
@@ -1437,6 +1466,26 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseButton::Middle => "middle",
                     _ => return,
                 };
+                // borda do terminal/agente: pressionar e arrastar muda o tamanho
+                if button == MouseButton::Left {
+                    if state == ElementState::Pressed {
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        if self.scene.as_ref().is_some_and(|sc| sc.term_fechar_hit(mx, my)) {
+                            let _ = self.tx.send(UiCommand::TermClose);
+                            return;
+                        }
+                    }
+                    if state == ElementState::Released && self.term_borda_down.take().is_some() {
+                        return;
+                    }
+                    if state == ElementState::Pressed {
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        if let Some(lat) = self.scene.as_ref().and_then(|sc| sc.term_borda(mx, my)) {
+                            self.term_borda_down = Some(lat);
+                            return;
+                        }
+                    }
+                }
                 // terminal: pressionar começa seleção (ou vai ao programa); soltar termina
                 {
                     let botao = match button {
