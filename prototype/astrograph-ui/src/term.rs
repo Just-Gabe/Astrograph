@@ -156,6 +156,15 @@ pub(crate) fn programa(nome: &str) -> String {
     achar_programa(nome, &dirs_do_path(), cfg!(windows)).map_or_else(|| nome.to_string(), |p| p.to_string_lossy().into_owned())
 }
 
+/// Comando que roda `cmd` no shell e termina junto com ele (o painel então avisa que o processo acabou).
+pub(crate) fn comando_unico(cmd: &str) -> CommandBuilder {
+    let (prog, flag) = if cfg!(windows) { ("cmd.exe", "/C") } else { ("sh", "-c") };
+    let mut c = CommandBuilder::new(prog);
+    c.arg(flag);
+    c.arg(cmd);
+    c
+}
+
 /// Comando para abrir `nome` num pty. No Windows os `.cmd`/`.bat` (como os do npm) rodam por `cmd.exe /C`.
 pub(crate) fn comando_pty(nome: &str) -> CommandBuilder {
     let caminho = programa(nome);

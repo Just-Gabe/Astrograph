@@ -81,6 +81,18 @@ pub fn mostrar(id: &str, max: u32) -> bool {
     true
 }
 
+/// Nunca mais mostra esta dica (o contador vai ao teto e fica gravado).
+pub fn silenciar(id: &str) {
+    let mut g = ESTADO.lock().unwrap();
+    let e = g.get_or_insert_with(|| Estado { contagem: HashMap::new(), carregado: false, vistas: HashSet::new(), ultima: None });
+    if !e.carregado {
+        e.contagem = carregar();
+        e.carregado = true;
+    }
+    e.contagem.insert(id.to_string(), 99);
+    gravar(&e.contagem);
+}
+
 /// Só para os testes: esquece o que já foi mostrado e o intervalo entre dicas.
 #[cfg(test)]
 pub fn zerar() {
