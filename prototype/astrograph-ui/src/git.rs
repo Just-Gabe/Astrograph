@@ -32,6 +32,9 @@ pub fn raiz(dir: &Path) -> Option<PathBuf> {
 /// forte do que há dentro delas.
 pub fn estados(dir: &Path) -> std::collections::HashMap<PathBuf, char> {
     let mut mapa = std::collections::HashMap::new();
+    // as chaves saem de `dir` (como a árvore o conhece): o git devolve outra grafia do caminho no
+    // Windows (nome curto x longo, barras), então só se usa dele o que vem relativo à raiz do repositório
+    let Some(prefixo) = git(dir, &["rev-parse", "--show-prefix"]).map(|o| String::from_utf8_lossy(&o).trim().to_string()) else { return mapa };
     let Some(topo) = raiz(dir) else { return mapa };
     let Some(o) = git(&topo, &["status", "--porcelain=v1", "-z", "--untracked-files=all"]) else { return mapa };
     let texto = String::from_utf8_lossy(&o).into_owned();
@@ -68,14 +71,19 @@ pub fn estados(dir: &Path) -> std::collections::HashMap<PathBuf, char> {
         } else {
             'A'
         };
-        let mut p = topo.join(&caminho);
-        loop {
-            let atual = mapa.get(&p).copied();
+        // relativo a `dir`; fora dele não interessa
+        let Some(rel) = caminho.strip_prefix(prefixo.as_str()) else { continue };
+        let mut p = dir.to_path_buf();
+        let mut chaves = Vec::new();
+        for parte in rel.split('/').filter(|s| !s.is_empty()) {
+            p.push(parte);
+            chaves.push(p.clone());
+        }
+        // o arquivo e cada pasta no caminho até ele
+        for k in chaves {
+            let atual = mapa.get(&k).copied();
             if atual.is_none_or(|a| forca(c) > forca(a)) {
-                mapa.insert(p.clone(), c);
-            }
-            if p == topo || !p.pop() || !p.starts_with(&topo) || p == topo {
-                break;
+                mapa.insert(k, c);
             }
         }
     }
