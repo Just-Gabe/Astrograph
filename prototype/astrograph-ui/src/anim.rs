@@ -53,6 +53,11 @@ impl Spring {
         4.6 / (ms.max(1) as f32 / 1000.0)
     }
 
+    #[cfg(test)]
+    pub fn omega_para_teste(&self) -> f32 {
+        self.omega
+    }
+
     pub fn snap(&mut self, x: f32) {
         self.x = x;
         self.target = x;

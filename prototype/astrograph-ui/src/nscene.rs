@@ -198,19 +198,19 @@ impl Scene {
             cur_w: Spring::new(0.0, 40.0, 1.0),
             hl_y: Spring::new(0.0, 22.0, 1.0),
             pill_w: Spring::new(0.0, 26.0, 1.0),
-            sel: Chase::new(0.0, 16.0),
+            sel: Chase::new(0.0, 24.0),
             last_sel: None,
             bar: Chase::new(0.0, 9.0),
-            cmd: Chase::new(0.0, 22.0),
+            cmd: Chase::new(0.0, 28.0),
             cmd_cache: (':', String::new()),
-            toast: Chase::new(0.0, 14.0),
+            toast: Chase::new(0.0, 22.0),
             toast_cache: None,
             toast_id: 0,
             toast_at: now,
             over: Spring::new(0.0, 20.0, 0.5),
             bump_id: 0,
             fade_rows: (0, 0),
-            fade: Chase::new(1.0, 9.0),
+            fade: Chase::new(1.0, 14.0),
             shift: Spring::new(0.0, 22.0, 1.0),
             shift_row: usize::MAX,
             last_lines: 0,
@@ -219,7 +219,7 @@ impl Scene {
             tab_rects: Vec::new(),
             side: Spring::new(0.0, 24.0, 1.0),
             term: Spring::new(0.0, 22.0, 1.0),
-            zen: Spring::new(0.0, 16.0, 1.0),
+            zen: Spring::new(0.0, 22.0, 1.0),
             camada: Camada::Tudo,
             term_geom: None,
             term_cache: None,
@@ -230,14 +230,14 @@ impl Scene {
             tree_top: Spring::new(0.0, 26.0, 1.0),
             tree_sel_visto: None,
             tree_sel: Spring::new(0.0, 34.0, 1.0),
-            pick: Chase::new(0.0, 18.0),
+            pick: Chase::new(0.0, 28.0),
             pick_sel: Spring::new(0.0, 36.0, 1.0),
             pick_cache: None,
             clock: None,
             dash_at: None,
             ready_ms: 0,
             hit_id: 0,
-            hit_fade: Chase::new(0.0, 14.0),
+            hit_fade: Chase::new(0.0, 22.0),
             flash_id: 0,
             flash_at: None,
             flash_range: None,
@@ -2864,5 +2864,51 @@ mod testes {
             quadro(&mut sc, &vm, 800, 600, t0 + Duration::from_millis(16 * i));
         }
         assert!(sc.tree_top.target >= 60.0 - visiveis + 1.0 - 0.01 && sc.tree_top.target <= 60.0, "{}", sc.tree_top.target);
+    }
+
+    /// ms (passos de 4 ms) até a animação chegar a 90% do caminho (a que o olho lê como "chegou").
+    fn ms_ate_90(mut passo: impl FnMut() -> f32) -> u32 {
+        for i in 1..1000u32 {
+            if passo() >= 0.9 {
+                return i * 4;
+            }
+        }
+        9999
+    }
+
+    #[test]
+    fn animacoes_chegam_rapido_sem_virar_pressa() {
+        let sc = cena().expect("fontes");
+        let chase = |c: &Chase| {
+            let mut c = *c;
+            c.v = 0.0;
+            c.target = 1.0;
+            ms_ate_90(|| {
+                c.step(0.004);
+                c.v
+            })
+        };
+        let mola = |m: &Spring| {
+            let mut m = Spring::new(0.0, m.omega_para_teste(), 1.0);
+            m.target = 1.0;
+            ms_ate_90(|| {
+                m.step(0.004);
+                m.x
+            })
+        };
+        // menus, buscador, linha de comando, avisos e seleção: leem como instantâneos (≤ 120 ms até 90%)
+        for (nome, ms) in [("picker", chase(&sc.pick)), ("cmdline", chase(&sc.cmd)), ("aviso", chase(&sc.toast)), ("seleção visual", chase(&sc.sel)), ("realce da busca", chase(&sc.hit_fade)), ("menu da líder", chase(&sc.wk))] {
+            assert!(ms <= 120, "{nome} leva {ms} ms");
+        }
+        // decoração: linha nova que entra
+        assert!(chase(&sc.fade) <= 200, "linha nova");
+        // painéis que deslizam (o explorador é o modelo): entre 100 e 200 ms; nem seco, nem arrastado
+        for (nome, ms) in [("explorador", mola(&sc.side)), ("terminal", mola(&sc.term)), ("modo zen", mola(&sc.zen)), ("pílula", mola(&sc.pill_w)), ("linhas", mola(&sc.shift))] {
+            assert!((100..=200).contains(&ms), "{nome} leva {ms} ms");
+        }
+        // seleções dentro de listas: respondem ao teclado na hora (≤ 130 ms)
+        for (nome, ms) in [("seleção do explorador", mola(&sc.tree_sel)), ("seleção do buscador", mola(&sc.pick_sel)), ("destaque da tela inicial", mola(&sc.dash_y))] {
+            assert!(ms <= 130, "{nome} leva {ms} ms");
+        }
     }
 }
