@@ -75,8 +75,8 @@ defina `ASTROGRAPH_CLONE_EXISTENTE=substituir` ou `usar`. Um clone limpo só é 
 `:Astrograph atualizar` segue a `main`: traz o código novo e recompila o app em Rust (motor nativo
 incluído) quando ele mudou. Sem `cargo` instalado ele baixa o `.exe` (ou o binário do Linux/macOS)
 que o CI publica a cada push na `main` (release móvel `main-latest`), conferindo o SHA256; se o CI ainda
-estiver compilando esse commit, avisa para tentar de novo em alguns minutos. Os instaladores também usam
-`main-latest` enquanto não houver uma release com tag `v*`.
+estiver compilando esse commit, avisa para tentar de novo em alguns minutos. Os instaladores também preferem o
+`main-latest` (o código atual); só sem ele usam a última release com tag `v*`.
 
 {: .note }
 Um `init.lua` que monta o próprio lazy.nvim (estilo kickstart) não é importado:
