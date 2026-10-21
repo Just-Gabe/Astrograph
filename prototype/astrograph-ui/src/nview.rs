@@ -41,6 +41,8 @@ pub struct PickerView {
     pub total: usize,
     /// ainda procurando em segundo plano
     pub buscando: bool,
+    /// trecho do arquivo do item selecionado: (número da linha, texto, em destaque)
+    pub preview: Vec<(usize, String, bool)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +51,8 @@ pub struct TreeItem {
     pub level: usize,
     pub dir: bool,
     pub open: bool,
+    /// estado no git (`M`, `A`, `?`, `D`, `R`, `U`) ou espaço
+    pub git: char,
 }
 
 /// Explorador: janela de itens (`first` é o índice absoluto do primeiro) e seleção absoluta.
@@ -147,6 +151,16 @@ pub struct ViewModel {
     pub diags: std::sync::Arc<Vec<crate::lsp::Diag>>,
     /// texto do hover (`K`) aberto
     pub hover: Option<String>,
+    /// trabalho do servidor de linguagem em andamento ("rust-analyzer: Indexando 40%")
+    pub progress: Option<String>,
+    /// menu de atalhos depois da líder (aparece ao esperar): (tecla, o que faz)
+    pub whichkey: Vec<(String, String)>,
+    /// com dobras fechadas: o número da linha do arquivo de cada linha mostrada (a margem usa isto)
+    pub row_map: Option<std::sync::Arc<Vec<usize>>>,
+    /// com linhas quebradas: quais linhas mostradas são continuação da anterior (sem número na margem)
+    pub row_cont: Option<std::sync::Arc<Vec<bool>>>,
+    /// o cursor na linha e coluna do arquivo (a pílula mostra estas, com dobras ou quebra de linha)
+    pub cursor_real: (usize, usize),
     /// `:set number` / `relativenumber`
     pub numero: bool,
     pub relativo: bool,
@@ -212,6 +226,11 @@ impl ViewModel {
             git: None,
             diags: std::sync::Arc::new(Vec::new()),
             hover: None,
+            progress: None,
+            whichkey: Vec::new(),
+            row_map: None,
+            row_cont: None,
+            cursor_real: (0, 0),
             numero: true,
             relativo: false,
             sig: None,

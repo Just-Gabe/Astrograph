@@ -13,6 +13,8 @@ use crate::textobj;
 
 mod bloco;
 mod ex;
+mod folds;
+pub use folds::Fold;
 pub mod mapas;
 mod numero;
 
@@ -144,6 +146,8 @@ struct Insert {
     typed: Vec<Key>,
     /// linha que recebeu só recuo automático (some se nada for digitado)
     ai_row: Option<usize>,
+    /// onde a inserção começou (`<C-w>` e `<C-u>` param aqui na primeira vez)
+    start: Pos,
 }
 
 pub struct Editor {
@@ -203,6 +207,23 @@ pub struct Editor {
     emptied: bool,
     /// último padrão buscado e a direção (para `n`/`N`)
     last_search: Option<(String, bool)>,
+    /// última substituição (`:s`): padrão, substituto, flags
+    last_sub: Option<(String, String, String)>,
+    last_cmdline: Option<String>,
+    /// `:set textwidth` (0: o `gq` usa 79)
+    textwidth: usize,
+    /// nome do arquivo (registrador `"%`) e o texto que um comando `:` quer mostrar numa aba (`:registers`, `:marks`)
+    nome_arquivo: Option<String>,
+    host_aba: Option<(String, String)>,
+    /// histórico da linha de comando (`<C-p>`/`<C-n>` e as setas) e a posição nele
+    cmd_hist: Vec<String>,
+    cmd_hist_idx: Option<usize>,
+    /// o operador acabou de ter o fim ajustado pela regra `o_v` (movimento exclusivo que termina na coluna 0)
+    end_adjusted: bool,
+    /// dobras manuais (`zf`), se estão ligadas (`zn`/`zN`/`zi`) e o nível (`zr`/`zm`/`zR`/`zM`)
+    folds: Vec<Fold>,
+    foldenable: bool,
+    foldlevel: usize,
     /// padrão do comando em execução (`/texto<CR>`)
     search_now: Option<(String, bool)>,
     /// mensagem da última busca ("search hit BOTTOM..." ou erro)
@@ -223,6 +244,24 @@ pub struct Editor {
     marks: HashMap<char, Pos>,
     /// marca de contexto (`''` e ``` `` ```): de onde o último salto saiu
     pcmark: Option<Pos>,
+    /// lista de saltos (`<C-o>`/`<C-i>`) e o índice atual (== len quando não navegou)
+    jumps: Vec<Pos>,
+    jump_idx: usize,
+    /// marcas `'.` / `'[` / `']` / `'^` e a lista de mudanças (`g;`/`g,`)
+    last_change: Option<Pos>,
+    brk_ini: Option<Pos>,
+    brk_fim: Option<Pos>,
+    insert_stop: Option<Pos>,
+    changes: Vec<Pos>,
+    change_idx: usize,
+    /// um novo passo de desfazer começou desde a última mudança registrada
+    new_change: bool,
+    /// `gJ`: junta sem espaço nem recuo
+    join_raw: bool,
+    /// a inserção atual já mudou o texto (para `']` no <Esc>)
+    ins_mudou: bool,
+    /// `<C-o>` na inserção: volta a inserir depois de um comando; guarda se o cursor estava depois do fim
+    ins_o: Option<bool>,
     /// seleção visual mais recente (para `'<` e `'>`)
     vmarks: Option<(Pos, Pos, VKind)>,
     /// marcas que o desfazer/refazer devolve (aplicadas depois do reajuste por linhas)
@@ -285,6 +324,17 @@ impl Editor {
             failed: false,
             emptied: false,
             last_search: None,
+            last_sub: None,
+            last_cmdline: None,
+            textwidth: 0,
+            nome_arquivo: None,
+            host_aba: None,
+            cmd_hist: Vec::new(),
+            cmd_hist_idx: None,
+            end_adjusted: false,
+            folds: Vec::new(),
+            foldenable: true,
+            foldlevel: 0,
             search_now: None,
             msg: String::new(),
             vis: None,
@@ -296,6 +346,18 @@ impl Editor {
             macro_depth: 0,
             marks: HashMap::new(),
             pcmark: Some(Pos::new(0, 0)),
+            jumps: Vec::new(),
+            jump_idx: 0,
+            last_change: None,
+            brk_ini: Some(Pos::new(0, 0)),
+            brk_fim: Some(Pos::new(lines.len().saturating_sub(1), 0)),
+            insert_stop: None,
+            changes: Vec::new(),
+            change_idx: 0,
+            new_change: false,
+            join_raw: false,
+            ins_mudou: false,
+            ins_o: None,
             vmarks: None,
             marks_back: None,
             put_end: None,
@@ -341,6 +403,11 @@ impl Editor {
     }
 
     /// Teclas pendentes para mostrar (`2d`, `"a`...), como o `showcmd` do Vim.
+    /// `shiftwidth` atual.
+    pub fn shiftwidth(&self) -> usize {
+        self.shiftwidth
+    }
+
     pub fn showcmd(&self) -> String {
         let pendentes: String = self
             .pending
@@ -359,6 +426,34 @@ impl Editor {
     /// Há teclas de um comando ainda incompleto (`d`, `2`, `"`...).
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Teclas de um comando incompleto, como o operador (`d`, `c`, `y`...) e `i`/`a` do objeto de texto.
+    pub fn pendentes(&self) -> Vec<Key> {
+        self.pending.clone()
+    }
+
+    /// Aplica o operador `op` a `[ini, fim)` (fim exclusivo; `linhas`: por linhas inteiras), como se o
+    /// movimento tivesse sido digitado. Para os objetos de texto que o núcleo não conhece (tree-sitter).
+    pub fn operar_intervalo(&mut self, op: char, ini: Pos, fim: Pos, linhas: bool) {
+        self.pending.clear();
+        self.failed = false;
+        self.cursor = ini;
+        self.fix_cursor();
+        self.ops_change = op == 'c';
+        let kind = if linhas { Kind::Line } else { Kind::Excl };
+        self.apply_operator(op, ini, fim, kind, None);
+        self.ops_change = false;
+    }
+
+    /// No modo visual: seleciona de `ini` até `fim` (inclusive), por caracteres.
+    pub fn selecionar(&mut self, ini: Pos, fim: Pos) {
+        self.pending.clear();
+        self.vis = Some(VState { kind: VKind::Char, anchor: ini });
+        self.mode = Mode::Visual;
+        self.cursor = fim;
+        self.fix_cursor();
+        self.curswant = self.want_here();
     }
 
     /// Seleção do modo visual: (tipo, ponta fixa).
@@ -386,6 +481,39 @@ impl Editor {
 
     /// Completar no modo de inserção: troca o texto de `de` até o cursor por `texto` e deixa o
     /// cursor no fim. O que foi digitado vira o texto final (para `.` e contagem).
+    /// Edições de fora do cursor feitas durante a inserção (imports automáticos do completar):
+    /// `(início, fim, texto)` no texto de agora. O cursor acompanha as linhas que entraram acima dele.
+    /// Devolve quantas linhas o texto ganhou (negativo: perdeu) acima do cursor.
+    pub fn editar_na_insercao(&mut self, edicoes: &[(Pos, Pos, String)]) -> i64 {
+        let mut ord: Vec<&(Pos, Pos, String)> = edicoes.iter().collect();
+        ord.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        let mut linhas = 0i64;
+        for (a, b, novo) in ord {
+            let ultima = self.buf.line_count() - 1;
+            let fix = |p: Pos, buf: &Buffer| Pos::new(p.row.min(ultima), p.col.min(buf.line_len(p.row.min(ultima))));
+            let (a, b) = (fix(*a, &self.buf), fix(*b, &self.buf));
+            let acima = b.row < self.cursor.row || (b.row == self.cursor.row && b.col <= self.cursor.col);
+            if a < b {
+                self.buf.delete(a, b);
+            }
+            if !novo.is_empty() {
+                self.buf.insert(a, novo);
+            }
+            if acima {
+                let d = novo.matches('\n').count() as i64 - (b.row - a.row) as i64;
+                linhas += d;
+                if b.row == self.cursor.row && a.row == b.row && !novo.contains('\n') {
+                    let nova = self.cursor.col as i64 + novo.chars().count() as i64 - (b.col - a.col) as i64;
+                    self.cursor.col = nova.max(0) as usize;
+                }
+            }
+        }
+        self.cursor.row = (self.cursor.row as i64 + linhas).max(0) as usize;
+        self.cursor.row = self.cursor.row.min(self.last_row());
+        self.curswant = self.want_here();
+        linhas
+    }
+
     pub fn insert_replace(&mut self, de: Pos, texto: &str) {
         if self.mode != Mode::Insert || de > self.cursor {
             return;
@@ -434,10 +562,22 @@ impl Editor {
                 }
             }),
             '.' => (!self.last_insert.is_empty()).then(|| simples(self.last_insert.clone())),
+            '%' => self.nome_arquivo.clone().map(simples),
+            ':' => self.last_cmdline.clone().map(simples),
             '/' => self.last_search.as_ref().map(|(p, _)| simples(p.clone())),
             '"' => self.unnamed.clone(),
             c => self.regs.get(&c.to_ascii_lowercase()).cloned(),
         }
+    }
+
+    /// O app informa o nome do arquivo aberto (o registrador `"%`).
+    pub fn set_nome_arquivo(&mut self, nome: Option<String>) {
+        self.nome_arquivo = nome;
+    }
+
+    /// Texto para mostrar numa aba (`:registers`, `:marks`): título e conteúdo.
+    pub fn take_host_aba(&mut self) -> Option<(String, String)> {
+        self.host_aba.take()
     }
 
     /// O app informa o que está no clipboard do sistema (`"+p` e `clipboard=unnamedplus` leem daqui).
@@ -507,12 +647,83 @@ impl Editor {
         self.key(k);
     }
 
+    /// `setpcmark()`: guarda de onde o salto saiu (marca de contexto + lista de saltos).
+    /// Executa uma linha de comando `:` (usado por `&` e `@:`).
+    fn run_cmdline_ext(&mut self, l: &str) {
+        self.run_cmdline(l);
+    }
+
+    fn set_pcmark(&mut self, p: Pos) {
+        self.pcmark = Some(p);
+        if self.jumps.len() >= 100 {
+            self.jumps.remove(0);
+        }
+        self.jumps.push(p);
+        self.jump_idx = self.jumps.len();
+    }
+
+    /// Tira da lista de saltos as entradas repetidas na mesma linha (fica a mais recente).
+    fn cleanup_jumps(&mut self) {
+        let n = self.jumps.len();
+        let mut novo: Vec<Pos> = Vec::with_capacity(n);
+        let mut idx = self.jump_idx;
+        for from in 0..n {
+            if self.jump_idx == from {
+                idx = novo.len();
+            }
+            if !self.jumps[from + 1..].iter().any(|q| q.row == self.jumps[from].row) {
+                novo.push(self.jumps[from]);
+            }
+        }
+        if self.jump_idx == n {
+            idx = novo.len();
+        }
+        self.jumps = novo;
+        self.jump_idx = idx;
+    }
+
+    /// `<C-o>` (`count < 0`) e `<C-i>` (`count > 0`).
+    fn jump_older(&mut self, count: i64) {
+        self.cleanup_jumps();
+        let len = self.jumps.len() as i64;
+        if len == 0 {
+            self.failed = true;
+            return;
+        }
+        let mut idx = self.jump_idx as i64;
+        if idx + count < 0 || idx + count >= len {
+            self.failed = true;
+            return;
+        }
+        if idx == len {
+            let cur = self.cursor;
+            self.set_pcmark(cur);
+            self.cleanup_jumps();
+            idx = self.jump_idx as i64 - 1;
+            self.jump_idx = idx.max(0) as usize;
+            if idx + count < 0 {
+                self.failed = true;
+                return;
+            }
+        }
+        idx += count;
+        self.jump_idx = idx as usize;
+        let p = self.jumps[self.jump_idx];
+        let row = p.row.min(self.last_row());
+        self.cursor = Pos::new(row, p.col);
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
     fn set_mark(&mut self, c: char) {
         match c {
             'a'..='z' | 'A'..='Z' => {
                 self.marks.insert(c, self.cursor);
             }
-            '\'' | '`' => self.pcmark = Some(self.cursor),
+            '\'' | '`' => {
+                let cur = self.cursor;
+                self.set_pcmark(cur);
+            }
             _ => self.failed = true,
         }
     }
@@ -522,6 +733,10 @@ impl Editor {
         match c {
             'a'..='z' | 'A'..='Z' => self.marks.get(&c).copied(),
             '\'' | '`' => self.pcmark,
+            '.' => self.last_change,
+            '[' => self.brk_ini,
+            ']' => self.brk_fim,
+            '^' => self.insert_stop,
             '<' | '>' => {
                 let (a, b, kind) = self.vmarks?;
                 let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -546,8 +761,7 @@ impl Editor {
             let l = old.line(r).to_string();
             l.strip_suffix('\n').unwrap_or(&l).to_string()
         };
-        let common = n0.min(n1);
-        let f = (0..common).find(|&r| old_line(r) != self.buf.line(r)).unwrap_or(common);
+        let f = primeira_linha_diferente(old, &self.buf.rope);
         let shift = |row: usize, d: i64| (row as i64 + d).max(0) as usize;
         if n1 < n0 {
             let k = n0 - n1;
@@ -576,6 +790,19 @@ impl Editor {
 
     /// `@r`: executa o conteúdo do registrador como teclas; um comando que falha encerra o macro.
     fn run_macro(&mut self, r: char, count: usize) {
+        let r = if r == '@' && self.last_macro == Some(':') { ':' } else { r };
+        if r == ':' {
+            // `@:` repete a última linha de comando
+            let Some(l) = self.last_cmdline.clone() else {
+                self.failed = true;
+                return;
+            };
+            self.last_macro = Some(':');
+            for _ in 0..count {
+                self.run_cmdline_ext(&l);
+            }
+            return;
+        }
         let r = if r == '@' {
             match self.last_macro {
                 Some(l) => l,
@@ -628,10 +855,17 @@ impl Editor {
 
     fn key(&mut self, k: Key) {
         // marcas acompanham linhas inseridas/apagadas: compara o texto de antes e depois
-        let old = (!self.marks.is_empty() || self.pcmark.is_some()).then(|| self.buf.rope.clone());
+        let old = self.buf.rope.clone();
+        let rev0 = self.buf.rev;
+        let cur0 = self.cursor;
         self.key_raw(k);
-        if let Some(old) = old {
+        if self.buf.rev != rev0 {
+            // desfazer/refazer devolvem marcas; as demais edições registram a mudança
+            if self.marks_back.is_none() {
+                self.registrar_mudanca(&old, cur0);
+            }
             self.adjust_marks(&old);
+            self.ajustar_folds(&old);
         }
         if let Some(back) = self.marks_back.take() {
             for (c, p) in back {
@@ -640,12 +874,147 @@ impl Editor {
         }
     }
 
+    /// Descobre onde o texto mudou (início e fim do trecho novo) e atualiza `'.`, `'[`, `']` e a
+    /// lista de mudanças.
+    fn registrar_mudanca(&mut self, old: &Rope, cur0: Pos) {
+        let (n0, n1) = (old.len_lines(), self.buf.rope.len_lines());
+        let old_line = |r: usize| -> String {
+            let l = old.line(r).to_string();
+            l.strip_suffix('\n').unwrap_or(&l).to_string()
+        };
+        let common = n0.min(n1);
+        let mut f = primeira_linha_diferente(old, &self.buf.rope);
+        if f >= common && n0 == n1 {
+            return;
+        }
+        // linhas inseridas/apagadas iguais às vizinhas: o cursor diz onde o Vim marcou a mudança
+        if n0 != n1 {
+            let k = n0.abs_diff(n1);
+            for cand in [cur0.row, self.cursor.row] {
+                if cand >= f {
+                    continue;
+                }
+                // as linhas antes de `f` já são iguais; só confere o trecho repetido entre `cand` e `f` e que o
+                // resto é o mesmo texto deslocado
+                let resto = if n1 > n0 { n0 } else { n1 };
+                let deslocado = linhas_iguais_no_fim(old, &self.buf.rope, f) >= resto.saturating_sub(f);
+                let ok = deslocado
+                    && if n1 > n0 {
+                        (cand..f).all(|r| old_line(r) == self.buf.line(r + k))
+                    } else {
+                        (cand..f).all(|r| old_line(r + k) == self.buf.line(r))
+                    };
+                if ok {
+                    f = cand;
+                    break;
+                }
+            }
+        }
+        // sufixo de linhas iguais
+        let suf = linhas_iguais_no_fim(old, &self.buf.rope, f);
+        let row_new = f.min(n1 - 1);
+        let col_ini = if f < n0 && f < n1 {
+            let (a, b): (Vec<char>, Vec<char>) = (old_line(f).chars().collect(), self.buf.line(f).chars().collect());
+            let p = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+            if n0 == n1 {
+                // o cursor dá a posição exata quando a edição é ambígua (apagar um de vários iguais)
+                let q = cur0.col;
+                if cur0.row == f && q < p && a[q..p].iter().all(|c| Some(c) == a.get(p)) { q } else { p }
+            } else if n0 > n1 {
+                if !a.is_empty() && b.starts_with(&a) { a.len() } else { 0 }
+            } else if !b.is_empty() && a.starts_with(&b) {
+                b.len()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let ini = Pos::new(row_new, col_ini);
+        let fim_row = (n1 - 1).saturating_sub(suf).max(row_new);
+        let fim_line: Vec<char> = self.buf.line(fim_row).chars().collect();
+        let fim_col = if suf > 0 || fim_row != row_new {
+            let o: Vec<char> = old_line(n0 - 1 - suf.min(n0 - 1)).chars().collect();
+            let cs = o.iter().rev().zip(fim_line.iter().rev()).take_while(|(x, y)| x == y).count();
+            (fim_line.len().saturating_sub(cs)).saturating_sub(1).max(if fim_row == row_new { col_ini } else { 0 })
+        } else {
+            let o: Vec<char> = old_line(f.min(n0 - 1)).chars().collect();
+            let cs = o.iter().rev().zip(fim_line.iter().rev()).take_while(|(x, y)| x == y).count().min(fim_line.len().saturating_sub(col_ini));
+            (fim_line.len().saturating_sub(cs)).saturating_sub(1).max(col_ini)
+        };
+        let fim = Pos::new(fim_row, fim_col);
+        // numa inserção, `'[` fica no começo dela e `']` acompanha o que se digita
+        if self.new_change || self.mode != Mode::Insert {
+            self.brk_ini = Some(ini);
+        }
+        self.brk_fim = Some(fim);
+        self.last_change = Some(ini);
+        if self.mode == Mode::Insert {
+            self.ins_mudou = true;
+        }
+        let add = match self.changes.last() {
+            None => true,
+            Some(p) => self.new_change && (p.row != ini.row || p.col + 79 < ini.col || ini.col + 79 < p.col),
+        };
+        if add {
+            if self.changes.len() >= 100 {
+                self.changes.remove(0);
+            }
+            self.changes.push(ini);
+        } else if let Some(u) = self.changes.last_mut() {
+            *u = ini;
+        }
+        self.new_change = false;
+        self.change_idx = self.changes.len();
+    }
+
+    /// `g;` (`count < 0`) e `g,` (`count > 0`).
+    fn change_move(&mut self, count: i64) {
+        let len = self.changes.len() as i64;
+        if len == 0 {
+            self.failed = true;
+            return;
+        }
+        let mut n = self.change_idx as i64;
+        if n + count < 0 {
+            if n == 0 {
+                self.failed = true;
+                return;
+            }
+            n = 0;
+        } else if n + count >= len {
+            if n == len - 1 {
+                self.failed = true;
+                return;
+            }
+            n = len - 1;
+        } else {
+            n += count;
+        }
+        self.change_idx = n as usize;
+        let p = self.changes[n as usize];
+        let row = p.row.min(self.last_row());
+        self.cursor = Pos::new(row, p.col);
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
     fn key_raw(&mut self, k: Key) {
         if self.cmdline_key(k) {
             return;
         }
         if k == Key::Char(':') && self.pending.is_empty() && self.mode != Mode::Insert {
             self.cmdline_open();
+            return;
+        }
+        // `3:` abre a linha de comando com a faixa `.,.+2`
+        if k == Key::Char(':') && self.mode == Mode::Normal && !self.pending.is_empty() && self.pending.iter().all(|p| matches!(p, Key::Char(c) if c.is_ascii_digit())) {
+            let n: usize = self.pending.iter().filter_map(|p| p.as_char()).collect::<String>().parse().unwrap_or(1);
+            self.pending.clear();
+            self.cmdline_open();
+            if let Some(c) = self.cmdline.as_mut() {
+                *c = if n <= 1 { ".".into() } else { format!(".,.+{}", n - 1) };
+            }
             return;
         }
         match self.mode {
@@ -752,14 +1121,16 @@ impl Editor {
         let done_s = |cmd: Cmd, search: Option<(String, bool)>| Parse::Done(Parsed { reg, count, cmd, prefix, search });
         // `gu`, `gU`, `g~`, `g?`: operadores de caixa (o operador é a segunda tecla)
         let caso = match (k, keys.get(i)) {
-            (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?')))) => Some(*o),
+            (Key::Char('g'), Some(Key::Char(o @ ('u' | 'U' | '~' | '?' | 'q' | 'w')))) => Some(*o),
+            // `zf{movimento}`: cria uma dobra (o operador interno é `Z`)
+            (Key::Char('z'), Some(Key::Char('f'))) => Some('Z'),
             _ => None,
         };
         if caso.is_some() {
             i += 1;
         }
         match k {
-            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) | Key::Char(op @ 'g') if caso.is_some() || op != 'g' => {
+            Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')) | Key::Char(op @ 'g') | Key::Char(op @ 'z') if caso.is_some() || !matches!(op, 'g' | 'z') => {
                 let op = caso.unwrap_or(op);
                 let mut count2: Option<usize> = None;
                 loop {
@@ -776,6 +1147,9 @@ impl Editor {
                     Some(Key::Char(c)) if *c == op => done(Cmd::Op { op, count2, target: Target::Line }),
                     // `gugu`, `gUgU`, `g~g~`, `g?g?`: a linha, como `guu`
                     Some(Key::Char('g')) if caso.is_some() && keys.get(i + 1) == Some(&Key::Char(op)) => done(Cmd::Op { op, count2, target: Target::Line }),
+                    // `zfzf`: como `zF`
+                    Some(Key::Char('z')) if op == 'Z' && keys.get(i + 1) == Some(&Key::Char('f')) => done(Cmd::Op { op, count2, target: Target::Line }),
+                    Some(Key::Char('z')) if op == 'Z' && keys.get(i + 1).is_none() => Parse::Incomplete,
                     Some(Key::Char(ia @ ('i' | 'a'))) => match keys.get(i + 1) {
                         Some(Key::Char(o)) if "wWpP()[]{}<>bB\"'`".contains(*o) => {
                             done(Cmd::Op { op, count2, target: Target::Obj(*ia == 'a', *o) })
@@ -797,7 +1171,7 @@ impl Editor {
                     Key::Char(c @ ('x' | 'X' | 'D' | 'C' | 's' | 'S' | 'Y' | 'p' | 'P' | 'u' | 'J' | 'i' | 'a' | 'I' | 'A' | 'o' | 'O' | '~' | '.')) => {
                         done(Cmd::Simple(c, None))
                     }
-                    Key::Char(c @ ('v' | 'V')) => done(Cmd::Simple(c, None)),
+                    Key::Char(c @ ('v' | 'V' | '&')) => done(Cmd::Simple(c, None)),
                     Key::Char('r') => match keys.get(i) {
                         Some(Key::Char(c)) => done(Cmd::Simple('r', Some(*c))),
                         Some(_) => Parse::Invalid,
@@ -817,6 +1191,18 @@ impl Editor {
                     Key::Ctrl('a') => done(Cmd::Simple('\u{1}', None)),
                     Key::Ctrl('x') => done(Cmd::Simple('\u{18}', None)),
                     Key::Ctrl('r') => done(Cmd::Simple('R', None)),
+                    Key::Char('g') => match keys.get(i) {
+                        Some(Key::Char(c @ ('J' | 'p' | 'P' | 'v' | 'i' | 'I' | ';' | ','))) => done(Cmd::Simple('g', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
+                    Key::Char('z') => match keys.get(i) {
+                        Some(Key::Char(c @ ('F' | 'o' | 'O' | 'c' | 'C' | 'a' | 'A' | 'v' | 'x' | 'X' | 'R' | 'M' | 'r' | 'm' | 'd' | 'D' | 'E' | 'n' | 'N' | 'i' | 'j' | 'k'))) => done(Cmd::Simple('z', Some(*c))),
+                        Some(_) => Parse::Invalid,
+                        None => Parse::Incomplete,
+                    },
+                    Key::Ctrl('o') => done(Cmd::Simple('\u{f}', None)),
+                    Key::Ctrl('i') | Key::Tab => done(Cmd::Simple('\t', None)),
                     _ => Parse::Invalid,
                 },
             },
@@ -837,8 +1223,8 @@ impl Editor {
         };
         let is_change = match &p.cmd {
             Cmd::Motion(_) => false,
-            Cmd::Op { op, .. } => *op != 'y',
-            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}'),
+            Cmd::Op { op, .. } => *op != 'y' && *op != 'Z',
+            Cmd::Simple(c, _) => !matches!(c, 'u' | 'R' | '.' | 'Y' | 'v' | 'V' | '@' | 'm' | '\u{16}' | '\u{f}' | '\t'),
         };
         self.search_now = p.search.clone();
         // `/`, `?`, `*` e `#` gravam o padrão mesmo quando não acham
@@ -917,7 +1303,28 @@ impl Editor {
         let falhou_marca = (self.failed && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, '\'' | '`')))
             || (!had_search && matches!(&p.cmd, Cmd::Motion(m) | Cmd::Op { target: Target::Motion(m), .. } if matches!(m.c, 'n' | 'N')));
         if jump && !falhou_marca {
-            self.pcmark = Some(pc_before);
+            self.set_pcmark(pc_before);
+        }
+        if !self.folds.is_empty() && self.mode != Mode::Insert {
+            // movimentos horizontais, buscas, marcas e desfazer abrem a dobra onde o cursor caiu; os outros
+            // deixam o cursor no começo dela
+            let abre = match &p.cmd {
+                Cmd::Motion(m) => !m.g && matches!(m.c, 'h' | 'l' | ' ' | '0' | '^' | '$' | 'w' | 'W' | 'b' | 'B' | 'e' | 'E' | 'f' | 'F' | 't' | 'T' | ';' | ',' | '/' | '?' | 'n' | 'N' | '*' | '#' | '%' | '\'' | '`' | '(' | ')' | '{' | '}'),
+                Cmd::Simple('u' | '\u{12}' | 'R', _) => true,
+                _ => false,
+            };
+            if abre {
+                self.abrir_dobras_no_cursor();
+            }
+        }
+        if let Some(fim) = self.ins_o.take() {
+            if self.mode == Mode::Normal && self.pending.is_empty() {
+                let len = self.buf.line_len(self.cursor.row);
+                if len > 0 && self.cursor.col + 1 == len && ((fim && self.cursor.row == pc_before.row) || self.curswant > self.want_here()) {
+                    self.cursor.col = len;
+                }
+                self.mode = Mode::Insert;
+            }
         }
         self.failed |= failed_before;
     }
@@ -931,6 +1338,71 @@ impl Editor {
             's' => self.operator('c', count, Target::Motion(Mo { c: 'l', g: false, arg: None }), reg),
             'S' => self.operator('c', count, Target::Line, reg),
             'Y' => self.operator('y', count, Target::Motion(Mo { c: '$', g: false, arg: None }), reg),
+            'z' => {
+                let c = arg.unwrap();
+                if c == 'F' {
+                    // `zF`: dobra de `N` linhas (contando a atual)
+                    let r1 = self.cursor.row;
+                    let r2 = (r1 + count1 - 1).min(self.last_row());
+                    self.fold_criar(r1, r2);
+                    // uma linha só não vira dobra; o cursor volta à coluna 0
+                    if r2 == r1 {
+                        self.cursor = Pos::new(r1, 0);
+                    }
+                    self.fix_cursor();
+                } else {
+                    self.zcmd(c, count1);
+                }
+            }
+            'g' => match arg.unwrap() {
+                ';' => self.change_move(-(count1 as i64)),
+                ',' => self.change_move(count1 as i64),
+                'J' => {
+                    self.join_raw = true;
+                    self.join(count1.max(2));
+                    self.join_raw = false;
+                }
+                'p' | 'P' => {
+                    self.put(arg == Some('p'), count1, reg);
+                    if let Some((linewise, end)) = self.put_end {
+                        self.cursor = if linewise { Pos::new(end.row.min(self.last_row()), 0) } else { end };
+                        self.fix_cursor();
+                        self.curswant = self.want_here();
+                    }
+                }
+                'v' => {
+                    if let Some((a, b, kind)) = self.vmarks {
+                        self.vis = Some(VState { kind, anchor: a });
+                        self.cursor = b;
+                        self.mode = Mode::Visual;
+                        self.fix_cursor();
+                        self.curswant = self.want_here();
+                    } else {
+                        self.failed = true;
+                    }
+                }
+                'i' => {
+                    if let Some(p) = self.insert_stop {
+                        let row = p.row.min(self.last_row());
+                        self.cursor = Pos::new(row, p.col.min(self.buf.line_len(row)));
+                    }
+                    {
+                        self.checkpoint();
+                        self.begin_insert_state('i', count1, None);
+                    }
+                }
+                'I' => {
+                    self.cursor.col = 0;
+                    {
+                        self.checkpoint();
+                        self.begin_insert_state('i', count1, None);
+                    }
+                }
+                _ => {}
+            },
+            '&' => self.run_cmdline_ext("s"),
+            '\u{f}' => self.jump_older(-(count1 as i64)),
+            '\t' => self.jump_older(count1 as i64),
             'p' => self.put(true, count1, reg),
             'P' => self.put(false, count1, reg),
             'u' => self.undo_step(count1),
@@ -988,7 +1460,17 @@ impl Editor {
 
     fn motion(&self, m: Mo, count: Option<usize>, op_pending: bool) -> Option<Res> {
         let c1 = count.unwrap_or(1);
-        let cur = self.cursor;
+        let mut cur = self.cursor;
+        // dentro de uma dobra fechada, as palavras começam do fim dela (adiante) ou do começo (para trás)
+        if !self.folds.is_empty() {
+            if let Some((ini, fim)) = self.fold_fechada_em(cur.row) {
+                if matches!(m.c, 'w' | 'W' | 'e' | 'E') && !m.g {
+                    cur = Pos::new(fim, self.buf.line_len(fim).saturating_sub(1));
+                } else if matches!(m.c, 'b' | 'B') || (m.g && matches!(m.c, 'e' | 'E')) {
+                    cur = Pos::new(ini, 0);
+                }
+            }
+        }
         let b = &self.buf;
         let len = b.line_len(cur.row);
         let ex = |pos: Pos| Some(Res { pos, kind: Kind::Excl, vertical: false, fail: false });
@@ -1051,7 +1533,7 @@ impl Editor {
                 if cur.row >= self.last_row() {
                     return None;
                 }
-                let row = (cur.row + c1).min(self.last_row());
+                let row = if self.folds.is_empty() { (cur.row + c1).min(self.last_row()) } else { self.descer_visiveis(cur.row, c1)? };
                 let col = if m.c == 'j' { self.col_for_want(row) } else { b.first_nonblank(row).min(b.line_len(row).saturating_sub(1)) };
                 Some(Res { pos: Pos::new(row, col), kind: Kind::Line, vertical: m.c == 'j', fail: false })
             }
@@ -1059,7 +1541,7 @@ impl Editor {
                 if cur.row == 0 {
                     return None;
                 }
-                let row = cur.row.saturating_sub(c1);
+                let row = if self.folds.is_empty() { cur.row.saturating_sub(c1) } else { self.subir_visiveis(cur.row, c1)? };
                 let col = if m.c == 'k' { self.col_for_want(row) } else { b.first_nonblank(row).min(b.line_len(row).saturating_sub(1)) };
                 Some(Res { pos: Pos::new(row, col), kind: Kind::Line, vertical: m.c == 'k', fail: false })
             }
@@ -1153,6 +1635,18 @@ impl Editor {
                     ex(Pos::new(cur.row, col))
                 }
             }
+            '%' if count.is_some() => {
+                // `N%`: vai para a linha que fica a N por cento do arquivo
+                let n = c1;
+                if n > 100 {
+                    return None;
+                }
+                let row = ((n * b.line_count() + 99) / 100).saturating_sub(1).min(self.last_row());
+                if op_pending && row == cur.row {
+                    return None;
+                }
+                Some(Res { pos: Pos::new(row, b.first_nonblank(row)), kind: Kind::Line, vertical: true, fail: false })
+            }
             '%' => {
                 // o Vim apita mas não descarta o que vem depois num `%` sem par
                 match motion::match_pair(b, cur) {
@@ -1244,6 +1738,7 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn operator(&mut self, op: char, count: Option<usize>, target: Target, reg: Option<char>) {
+        self.end_adjusted = false;
         // lembra f/t para ; e ,
         if let Target::Motion(m) = target {
             if !m.g && matches!(m.c, 'f' | 'F' | 't' | 'T') {
@@ -1263,7 +1758,14 @@ impl Editor {
                     self.failed = true;
                     return;
                 }
-                let r2 = (r1 + n - 1).min(self.last_row());
+                // cada dobra fechada conta como uma linha, e o trecho leva a dobra inteira
+                let (r1, r2) = if self.folds.is_empty() {
+                    (r1, (r1 + n - 1).min(self.last_row()))
+                } else {
+                    let ate = if n > 1 { self.descer_visiveis(r1, n - 1).unwrap_or(r1) } else { r1 };
+                    let ate = if n > 1 && self.descer_visiveis(r1, n - 1).is_none() { self.last_row() } else { ate };
+                    self.expandir_dobras(r1, ate)
+                };
                 // o Vim leva o cursor ao primeiro não-branco antes de operar: o começo do trecho é o menor
                 // entre ele e a posição de partida (com contagem > 1 o trecho ainda começa onde se estava)
                 let col = if n == 1 { self.cursor.col.min(self.buf.first_nonblank(r1)) } else { self.cursor.col };
@@ -1328,6 +1830,7 @@ impl Editor {
                 let mut kind = r.kind;
                 // exclusivo terminando na coluna 0 de outra linha: volta ao fim da anterior
                 if kind == Kind::Excl && e.col == 0 && e.row > s.row {
+                    self.end_adjusted = true;
                     e = Pos::new(e.row - 1, self.buf.line_len(e.row - 1));
                     // ...e se o início está no recuo, vira por linhas
                     if s.col <= self.buf.first_nonblank(s.row) {
@@ -1336,10 +1839,39 @@ impl Editor {
                         kind = Kind::Excl;
                     }
                 }
+                // inclusivo terminando num NUL (linha vazia): o `d` leva a quebra de linha junto
+                if kind == Kind::Incl && op == 'd' && m.c == '%' && e.col >= self.buf.line_len(e.row) && e.row < self.last_row() && self.buf.line_len(e.row) == 0 {
+                    // charwise: apaga só a quebra de linha, guardada no registrador
+                    self.ops_change = false;
+                    self.checkpoint();
+                    let old = self.buf.rope.clone();
+                    self.buf.delete(Pos::new(e.row, 0), Pos::new(e.row + 1, 0));
+                    self.store(reg, "\n".to_string(), false, false);
+                    self.adjust_marks(&old);
+                    self.cursor = Pos::new(e.row, 0);
+                    self.fix_cursor();
+                    self.curswant = 0;
+                    return;
+                }
                 (s, e, kind)
             }
         };
         self.ops_change = false;
+        // as dobras fechadas entram inteiras (o Vim faz isso para qualquer operador fora do visual)
+        let (mut a, mut b, mut kind) = (a, b, kind);
+        if !self.folds.is_empty() {
+            if let Some((fs, _)) = self.fold_fechada_em(a.row) {
+                a = Pos::new(fs, 0);
+            }
+            if b.col > 0 || kind != Kind::Excl {
+                if let Some((_, fe)) = self.fold_fechada_em(b.row) {
+                    b = Pos::new(fe, self.buf.line_len(fe));
+                    if kind == Kind::Incl {
+                        kind = Kind::Excl;
+                    }
+                }
+            }
+        }
         self.apply_operator(op, a, b, kind, reg);
     }
 
@@ -1360,6 +1892,11 @@ impl Editor {
                 };
                 let start = if kind == Kind::Line { Pos::new(a.row, 0) } else { a };
                 self.last_yank = (self.last_yank.0 + 1, start, end, linewise);
+                self.brk_ini = Some(if kind == Kind::Line { Pos::new(a.row, 0) } else { a });
+                self.brk_fim = Some(match kind {
+                    Kind::Line => Pos::new(b.row, usize::MAX),
+                    _ => Pos::new(end.row, end.col.saturating_sub(1)),
+                });
                 // o cursor vai para o início do trecho
                 match kind {
                     Kind::Line => {
@@ -1465,6 +2002,44 @@ impl Editor {
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }
+            'Z' => {
+                // `zf`: dobra de `a` até `b` (por caracteres ou linhas, vale pelas linhas)
+                self.fold_criar(a.row, b.row.max(a.row));
+                self.cursor = Pos::new(a.row, a.col.min(self.buf.line_len(a.row).saturating_sub(1)));
+                self.cursor_fora_das_dobras();
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            'q' | 'w' => {
+                // `gq` reformata as linhas (cursor na última); `gw` deixa o cursor onde estava
+                let origem = self.cursor;
+                let (r1, r2) = (a.row, b.row.max(a.row));
+                let marca = (origem.row >= r1 && origem.row <= r2).then(|| self.nao_brancos_ate(r1, origem));
+                let ultimo = self.formatar_linhas(r1, r2);
+                if op == 'q' {
+                    // com o fim ajustado (`gq}`), o cursor vai para a linha depois do trecho
+                    let mut alvo = ultimo;
+                    if std::mem::take(&mut self.end_adjusted) && alvo < self.last_row() {
+                        alvo += 1;
+                    }
+                    self.cursor = Pos::new(alvo, self.buf.first_nonblank(alvo));
+                } else {
+                    // `gw`: o cursor fica no mesmo caractere do texto
+                    self.cursor = match marca {
+                        Some((k, em_branco)) => {
+                            let alvo = if em_branco { k.saturating_sub(1) } else { k };
+                            match self.pos_do_nao_branco(r1, ultimo, alvo) {
+                                Some(p) if em_branco => Pos::new(p.row, p.col + 1),
+                                Some(p) => p,
+                                None => origem,
+                            }
+                        }
+                        None => origem,
+                    };
+                }
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             '>' | '<' => {
                 self.checkpoint();
                 let (r1, r2) = (a.row, b.row);
@@ -1477,6 +2052,137 @@ impl Editor {
             }
             _ => {}
         }
+    }
+
+    /// Quantos caracteres que não são espaço vêm antes de `p` nas linhas `r1..` (e se `p` está num espaço).
+    fn nao_brancos_ate(&self, r1: usize, p: Pos) -> (usize, bool) {
+        let mut n = 0;
+        for r in r1..=p.row {
+            let l = self.buf.line(r);
+            let lim = if r == p.row { p.col } else { usize::MAX };
+            n += l.chars().take(lim).filter(|c| !c.is_whitespace()).count();
+        }
+        let em_branco = self.buf.char_at(p).is_none_or(char::is_whitespace);
+        (n, em_branco)
+    }
+
+    /// A posição do `k`-ésimo caractere que não é espaço (de 0) nas linhas `r1..=r2`.
+    fn pos_do_nao_branco(&self, r1: usize, r2: usize, k: usize) -> Option<Pos> {
+        let mut n = 0;
+        for r in r1..=r2.min(self.last_row()) {
+            for (c, ch) in self.buf.line(r).chars().enumerate() {
+                if !ch.is_whitespace() {
+                    if n == k {
+                        return Some(Pos::new(r, c));
+                    }
+                    n += 1;
+                }
+            }
+        }
+        None
+    }
+
+    /// Reformata as linhas `r1..=r2` (como o `gq`): cada parágrafo (separado por linhas em branco) é
+    /// junto e quebrado de novo na largura `textwidth` (79 se for 0), mantendo o recuo da primeira linha.
+    /// Devolve a última linha do trecho depois de formatado.
+    fn formatar_linhas(&mut self, r1: usize, r2: usize) -> usize {
+        let tw = if self.textwidth == 0 { 79 } else { self.textwidth };
+        let ts = motion::tabstop();
+        let _ = ts;
+        // largura em colunas (tab, caracteres largos); o espaço no fim da linha não conta
+        let largura = |t: &str| {
+            let t = t.trim_end_matches([' ', '\t']);
+            motion::vcol_start(t, t.chars().count())
+        };
+        let linhas: Vec<String> = (r1..=r2.min(self.last_row())).map(|r| self.buf.line(r)).collect();
+        let mut saida: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < linhas.len() {
+            if linhas[i].trim().is_empty() {
+                saida.push(linhas[i].clone());
+                i += 1;
+                continue;
+            }
+            let mut j = i;
+            while j < linhas.len() && !linhas[j].trim().is_empty() {
+                j += 1;
+            }
+            let indent: String = linhas[i].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            // junta como o `J`: sem o recuo das seguintes e com um espaço entre elas
+            let mut texto = linhas[i].clone();
+            for l in &linhas[i + 1..j] {
+                let resto = l.trim_start_matches([' ', '\t']);
+                if !texto.ends_with([' ', '\t']) && !resto.starts_with(')') {
+                    texto.push(' ');
+                }
+                texto.push_str(resto);
+            }
+            // quebra no último espaço que deixa a linha dentro da largura
+            let mut atual = texto;
+            loop {
+                if largura(&atual) <= tw {
+                    saida.push(atual);
+                    break;
+                }
+                let cs: Vec<char> = atual.chars().collect();
+                let ini_texto = cs.iter().take_while(|c| **c == ' ' || **c == '\t').count();
+                // começo de cada trecho de espaços depois do texto, dentro da largura
+                let mut quebra: Option<(usize, usize)> = None;
+                let mut k = ini_texto;
+                while k < cs.len() {
+                    if cs[k] == ' ' || cs[k] == '\t' {
+                        let a = k;
+                        while k < cs.len() && (cs[k] == ' ' || cs[k] == '\t') {
+                            k += 1;
+                        }
+                        if k < cs.len() {
+                            let antes: String = cs[..a].iter().collect();
+                            if largura(&antes) <= tw {
+                                quebra = Some((a, k));
+                            } else if quebra.is_none() {
+                                // palavra mais longa que a linha: quebra no primeiro espaço depois dela
+                                quebra = Some((a, k));
+                                break;
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        k += 1;
+                    }
+                }
+                match quebra {
+                    Some((a, b)) => {
+                        saida.push(cs[..a].iter().collect());
+                        let resto: String = cs[b..].iter().collect();
+                        atual = format!("{indent}{resto}");
+                    }
+                    None => {
+                        saida.push(atual);
+                        break;
+                    }
+                }
+            }
+            i = j;
+        }
+        let antes: Vec<String> = linhas;
+        if saida == antes {
+            return r2.min(self.last_row());
+        }
+        self.checkpoint();
+        let old = self.buf.rope.clone();
+        let fim = r2.min(self.last_row());
+        self.buf.delete_lines(r1, fim);
+        // o buffer ficou vazio (era o texto todo): a linha vazia que sobrou é a primeira
+        let ate_aqui = if self.buf.line_count() == 1 && self.buf.line(0).is_empty() && r1 == 0 && fim + 1 >= old.len_lines() { Some(0usize) } else { None };
+        for (k, l) in saida.iter().enumerate() {
+            match ate_aqui {
+                Some(_) if k == 0 => self.buf.insert(Pos::new(0, 0), l),
+                _ => self.buf.insert_line(r1 + k, l),
+            }
+        }
+        self.adjust_marks(&old);
+        r1 + saida.len() - 1
     }
 
     fn range_text(&self, a: Pos, b: Pos, kind: Kind) -> (String, bool) {
@@ -1539,6 +2245,18 @@ impl Editor {
         self.unnamed = Some(r);
     }
 
+    /// Como `shift_line`, mas também mexe em linha vazia (`<C-t>` na inserção).
+    fn shift_line_forcado(&mut self, row: usize, right: bool) {
+        if right && self.buf.line(row).is_empty() {
+            let w = self.shiftwidth;
+            let ts = motion::tabstop();
+            let ind = if self.expandtab { " ".repeat(w) } else { format!("{}{}", "\t".repeat(w / ts), " ".repeat(w % ts)) };
+            self.buf.insert(Pos::new(row, 0), &ind);
+        } else {
+            self.shift_line(row, right);
+        }
+    }
+
     fn shift_line(&mut self, row: usize, right: bool) {
         let line = self.buf.line(row);
         if line.is_empty() && right {
@@ -1561,6 +2279,9 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn put(&mut self, after: bool, count: usize, reg: Option<char>) {
+        // como o Vim: `'[` e `']` começam no cursor, mesmo quando o registrador está vazio
+        self.brk_ini = Some(self.cursor);
+        self.brk_fim = Some(self.cursor);
         let r = match reg {
             Some(c) => self.reg_valor(c),
             None if self.clipboard_unnamedplus => self.reg_valor('+').or_else(|| self.unnamed.clone()),
@@ -1659,7 +2380,8 @@ impl Editor {
         }
         if r.linewise {
             let lines: Vec<&str> = r.text.split('\n').collect();
-            let at = if after { self.cursor.row + 1 } else { self.cursor.row };
+            let ate = self.fold_fechada_em(self.cursor.row).map_or(self.cursor.row, |(_, e)| e);
+            let at = if after { ate + 1 } else { self.cursor.row };
             let mut row = at;
             for _ in 0..count {
                 for l in &lines {
@@ -1714,7 +2436,7 @@ impl Editor {
             let line = self.buf.line(row + t);
             let mut curr: String = line.clone();
             let mut spaces = 0usize;
-            if t > 0 {
+            if t > 0 && !self.join_raw {
                 curr = line.trim_start_matches([' ', '\t']).to_string();
                 if !curr.is_empty() && !curr.starts_with(')') && sum != 0 && e1 != Some('\t') {
                     // não põe espaço se a linha anterior já acaba em espaço
@@ -1826,6 +2548,12 @@ impl Editor {
                 let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
                 VParse::Done(VCmd::Put(*c == 'p', count, true))
             }
+            Key::Char('g') if matches!(keys.get(i + 1), Some(Key::Char('q' | 'w'))) => {
+                let Some(Key::Char(c)) = keys.get(i + 1) else { unreachable!() };
+                VParse::Done(VCmd::Op(*c, count))
+            }
+            Key::Char('z') if matches!(keys.get(i + 1), Some(Key::Char('f'))) => VParse::Done(VCmd::Op('Z', count)),
+            Key::Char('z') if keys.get(i + 1).is_none() => VParse::Incomplete,
             Key::Char(op @ ('d' | 'x' | 'X' | 'D' | 'y' | 'Y' | 'c' | 's' | 'S' | 'C' | 'R' | '<' | '>' | '~' | 'u' | 'U' | 'J')) => VParse::Done(VCmd::Op(op, count)),
             Key::Delete => VParse::Invalid,
             Key::Char('r') => match keys.get(i + 1) {
@@ -2053,6 +2781,38 @@ impl Editor {
                 }
                 self.apply_operator(op, s, e, kind, reg);
             }
+            'Z' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                self.fold_criar(a.row, a.row + rows - 1);
+                self.cursor = Pos::new(a.row, if linewise { 0 } else { a.col });
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
+            'q' | 'w' => {
+                self.vis = None;
+                self.mode = Mode::Normal;
+                let origem = self.cursor;
+                let marca = (origem.row >= a.row && origem.row < a.row + rows).then(|| self.nao_brancos_ate(a.row, origem));
+                let ultimo = self.formatar_linhas(a.row, a.row + rows - 1);
+                self.cursor = if op == 'q' {
+                    Pos::new(ultimo, self.buf.first_nonblank(ultimo))
+                } else {
+                    match marca {
+                        Some((k, em_branco)) => {
+                            let alvo = if em_branco { k.saturating_sub(1) } else { k };
+                            match self.pos_do_nao_branco(a.row, ultimo, alvo) {
+                                Some(p) if em_branco => Pos::new(p.row, p.col + 1),
+                                Some(p) => p,
+                                None => origem,
+                            }
+                        }
+                        None => origem,
+                    }
+                };
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             '>' | '<' => {
                 self.vis = None;
                 self.mode = Mode::Normal;
@@ -2129,6 +2889,9 @@ impl Editor {
     // ------------------------------------------------------------------
 
     fn start_insert(&mut self, c: char, count: usize) {
+        if !matches!(c, 'o' | 'O') {
+            self.abrir_dobras_no_cursor();
+        }
         let len = self.buf.line_len(self.cursor.row);
         match c {
             'i' => {}
@@ -2155,14 +2918,16 @@ impl Editor {
 
     fn open_line(&mut self, below: bool) {
         let indent: String = self.buf.line(self.cursor.row).chars().take_while(|c| *c == ' ' || *c == '\t').collect();
-        let row = if below { self.cursor.row + 1 } else { self.cursor.row };
+        let ate = self.fold_fechada_em(self.cursor.row).map_or(self.cursor.row, |(_, e)| e);
+        let row = if below { ate + 1 } else { self.cursor.row };
         self.buf.insert_line(row, &indent);
         self.cursor = Pos::new(row, indent.chars().count());
     }
 
     fn begin_insert_state(&mut self, cmd: char, count: usize, ai_row: Option<usize>) {
         self.mode = Mode::Insert;
-        self.ins = Insert { cmd, count, typed: Vec::new(), ai_row };
+        self.ins_mudou = false;
+        self.ins = Insert { cmd, count, typed: Vec::new(), ai_row, start: self.cursor };
     }
 
     /// `<C-r>{reg}` na inserção: o texto do registrador entra como se fosse digitado (e é isso que o
@@ -2195,6 +2960,18 @@ impl Editor {
         }
         if k == Key::Ctrl('r') {
             self.ins_reg_wait = true;
+            return;
+        }
+        if k == Key::Ctrl('o') {
+            // um comando do modo normal e volta; no fim da linha o cursor fica depois do último caractere
+            let len = self.buf.line_len(self.cursor.row);
+            let fim = len > 0 && self.cursor.col >= len;
+            self.clear_autoindent();
+            self.mode = Mode::Normal;
+            if fim {
+                self.cursor.col = len - 1;
+            }
+            self.ins_o = Some(fim);
             return;
         }
         if self.dot_recording && !self.replaying && k != Key::Esc {
@@ -2234,6 +3011,10 @@ impl Editor {
                             self.insert_raw(*key);
                         }
                     }
+                }
+                self.insert_stop = Some(self.cursor);
+                if self.ins_mudou {
+                    self.brk_fim = Some(self.cursor);
                 }
                 self.mode = Mode::Normal;
                 let bi = self.block_ins.take();
@@ -2327,8 +3108,65 @@ impl Editor {
                     self.cursor = Pos::new(self.cursor.row - 1, prev_len);
                 }
             }
+            Key::Ctrl('h') => self.insert_raw(Key::Backspace),
+            Key::Ctrl('w') => self.ins_apagar(false),
+            Key::Ctrl('u') => self.ins_apagar(true),
+            Key::Ctrl('t') | Key::Ctrl('d') => {
+                let row = self.cursor.row;
+                let antes = self.buf.line(row);
+                let ind0 = antes.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+                self.shift_line_forcado(row, k == Key::Ctrl('t'));
+                let depois = self.buf.line(row);
+                let ind1 = depois.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+                self.cursor.col = (self.cursor.col + ind1).saturating_sub(ind0);
+            }
             _ => {}
         }
+    }
+
+    /// `<C-w>` (palavra) e `<C-u>` (linha) na inserção: param no começo da inserção na primeira vez.
+    fn ins_apagar(&mut self, linha: bool) {
+        let row = self.cursor.row;
+        if self.cursor.col == 0 {
+            self.insert_raw(Key::Backspace);
+            return;
+        }
+        let start = self.ins.start;
+        let texto = self.buf.line(row);
+        let mincol = if linha {
+            // com autoindent mantém o recuo
+            let fnb = self.buf.first_nonblank(row);
+            if fnb < self.cursor.col { fnb } else { 0 }
+        } else {
+            0
+        };
+        let mut col = self.cursor.col;
+        let mut modo_palavra_nao_espaco = false;
+        let mut classe = 0u8;
+        loop {
+            col -= 1;
+            let c = self.buf.char_at(Pos::new(row, col));
+            let cl = motion::cls(&self.buf, Pos::new(row, col), false);
+            if !linha {
+                if !modo_palavra_nao_espaco {
+                    if cl != 0 {
+                        modo_palavra_nao_espaco = true;
+                        classe = cl;
+                    }
+                } else if cl != classe {
+                    col += 1;
+                    break;
+                }
+            }
+            let _ = c;
+            let na_partida = start.row == row && col == start.col;
+            if !(col > mincol && !na_partida) {
+                break;
+            }
+        }
+        let _ = texto;
+        self.buf.delete(Pos::new(row, col), self.cursor);
+        self.cursor.col = col;
     }
 
     // ------------------------------------------------------------------
@@ -2337,6 +3175,7 @@ impl Editor {
 
     fn checkpoint(&mut self) {
         self.emptied = false;
+        self.new_change = true;
         if self.replaying && false {
             return;
         }
@@ -2348,12 +3187,23 @@ impl Editor {
     /// Linhas iguais no começo e no fim dos dois textos (prefixo, sufixo).
     fn common_lines(a: &Rope, b: &Rope) -> (usize, usize) {
         let (la, lb) = (a.len_lines(), b.len_lines());
-        let mut p = 0;
-        while p < la.min(lb) && a.line(p) == b.line(p) {
+        let minimo = la.min(lb);
+        // por pedaços de memória; depois só acerta as poucas linhas de borda
+        let pb = prefixo_comum(a, b);
+        let mut p = a.byte_to_line(pb.min(a.len_bytes())).min(minimo);
+        while p < minimo && a.line(p) == b.line(p) {
             p += 1;
         }
-        let mut q = 0;
-        while q < la.min(lb) - p.min(la.min(lb)) && a.line(la - 1 - q) == b.line(lb - 1 - q) {
+        let limite_q = minimo - p.min(minimo);
+        let sb = sufixo_comum(a, b, a.len_bytes().min(b.len_bytes()));
+        let ini_b = b.len_bytes() - sb;
+        let k = b.byte_to_line(ini_b);
+        let primeira = if b.line_to_byte(k) < ini_b { k + 1 } else { k };
+        let mut q = lb.saturating_sub(primeira).min(limite_q);
+        while q > 0 && a.line(la - q) != b.line(lb - q) {
+            q -= 1;
+        }
+        while q < limite_q && a.line(la - 1 - q) == b.line(lb - 1 - q) {
             q += 1;
         }
         (p, q)
@@ -2562,6 +3412,114 @@ impl Editor {
 }
 
 /// Movimentos que gravam a posição anterior na marca de contexto (`''`).
+/// Quantos bytes iguais há no começo dos dois textos (compara pedaço por pedaço, na velocidade da memória).
+fn prefixo_comum(a: &Rope, b: &Rope) -> usize {
+    let (mut ia, mut ib) = (a.chunks(), b.chunks());
+    let (mut ca, mut cb): (&[u8], &[u8]) = (&[], &[]);
+    let mut pos = 0;
+    loop {
+        if ca.is_empty() {
+            match ia.next() {
+                Some(c) => ca = c.as_bytes(),
+                None => return pos,
+            }
+            continue;
+        }
+        if cb.is_empty() {
+            match ib.next() {
+                Some(c) => cb = c.as_bytes(),
+                None => return pos,
+            }
+            continue;
+        }
+        let n = ca.len().min(cb.len());
+        if ca[..n] == cb[..n] {
+            pos += n;
+            ca = &ca[n..];
+            cb = &cb[n..];
+        } else {
+            return pos + ca.iter().zip(cb.iter()).take_while(|(x, y)| x == y).count();
+        }
+    }
+}
+
+/// Quantos bytes iguais há no fim dos dois textos, sem passar de `limite`.
+fn sufixo_comum(a: &Rope, b: &Rope, limite: usize) -> usize {
+    let (mut ia, _, _, _) = a.chunks_at_byte(a.len_bytes());
+    let (mut ib, _, _, _) = b.chunks_at_byte(b.len_bytes());
+    let (mut ca, mut cb): (&[u8], &[u8]) = (&[], &[]);
+    let mut n_total = 0;
+    loop {
+        if n_total >= limite {
+            return limite;
+        }
+        if ca.is_empty() {
+            match ia.prev() {
+                Some(c) => ca = c.as_bytes(),
+                None => return n_total,
+            }
+            continue;
+        }
+        if cb.is_empty() {
+            match ib.prev() {
+                Some(c) => cb = c.as_bytes(),
+                None => return n_total,
+            }
+            continue;
+        }
+        let n = ca.len().min(cb.len()).min(limite - n_total);
+        let (ta, tb) = (&ca[ca.len() - n..], &cb[cb.len() - n..]);
+        if ta == tb {
+            n_total += n;
+            ca = &ca[..ca.len() - n];
+            cb = &cb[..cb.len() - n];
+        } else {
+            return n_total + ta.iter().rev().zip(tb.iter().rev()).take_while(|(x, y)| x == y).count();
+        }
+    }
+}
+
+fn linha_sem_quebra(r: &Rope, row: usize) -> ropey::RopeSlice<'_> {
+    let l = r.line(row);
+    let n = l.len_chars();
+    if n > 0 && l.char(n - 1) == '\n' { l.slice(..n - 1) } else { l }
+}
+
+/// Primeira linha que difere entre dois textos (ou o tamanho do menor, se um é prefixo do outro em linhas).
+fn primeira_linha_diferente(old: &Rope, new: &Rope) -> usize {
+    let (n0, n1) = (old.len_lines(), new.len_lines());
+    let common = n0.min(n1);
+    let pb = prefixo_comum(old, new);
+    let mut f = new.byte_to_line(pb.min(new.len_bytes())).min(common);
+    // a quebra de linha da última linha pode ser a única diferença: as linhas ainda são iguais
+    while f < common && linha_sem_quebra(old, f) == linha_sem_quebra(new, f) {
+        f += 1;
+    }
+    f
+}
+
+/// Linhas iguais no fim dos dois textos, contando só as depois da linha `f` e sem passar das que sobram.
+fn linhas_iguais_no_fim(old: &Rope, new: &Rope, f: usize) -> usize {
+    let (n0, n1) = (old.len_lines(), new.len_lines());
+    let common = n0.min(n1);
+    let maximo = common.saturating_sub(f).min(n1.saturating_sub(1).saturating_sub(f));
+    if maximo == 0 {
+        return 0;
+    }
+    // só as linhas do fim que cabem dentro dos bytes iguais precisam de conferência linha a linha
+    let inicio_f = new.line_to_byte(f);
+    let limite = new.len_bytes().saturating_sub(inicio_f).min(old.len_bytes().saturating_sub(old.line_to_byte(f.min(n0 - 1))));
+    let sb = sufixo_comum(old, new, limite);
+    let k = new.byte_to_line(new.len_bytes() - sb);
+    let primeira = if new.line_to_byte(k) < new.len_bytes() - sb { k + 1 } else { k };
+    let mut suf = n1.saturating_sub(primeira).min(maximo);
+    // conferência final (a última linha não tem quebra): ajusta no máximo uma linha
+    while suf > 0 && linha_sem_quebra(old, n0 - suf) != linha_sem_quebra(new, n1 - suf) {
+        suf -= 1;
+    }
+    suf
+}
+
 fn is_jump(m: &Mo) -> bool {
     match m.c {
         'G' | 'n' | 'N' | '*' | '#' | '%' | '{' | '}' | '/' | '?' | '\'' | '`' => true,
@@ -2682,6 +3640,68 @@ fn parse_motion(keys: &[Key]) -> MParse {
 
 #[cfg(test)]
 mod testes_sincronizar {
+    /// A comparação por pedaços (prefixo e sufixo) dá o mesmo que comparar linha a linha, em edições aleatórias.
+    #[test]
+    fn diferenca_rapida_igual_a_comparacao_por_linhas() {
+        fn lcg(x: &mut u64) -> u64 {
+            *x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *x >> 33
+        }
+        let mut sem = 12345u64;
+        for caso in 0..600 {
+            let n = 1 + (lcg(&mut sem) % 30) as usize;
+            let linhas: Vec<String> = (0..n)
+                .map(|_| {
+                    let t = lcg(&mut sem) % 4;
+                    "ab ".chars().cycle().skip((lcg(&mut sem) % 3) as usize).take((t * 3) as usize).collect()
+                })
+                .collect();
+            let velho = Rope::from_str(&linhas.join("\n"));
+            let mut novas = linhas.clone();
+            // 1 a 3 edições: trocar, apagar ou inserir linhas
+            for _ in 0..1 + lcg(&mut sem) % 3 {
+                let r = (lcg(&mut sem) as usize) % novas.len().max(1);
+                match lcg(&mut sem) % 3 {
+                    0 if !novas.is_empty() => novas[r].push('x'),
+                    1 if novas.len() > 1 => {
+                        novas.remove(r);
+                    }
+                    _ => novas.insert(r, "ab".repeat((lcg(&mut sem) % 3) as usize)),
+                }
+            }
+            let novo = Rope::from_str(&novas.join("\n"));
+            let (n0, n1) = (velho.len_lines(), novo.len_lines());
+            let l = |r: &Rope, i: usize| linha_sem_quebra(r, i).to_string();
+            // referência: por linhas
+            let common = n0.min(n1);
+            let mut f_ref = 0;
+            while f_ref < common && l(&velho, f_ref) == l(&novo, f_ref) {
+                f_ref += 1;
+            }
+            assert_eq!(primeira_linha_diferente(&velho, &novo), f_ref, "caso {caso}: {linhas:?} -> {novas:?}");
+            let mut suf_ref = 0;
+            while suf_ref < common - f_ref.min(common) && l(&velho, n0 - 1 - suf_ref) == l(&novo, n1 - 1 - suf_ref) && n1 - 1 - suf_ref > f_ref {
+                suf_ref += 1;
+            }
+            if f_ref < common || n0 != n1 {
+                assert_eq!(linhas_iguais_no_fim(&velho, &novo, f_ref), suf_ref, "sufixo, caso {caso}: {linhas:?} -> {novas:?}");
+            }
+            // `common_lines` (usado pelo desfazer) também
+            let (p_ref, q_ref) = {
+                let mut p = 0;
+                while p < n0.min(n1) && velho.line(p) == novo.line(p) {
+                    p += 1;
+                }
+                let mut q = 0;
+                while q < n0.min(n1) - p.min(n0.min(n1)) && velho.line(n0 - 1 - q) == novo.line(n1 - 1 - q) {
+                    q += 1;
+                }
+                (p, q)
+            };
+            assert_eq!(Editor::common_lines(&velho, &novo), (p_ref, q_ref), "common_lines, caso {caso}: {linhas:?} -> {novas:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

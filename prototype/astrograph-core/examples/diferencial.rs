@@ -109,8 +109,42 @@ fn vocabulario_ex() -> Vec<&'static str> {
         ":d<CR>", ":2d<CR>", ":1,2d<CR>", ":%d<CR>", ":$d<CR>", ":.,$d<CR>", ":2,3y<CR>", ":y<CR>", ":j<CR>", ":1,3j<CR>", ":><CR>", ":2,3><CR>", ":2,3<<CR>", ":>><CR>",
         ":g/o/d<CR>", ":v/o/d<CR>", ":g/e/s/e/E/<CR>", ":g/a/normal Ax<CR>", ":g!/o/d<CR>", ":2,4g/e/d<CR>", ":g/o/normal dd<CR>", ":%normal Ax<CR>", ":2,3normal I-<CR>", ":normal 2dw<CR>",
         ":2<CR>", ":$<CR>", ":1<CR>", ":.+1<CR>", ":'a<CR>",
+        ":t.<CR>", ":t0<CR>", ":t$<CR>", ":2,3t0<CR>", ":1t2<CR>", ":m0<CR>", ":m$<CR>", ":1m3<CR>", ":2,3m0<CR>", ":3m1<CR>", ":1,2m$<CR>", ":2,3m.<CR>",
+        ":s/o/0/<CR>j:&<CR>", ":s/o/0/g<CR>j:&&<CR>", ":s/o/0/g<CR>j:&<CR>", ":%s/o/0/g<CR>u:%&&<CR>", ":s/e/E/<CR>j&", ":s/e/E/<CR>jj:s<CR>", "/e<CR>:s//X/<CR>", ":s/e/E/<CR>/o<CR>:~<CR>", ":%s/e//n<CR>", ":%s/o/0/gn<CR>x", ":s/o/0/<CR>j@:", ":2d<CR>@:", ":d<CR>@:@@", ":s/a/b/<CR>2@:",
+        "3:d<CR>", "2:s/o/0/<CR>", "9:y<CR>", "2:j<CR>", "1:d<CR>", "3:normal Ax<CR>",
+        ":sort<CR>", ":sort!<CR>", ":sort u<CR>", ":sort i<CR>", ":sort n<CR>", ":2,4sort<CR>", ":sort! n<CR>", ":%sort ui<CR>",
         "ma", "mb", "jma", "G", "gg", "j", "w", "$", "0", "p", "P", "u", ".", "yy", "dd", "x", "<C-r>", "3j", "wma",
     ]
+}
+
+fn vocabulario_ins() -> Vec<&'static str> {
+    let mut v = vec![
+        "ifoo bar<C-w>baz<Esc>", "ifoo<C-w><Esc>", "ione two<C-w><C-w>x<Esc>", "A  a.b<C-w><C-w><Esc>", "Ahey<C-u><Esc>", "Iab<C-u>c<Esc>", "ox<C-u>y<Esc>", "A<C-t>x<Esc>", "Ax<C-d><Esc>", "A<C-t><C-t>y<Esc>",
+        "Afoo<C-o>0X<Esc>", "ifoo<C-o>$X<Esc>", "Afoo<C-o>xY<Esc>", "Afoo bar<C-o>bX<Esc>", "ifoo<C-o>wX<Esc>", "Abc<C-o>ddX<Esc>", "Abc<C-o>yyx<Esc>p", "ia<C-o>uX<Esc>", "Ia b<C-h><C-h>X<Esc>", "A.. a.b..<C-w>X<Esc>",
+        "i  x<C-u>y<Esc>", "A<C-u>q<Esc>", "ofoo<CR>bar<C-w><C-w>q<Esc>", "A foo.bar  <C-w>X<Esc>", "A<C-w>X<Esc>", "jI<C-w>X<Esc>", "jI<C-u>X<Esc>", "jA  <C-u>X<Esc>",
+        "ix<Esc>", "ayy<Esc>", "ofoo<Esc>", "Obar<Esc>", "u", ".", "ix<Esc>.",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_gq() -> Vec<&'static str> {
+    let mut v = vec![
+        "gqq", "gqj", "gqip", "gqap", "gqG", "gqgg", "gq2j", "gqiw", "gww", "gwip", "gwj", "gwgw", "gqgq", "Vgq", "Vjgq", "vipgq", "Vipgw", "2gqq", "gq}", "gq{", "gqk",
+        ":set tw=20<CR>gqq", ":set tw=20<CR>gqj", ":set tw=20<CR>gqip", ":set tw=12<CR>gqG", ":set tw=30<CR>gqap", ":set tw=15<CR>gww", ":set tw=10<CR>gwip", ":set tw=25<CR>gqq", ":set tw=8<CR>gqq",
+        "J", "o<Esc>", "ox y z<Esc>", "u", ".",
+    ];
+    v.extend(mov_basico());
+    v
+}
+
+fn vocabulario_dobras() -> Vec<&'static str> {
+    let mut v = vec![
+        "zfj", "zfip", "zfap", "zf2j", "zfG", "zfgg", "zfk", "zF", "2zF", "3zF", "Vjzf", "Vjjzf", "zfzf", "zo", "zO", "zc", "zC", "za", "zA", "zv", "zx", "zX", "zR", "zM", "zr", "zm", "zd", "zD", "zE", "zn", "zN", "zi", "zj", "zk",
+        "j", "k", "2j", "3k", "dd", "yy", "cc<Esc>", "p", "P", "x", "o<Esc>", "O<Esc>", "G", "gg", "l", "$", "w", "u", ".", "J", ">>", "<<", "dj", "dk", "yj", "~", "ix<Esc>", "ma", "'a", "/o<CR>", "n", "}", "{", "5G", "yyp", "ddp",
+    ];
+    v.extend(mov_basico());
+    v
 }
 
 fn vocabulario_bloco() -> Vec<&'static str> {
@@ -198,6 +232,9 @@ fn vocabulario(nome: &str) -> Vec<&'static str> {
         "marc2" => return vocabulario_marcas2(),
         "pct" => return vocabulario_pct(),
         "blk" => return vocabulario_bloco(),
+        "ins" => return vocabulario_ins(),
+        "gq" => return vocabulario_gq(),
+        "dob" => return vocabulario_dobras(),
         "ex" => return vocabulario_ex(),
         "mac" => return vocabulario_macro(),
         "marc" => return vocabulario_marcas(),

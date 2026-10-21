@@ -145,15 +145,27 @@ pub struct Scene {
     pub paint_ms: f32,
 }
 
+/// Fontes pedidas no `[font]` do config (normal, negrito, itálico): tentadas antes das padrão.
+static FONTES_CFG: std::sync::OnceLock<[Option<String>; 3]> = std::sync::OnceLock::new();
+
+pub fn set_fontes(regular: Option<String>, bold: Option<String>, italic: Option<String>) {
+    let _ = FONTES_CFG.set([regular, bold, italic]);
+}
+
 impl Scene {
     pub fn new(font_px: f32, scale: f32) -> Option<Scene> {
-        let load = |names: &[&str]| crate::render::find_font_file(names).and_then(|p| Font::from_path(&p));
-        let mono = load(MONO_NAMES).or_else(|| Font::from_bytes(INTER_REGULAR.to_vec()))?;
+        let pedidas = FONTES_CFG.get().cloned().unwrap_or_default();
+        let load = |estilo: usize, names: &[&str]| {
+            let mut v: Vec<&str> = pedidas[estilo].iter().map(String::as_str).collect();
+            v.extend_from_slice(names);
+            crate::render::find_font_file(&v).and_then(|p| Font::from_path(&p))
+        };
+        let mono = load(0, MONO_NAMES).or_else(|| Font::from_bytes(INTER_REGULAR.to_vec()))?;
         let now = Instant::now();
         let mut s = Scene {
             mono,
-            mono_italic: load(MONO_ITALIC),
-            mono_bold: load(MONO_BOLD),
+            mono_italic: load(2, MONO_ITALIC),
+            mono_bold: load(1, MONO_BOLD),
             ui: Font::from_bytes(INTER_REGULAR.to_vec())?,
             ui_semi: Font::from_bytes(INTER_SEMIBOLD.to_vec())?,
             scale,
@@ -400,7 +412,7 @@ impl Scene {
         self.last_top = self.top.x;
 
         if camada != Camada::Casca {
-            c.clear(d::BG);
+            c.clear(d::bg());
             if vm.dash {
                 if self.dash_at.is_none() {
                     self.dash_at = Some(now);
@@ -562,7 +574,7 @@ impl Scene {
         self.hit_fade.target = if vm.hits_id != 0 { 1.0 } else { 0.0 };
         // pílula: largura-alvo
         let label_w = self.ui_semi.measure(&self.mode_label, 12.5 * s);
-        let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
+        let pos = if vm.row_map.is_some() { format!("{}:{}", vm.cursor_real.0 + 1, vm.cursor_real.1 + 1) } else { format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1) };
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
         let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
@@ -661,7 +673,7 @@ impl Scene {
         // destaque da linha atual: barra macia que desliza
         let hl_y = lay.text_y + self.hl_y.x - top_px;
         if vm.mode != ModeKind::Visual && vm.mode != ModeKind::VisualLine {
-            c.rrect(10.0 * s, hl_y, w - 20.0 * s, lay.line_h, 8.0 * s, d::WHITE, 0.045);
+            c.rrect(10.0 * s, hl_y, w - 20.0 * s, lay.line_h, 8.0 * s, d::white(), 0.045);
         }
 
         // ocorrências da busca (a atual mais forte)
@@ -726,7 +738,7 @@ impl Scene {
             while g < ind {
                 let gx = lay.text_x + (g as f32 - vm.left as f32) * lay.char_w;
                 if gx >= lay.text_x - 1.0 {
-                    c.rect(gx.round() as i32, y as i32, 1.max(s as i32), lay.line_h as i32, d::WHITE, 0.07);
+                    c.rect(gx.round() as i32, y as i32, 1.max(s as i32), lay.line_h as i32, d::white(), 0.07);
                 }
                 g += 4;
             }
@@ -752,14 +764,22 @@ impl Scene {
             // número da linha
             // `number` mostra o número da linha; `relativenumber` a distância até a linha do cursor (a do cursor
             // mostra o número se `number` está ligado, senão 0)
-            let num = match (vm.numero, vm.relativo) {
-                (false, false) => String::new(),
-                (_, false) => (row + 1).to_string(),
-                (true, true) if row == cur_row => (row + 1).to_string(),
-                (false, true) if row == cur_row => "0".to_string(),
-                (_, true) => row.abs_diff(cur_row).to_string(),
+            // com dobras ou quebra de linha, `row` é a linha mostrada: o número vem do arquivo e a continuação de
+            // uma linha quebrada não leva número
+            let real = |r: usize| vm.row_map.as_ref().map_or(r, |m| m.get(r).copied().unwrap_or(r));
+            let continua = vm.row_cont.as_ref().is_some_and(|c| c.get(row).copied().unwrap_or(false));
+            let num = if continua {
+                String::new()
+            } else {
+                match (vm.numero, vm.relativo) {
+                    (false, false) => String::new(),
+                    (_, false) => (real(row) + 1).to_string(),
+                    (true, true) if row == cur_row => (real(row) + 1).to_string(),
+                    (false, true) if row == cur_row => "0".to_string(),
+                    (_, true) => real(row).abs_diff(real(cur_row)).to_string(),
+                }
             };
-            let ncol = if row == cur_row { d::DIM } else { d::FAINT };
+            let ncol = if row == cur_row { d::dim() } else { d::faint() };
             if !num.is_empty() {
                 let nw = self.mono.measure(&num, gpx);
                 c.text(&mut self.mono, gpx, lay.gutter_x + lay.gutter_w - nw, base, &num, ncol, ra);
@@ -780,7 +800,7 @@ impl Scene {
                 if v + wd > vm.left && v < vm.left + lay.cols + 2 {
                     let (color, bold, italic) = match classes[i] {
                         Some(k) => d::syntax(k),
-                        None => (d::TEXT, false, false),
+                        None => (d::text(), false, false),
                     };
                     let x = lay.text_x + (v as f32 - vm.left as f32) * lay.char_w;
                     let font = if italic && self.mono_italic.is_some() {
@@ -811,7 +831,7 @@ impl Scene {
             let total = vm.lines as f32 * lay.line_h;
             let thumb = (area * (area / total)).clamp(30.0 * s, area);
             let y = lay.text_y + (area - thumb) * (top_px / (total - lay.line_h).max(1.0)).clamp(0.0, 1.0);
-            c.rrect(w - 14.0 * s, y, 5.0 * s, thumb, 2.5 * s, d::WHITE, 0.32 * self.bar.v);
+            c.rrect(w - 14.0 * s, y, 5.0 * s, thumb, 2.5 * s, d::white(), 0.32 * self.bar.v);
         }
         c.reset_clip();
     }
@@ -901,7 +921,7 @@ impl Scene {
                     let v = vcol_start(&line, vm.cursor.1);
                     let gx = lay.text_x + (v as f32 - vm.left as f32) * lay.char_w;
                     c.set_clip(x as i32, (y + 1.0) as i32, (x + wpx) as i32 + 1, (y + lay.line_h) as i32);
-                    c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::BG, alpha);
+                    c.glyph_at(&mut self.mono, self.font_px, gx, y + self.ascent, ch, d::bg(), alpha);
                     c.reset_clip();
                     // continua valendo o corte do editor
                     c.set_clip(self.side.x.max(0.0) as i32, lay.text_y as i32, c.w, (c.h as f32 - d::M.bottom * s) as i32);
@@ -929,14 +949,14 @@ impl Scene {
             self.paint_overlays(c, vm, lay, (w, h, s));
             return;
         }
-        c.vgrad(0, 0, w as i32, (lay.text_y + 14.0 * s) as i32, d::BG, 1.0, 0.0);
-        c.rect(0, 0, w as i32, (lay.text_y * 0.62) as i32, d::BG, 0.9);
+        c.vgrad(0, 0, w as i32, (lay.text_y + 14.0 * s) as i32, d::bg(), 1.0, 0.0);
+        c.rect(0, 0, w as i32, (lay.text_y * 0.62) as i32, d::bg(), 0.9);
         let tpx = 13.0 * s;
         let tw = self.ui_semi.measure(&vm.name, tpx);
         let dot = if vm.modified { 12.0 * s } else { 0.0 };
         let tx = (w + self.side.x.max(0.0) - tw - dot) / 2.0;
         let tb = lay.text_y * 0.5 + tpx * 0.36;
-        c.text(&mut self.ui_semi, tpx, tx, tb, &vm.name, d::TEXT, 0.92);
+        c.text(&mut self.ui_semi, tpx, tx, tb, &vm.name, d::text(), 0.92);
         if vm.modified {
             c.rrect(tx + tw + 8.0 * s, tb - 6.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
         }
@@ -969,7 +989,7 @@ impl Scene {
         let hh = TAB_H * s - 4.0 * s;
         let px = 12.5 * s;
         let x_ini = self.side.x.max(0.0) + 14.0 * s;
-        c.rect(x_ini as i32 - 14 * s as i32, (y0 + hh + 2.0 * s) as i32, (w - x_ini) as i32 + 14, 1.max(s as i32), d::WHITE, 0.06);
+        c.rect(x_ini as i32 - 14 * s as i32, (y0 + hh + 2.0 * s) as i32, (w - x_ini) as i32 + 14, 1.max(s as i32), d::white(), 0.06);
         let mut x = x_ini;
         for (i, t) in vm.tabs.iter().enumerate() {
             let nome: String = t.name.chars().take(26).collect();
@@ -980,11 +1000,11 @@ impl Scene {
             }
             let ativa = i == vm.tab_active;
             if ativa {
-                c.rrect(x, y0, pw, hh, 9.0 * s, d::SURFACE_HI, 0.95);
-                c.rrect_border(x, y0, pw, hh, 9.0 * s, 1.0, d::WHITE, 0.09);
+                c.rrect(x, y0, pw, hh, 9.0 * s, d::surface_hi(), 0.95);
+                c.rrect_border(x, y0, pw, hh, 9.0 * s, 1.0, d::white(), 0.09);
             }
             let base = y0 + hh / 2.0 + px * 0.36;
-            let cor = if ativa { d::TEXT_STRONG } else { d::DIM };
+            let cor = if ativa { d::text_strong() } else { d::dim() };
             c.text(&mut self.ui_semi, px, x + 18.0 * s, base, &nome, cor, 1.0);
             if t.modified {
                 c.rrect(x + 18.0 * s + tw + 6.0 * s, base - 8.5 * s, 6.0 * s, 6.0 * s, 3.0 * s, d::ORANGE, 0.95);
@@ -994,17 +1014,19 @@ impl Scene {
         }
     }
 
-    fn paint_overlays(&mut self, c: &mut Canvas, _vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
+    fn paint_overlays(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, (w, h, s): (f32, f32, f32)) {
         self.paint_clock(c, (w, h, s));
+        self.paint_progress(c, vm, (w, h, s));
+        self.paint_whichkey(c, vm, (w, h, s));
         // escurece o fundo atrás da paleta
         let veil = self.cmd.v.max(self.pick.v);
         if veil > 0.01 {
-            c.rect(0, 0, w as i32, h as i32, d::BLACK, 0.20 * veil);
+            c.rect(0, 0, w as i32, h as i32, d::BLACK, d::k_sombra() * 0.20 * veil);
         }
         if self.camada != Camada::Casca {
-            self.paint_completion(c, _vm, lay, (w, h, s));
-            self.paint_hover(c, _vm, lay, (w, h, s));
-            self.paint_sig(c, _vm, lay, (w, h, s));
+            self.paint_completion(c, vm, lay, (w, h, s));
+            self.paint_hover(c, vm, lay, (w, h, s));
+            self.paint_sig(c, vm, lay, (w, h, s));
         }
         self.paint_palette(c, (w, h, s));
         self.paint_picker(c, (w, h, s));
@@ -1016,10 +1038,10 @@ impl Scene {
     fn paint_dash(&mut self, c: &mut Canvas, now: Instant, (w, h, s): (f32, f32, f32)) {
         let p = self.dash_at.map_or(1.0, |t| (now.saturating_duration_since(t).as_secs_f32() / 0.6).min(1.0));
         let at = |start: f32, len: f32| ease_out_cubic(((p - start) / len).clamp(0.0, 1.0));
-        let fg = d::TEXT;
-        let secondary = mix_color(fg, d::BG, 0.45);
-        let tertiary = mix_color(fg, d::BG, 0.62);
-        let strong = mix_color(fg, d::WHITE, 0.5);
+        let fg = d::text();
+        let secondary = mix_color(fg, d::bg(), 0.45);
+        let tertiary = mix_color(fg, d::bg(), 0.62);
+        let strong = mix_color(fg, d::white(), 0.5);
         let px = self.font_px;
         let (asc, desc) = self.mono.metrics(px);
         let pitch = (asc + desc).round();
@@ -1031,7 +1053,7 @@ impl Scene {
         let star = "✦";
         let sw = self.mono.measure(star, px);
         y += pitch;
-        let star_col = mix_color(d::BG, d::ACCENT, at(0.0, 0.45));
+        let star_col = mix_color(d::bg(), d::ACCENT, at(0.0, 0.45));
         if self.mono.has('✦') {
             c.text(&mut self.mono, px, cx - sw / 2.0, y, star, star_col, 1.0);
         } else if self.ui.has('✦') {
@@ -1060,7 +1082,7 @@ impl Scene {
             let mut x = cx - lw / 2.0;
             for ch in line.chars() {
                 if ch != ' ' {
-                    c.glyph_at(&mut self.mono, px, x.round(), y, ch, mix_color(d::BG, col, a), 1.0);
+                    c.glyph_at(&mut self.mono, px, x.round(), y, ch, mix_color(d::bg(), col, a), 1.0);
                 }
                 x += cw;
             }
@@ -1071,7 +1093,7 @@ impl Scene {
         // linha discreta
         let tag = "Editor com agentes de IA";
         let tw = self.mono.measure(tag, px);
-        c.text(&mut self.mono, px, cx - tw / 2.0, y, tag, mix_color(d::BG, secondary, at(0.4, 0.45)), 1.0);
+        c.text(&mut self.mono, px, cx - tw / 2.0, y, tag, mix_color(d::bg(), secondary, at(0.4, 0.45)), 1.0);
         y += pitch * 3.0;
 
         // menu: ícone, descrição e atalho à direita (coluna de 50 células)
@@ -1092,23 +1114,23 @@ impl Scene {
             let base = y + i as f32 * step;
             if i == 0 {
                 // cursor sobre a primeira ação, como no dashboard
-                c.rrect(left + 3.0 * cw, base - asc, cw, asc + desc_h(&self.mono, px), 2.0 * s, mix_color(d::BG, d::TEXT, m), 0.85);
+                c.rrect(left + 3.0 * cw, base - asc, cw, asc + desc_h(&self.mono, px), 2.0 * s, mix_color(d::bg(), d::text(), m), 0.85);
             }
             let ic = icon.chars().next().unwrap_or(' ');
             if self.mono.has(ic) {
-                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::BG, secondary, m), 1.0);
+                c.glyph_at(&mut self.mono, px * 0.8, left, base, ic, mix_color(d::bg(), secondary, m), 1.0);
             }
             for (j, ch) in desc.chars().enumerate() {
-                let col = if i == 0 && j == 0 { d::BG } else { mix_color(d::BG, fg, m) };
+                let col = if i == 0 && j == 0 { d::bg() } else { mix_color(d::bg(), fg, m) };
                 c.glyph_at(&mut self.mono, px, left + (3.0 + j as f32) * cw, base, ch, col, 1.0);
             }
-            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::BG, tertiary, m), 1.0);
+            c.glyph_at(&mut self.mono, px, right - cw, base, key.chars().next().unwrap_or(' '), mix_color(d::bg(), tertiary, m), 1.0);
         }
 
         // rodapé
         let foot = format!("pronto em {} ms", self.ready_ms);
         let fw = self.mono.measure(&foot, px);
-        c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::BG, tertiary, m), 1.0);
+        c.text(&mut self.mono, px, cx - fw / 2.0, (h * 0.88).round(), &foot, mix_color(d::bg(), tertiary, m), 1.0);
     }
 
     fn paint_diags_row(&mut self, c: &mut Canvas, vm: &ViewModel, lay: &Layout, row: usize, line: &str, y: f32, ra: f32) {
@@ -1117,7 +1139,7 @@ impl Scene {
             1 => d::RED,
             2 => d::ORANGE,
             3 => d::ACCENT,
-            _ => d::DIM,
+            _ => d::dim(),
         };
         let n = line.chars().count();
         let mut mais_grave: Option<&crate::lsp::Diag> = None;
@@ -1183,9 +1205,9 @@ impl Scene {
         if y + ch > h - d::M.bottom * s {
             y = (cur_top - ch - 4.0 * s).max(lay.text_y);
         }
-        c.shadow(x, y, cw, ch, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
-        c.rrect(x, y, cw, ch, 12.0 * s, d::SURFACE_HI, 0.98);
-        c.rrect_border(x, y, cw, ch, 12.0 * s, 1.0, d::WHITE, 0.10);
+        c.shadow(x, y, cw, ch, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, d::k_sombra() * 0.5);
+        c.rrect(x, y, cw, ch, 12.0 * s, d::surface_hi(), 0.98);
+        c.rrect_border(x, y, cw, ch, 12.0 * s, 1.0, d::white(), 0.10);
         c.rrect(x + 5.0 * s, y + 6.0 * s + cv.sel as f32 * row_h, cw - 10.0 * s, row_h, 8.0 * s, d::ACCENT, 0.30);
         for (i, it) in cv.items.iter().enumerate() {
             let base = y + 6.0 * s + i as f32 * row_h + row_h / 2.0 + px * 0.34;
@@ -1195,10 +1217,10 @@ impl Scene {
                 5 | 10 => ('p', d::ORANGE),
                 6 => ('v', d::ACCENT),
                 7 | 8 | 22 => ('T', d::GREEN),
-                9 => ('M', d::DIM),
+                9 => ('M', d::dim()),
                 14 => ('k', d::RED),
-                15 => ('s', d::DIM),
-                _ => ('a', d::DIM),
+                15 => ('s', d::dim()),
+                _ => ('a', d::dim()),
             };
             let bx = x + 12.0 * s;
             c.rrect(bx, base - px * 0.34 - 8.0 * s, 16.0 * s, 16.0 * s, 4.0 * s, cor, 0.22);
@@ -1206,7 +1228,7 @@ impl Scene {
             c.text(&mut self.ui_semi, 10.5 * s, bx + (16.0 * s - lw) / 2.0, base - px * 0.34 + 3.5 * s, &letra.to_string(), cor, 1.0);
             let mut pen = bx + 26.0 * s;
             for (j, ch) in it.label.chars().enumerate() {
-                let col = if it.hits.contains(&j) { d::ACCENT_SOFT } else if i == cv.sel { d::TEXT_STRONG } else { d::TEXT };
+                let col = if it.hits.contains(&j) { d::accent_soft() } else if i == cv.sel { d::text_strong() } else { d::text() };
                 c.glyph_at(&mut self.mono, px, pen, base, ch, col, 1.0);
                 pen += lay.char_w;
             }
@@ -1214,7 +1236,7 @@ impl Scene {
                 let det: String = it.detail.chars().take(28).collect();
                 let dw = self.ui.measure(&det, 11.5 * s);
                 if pen + 16.0 * s < x + cw - dw - 12.0 * s {
-                    c.text(&mut self.ui, 11.5 * s, x + cw - dw - 14.0 * s, base - 1.0 * s, &det, d::DIM, 0.9);
+                    c.text(&mut self.ui, 11.5 * s, x + cw - dw - 14.0 * s, base - 1.0 * s, &det, d::dim(), 0.9);
                 }
             }
         }
@@ -1232,9 +1254,9 @@ impl Scene {
         if y + ch_h > h - d::M.bottom * s {
             y = (lay.text_y + self.cur_y.x - (self.top.x - self.over.x) - ch_h - 6.0 * s).max(lay.text_y);
         }
-        c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, 0.5);
-        c.rrect(x, y, cw, ch_h, 12.0 * s, d::SURFACE_HI, 0.98);
-        c.rrect_border(x, y, cw, ch_h, 12.0 * s, 1.0, d::WHITE, 0.10);
+        c.shadow(x, y, cw, ch_h, 12.0 * s, 24.0 * s, 10.0 * s, d::BLACK, d::k_sombra() * 0.5);
+        c.rrect(x, y, cw, ch_h, 12.0 * s, d::surface_hi(), 0.98);
+        c.rrect_border(x, y, cw, ch_h, 12.0 * s, 1.0, d::white(), 0.10);
         for (i, l) in linhas.iter().enumerate() {
             let mut pen = x + 16.0 * s;
             let base = y + 12.0 * s + px * 1.5 * (i as f32 + 0.75);
@@ -1243,7 +1265,7 @@ impl Scene {
                 if pen + a > x + cw - 12.0 * s {
                     break;
                 }
-                c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+                c.glyph_at(&mut self.ui, px, pen, base, ch, if i == 0 { d::text_strong() } else { d::text() }, 1.0);
                 pen += a;
             }
         }
@@ -1262,9 +1284,9 @@ impl Scene {
         let linha_y = lay.text_y + self.cur_y.x - (self.top.x - self.over.x);
         // acima da linha (o completar fica abaixo)
         let y = (linha_y - ch_h - 6.0 * s).max(lay.text_y);
-        c.shadow(x, y, cw, ch_h, 10.0 * s, 20.0 * s, 8.0 * s, d::BLACK, 0.5);
-        c.rrect(x, y, cw, ch_h, 10.0 * s, d::SURFACE_HI, 0.98);
-        c.rrect_border(x, y, cw, ch_h, 10.0 * s, 1.0, d::WHITE, 0.10);
+        c.shadow(x, y, cw, ch_h, 10.0 * s, 20.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5);
+        c.rrect(x, y, cw, ch_h, 10.0 * s, d::surface_hi(), 0.98);
+        c.rrect_border(x, y, cw, ch_h, 10.0 * s, 1.0, d::white(), 0.10);
         let base = y + 10.0 * s + px * 1.05;
         let mut pen = x + 16.0 * s;
         for (i, ch) in chars.iter().enumerate() {
@@ -1276,7 +1298,7 @@ impl Scene {
             if ativo {
                 c.rrect(pen - 1.0, base - px * 1.0, a + 2.0, px * 1.35, 3.0 * s, d::ACCENT, 0.28);
             }
-            c.glyph_at(&mut self.mono, px, pen, base, *ch, if ativo { d::TEXT_STRONG } else { d::TEXT }, 1.0);
+            c.glyph_at(&mut self.mono, px, pen, base, *ch, if ativo { d::text_strong() } else { d::text() }, 1.0);
             pen += a;
         }
         if !sig.doc.is_empty() {
@@ -1287,7 +1309,7 @@ impl Scene {
                 if pen + a > x + cw - 10.0 * s {
                     break;
                 }
-                c.glyph_at(&mut self.ui, dpx, pen, base + px * 1.45, ch, d::DIM, 1.0);
+                c.glyph_at(&mut self.ui, dpx, pen, base + px * 1.45, ch, d::dim(), 1.0);
                 pen += a;
             }
         }
@@ -1301,7 +1323,53 @@ impl Scene {
         let x = (w - d::M.pad_x * s - tw).round();
         // mesma linha da pílula: centro a 37 px (em escala 1) da borda de baixo
         let mid = h - 20.0 * s - 17.0 * s;
-        c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::DIM, 0.85);
+        c.text(&mut self.ui, px, x, (mid + px * 0.36).round(), &text, d::dim(), 0.85);
+    }
+
+    /// Menu de atalhos da líder: lista no canto de baixo, acima da pílula.
+    fn paint_whichkey(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        if vm.whichkey.is_empty() {
+            return;
+        }
+        let (kpx, dpx) = (15.0 * s, 13.0 * s);
+        let row_h = 25.0 * s;
+        let n = vm.whichkey.len().min(16);
+        let kw = vm.whichkey.iter().take(n).map(|(k, _)| self.mono.advance(k.chars().next().unwrap_or(' '), kpx)).fold(0.0_f32, f32::max).max(10.0 * s);
+        let dw = vm.whichkey.iter().take(n).map(|(_, d)| self.ui.measure(d, dpx)).fold(0.0_f32, f32::max);
+        let (pad, gap) = (16.0 * s, 14.0 * s);
+        let cw = (pad * 2.0 + kw + gap + dw).min(w - 2.0 * d::M.pad_x * s);
+        let ch = pad * 1.2 + n as f32 * row_h;
+        let x = (w - d::M.pad_x * s - cw).round();
+        let y = (h - 20.0 * s - 34.0 * s - 14.0 * s - ch).round();
+        c.shadow(x, y, cw, ch, 14.0 * s, 24.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5);
+        c.rrect(x, y, cw, ch, 14.0 * s, d::surface_hi(), 0.97);
+        c.rrect_border(x, y, cw, ch, 14.0 * s, 1.0, d::white(), 0.1);
+        for (i, (k, desc)) in vm.whichkey.iter().take(n).enumerate() {
+            let base = y + pad * 0.6 + i as f32 * row_h + row_h * 0.5;
+            let grupo = desc.starts_with('+');
+            for ch in k.chars().take(1) {
+                c.glyph_at(&mut self.mono, kpx, x + pad, base + kpx * 0.34, ch, d::accent_soft(), 1.0);
+            }
+            let cor = if grupo { d::accent_soft() } else { d::text() };
+            c.text(&mut self.ui, dpx, x + pad + kw + gap, base + dpx * 0.36, desc, cor, if grupo { 0.9 } else { 0.95 });
+        }
+    }
+
+    /// Trabalho do servidor de linguagem (indexando...), logo acima do relógio.
+    fn paint_progress(&mut self, c: &mut Canvas, vm: &ViewModel, (w, h, s): (f32, f32, f32)) {
+        let Some(text) = vm.progress.as_ref() else { return };
+        let px = 11.5 * s;
+        let mut t = text.clone();
+        let maxw = w * 0.4;
+        while self.ui.measure(&t, px) > maxw && t.chars().count() > 8 {
+            t.pop();
+        }
+        let tw = self.ui.measure(&t, px);
+        let x = (w - d::M.pad_x * s - tw).round();
+        let mid = h - 20.0 * s - 17.0 * s - 22.0 * s;
+        c.rrect(x - 12.0 * s, mid - 11.0 * s, tw + 24.0 * s, 22.0 * s, 11.0 * s, d::surface(), 0.9);
+        c.rrect(x - 3.0 * s - 6.0 * s, mid - 2.5 * s, 5.0 * s, 5.0 * s, 2.5 * s, d::ACCENT, 0.9);
+        c.text(&mut self.ui, px, x + 4.0 * s, (mid + px * 0.36).round(), &t, d::dim(), 0.95);
     }
 
     fn paint_pill(&mut self, c: &mut Canvas, vm: &ViewModel, now: Instant, (w, h, s): (f32, f32, f32)) {
@@ -1310,9 +1378,9 @@ impl Scene {
         let x = ((w - pw) / 2.0).round();
         let y = (h - 20.0 * s - ph).round();
         let fade = 1.0 - 0.55 * self.cmd.v;
-        c.shadow(x, y, pw, ph, ph / 2.0, 16.0 * s, 6.0 * s, d::BLACK, 0.42 * fade);
-        c.rrect(x, y, pw, ph, ph / 2.0, d::SURFACE, 0.95 * fade);
-        c.rrect_border(x, y, pw, ph, ph / 2.0, 1.0, d::WHITE, 0.09 * fade);
+        c.shadow(x, y, pw, ph, ph / 2.0, 16.0 * s, 6.0 * s, d::BLACK, d::k_sombra() * 0.42 * fade);
+        c.rrect(x, y, pw, ph, ph / 2.0, d::surface(), 0.95 * fade);
+        c.rrect_border(x, y, pw, ph, ph / 2.0, 1.0, d::white(), 0.09 * fade);
         let mut cx = x + 18.0 * s;
         let mid = y + ph / 2.0;
         // ponto colorido do modo (cor em transição)
@@ -1324,18 +1392,18 @@ impl Scene {
         let lpx = 12.5 * s;
         let e = ease_out_cubic(lt);
         if lt < 1.0 {
-            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36 - 5.0 * s * e, &self.label_from.clone(), d::TEXT_STRONG, (1.0 - e) * fade);
-            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36 + 5.0 * s * (1.0 - e), &self.mode_label.clone(), d::TEXT_STRONG, e * fade);
+            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36 - 5.0 * s * e, &self.label_from.clone(), d::text_strong(), (1.0 - e) * fade);
+            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36 + 5.0 * s * (1.0 - e), &self.mode_label.clone(), d::text_strong(), e * fade);
         } else {
-            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36, &self.mode_label.clone(), d::TEXT_STRONG, fade);
+            c.text(&mut self.ui_semi, lpx, cx, mid + lpx * 0.36, &self.mode_label.clone(), d::text_strong(), fade);
         }
         let label_w = self.ui_semi.measure(&self.mode_label, lpx).max(46.0 * s);
         cx += label_w + 18.0 * s;
-        c.rect(cx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+        c.rect(cx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::white(), 0.12 * fade);
         cx += 18.0 * s;
         let pos = format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1);
         let ppx = 12.0 * s;
-        c.text(&mut self.ui, ppx, cx, mid + ppx * 0.36, &pos, d::DIM, fade);
+        c.text(&mut self.ui, ppx, cx, mid + ppx * 0.36, &pos, d::dim(), fade);
         if !vm.showcmd.is_empty() {
             let pw2 = self.ui.measure(&pos, ppx).max(34.0 * s);
             c.text(&mut self.ui_semi, ppx, cx + pw2 + 14.0 * s, mid + ppx * 0.36, &vm.showcmd, d::ACCENT, fade);
@@ -1346,7 +1414,7 @@ impl Scene {
         let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
         if nerr + nwarn > 0 {
             ex += 18.0 * s;
-            c.rect(ex as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
+            c.rect(ex as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::white(), 0.12 * fade);
             ex += 18.0 * s;
             for (n, cor) in [(nerr, d::RED), (nwarn, d::ORANGE)] {
                 if n == 0 {
@@ -1354,15 +1422,15 @@ impl Scene {
                 }
                 c.rrect(ex, mid - 3.5 * s, 7.0 * s, 7.0 * s, 3.5 * s, cor, fade);
                 let t = n.to_string();
-                c.text(&mut self.ui, ppx, ex + 12.0 * s, mid + ppx * 0.36, &t, d::TEXT, fade);
+                c.text(&mut self.ui, ppx, ex + 12.0 * s, mid + ppx * 0.36, &t, d::text(), fade);
                 ex += 12.0 * s + self.ui.measure(&t, ppx) + 18.0 * s;
             }
             ex -= 18.0 * s;
         }
         if let Some(g) = &vm.git {
             let bx = ex + 18.0 * s;
-            c.rect(bx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::WHITE, 0.12 * fade);
-            c.text(&mut self.ui, ppx, bx + 18.0 * s, mid + ppx * 0.36, &g.branch, d::DIM, fade);
+            c.rect(bx as i32, (mid - 8.0 * s) as i32, 1, (16.0 * s) as i32, d::white(), 0.12 * fade);
+            c.text(&mut self.ui, ppx, bx + 18.0 * s, mid + ppx * 0.36, &g.branch, d::dim(), fade);
         }
     }
 
@@ -1377,9 +1445,9 @@ impl Scene {
         let (pw, ph) = (pw0 * k, ph0 * k);
         let x = ((w - pw) / 2.0).round();
         let y = (h * 0.16 + (1.0 - e) * -8.0 * s).round();
-        c.shadow(x, y, pw, ph, 14.0 * s, 30.0 * s, 12.0 * s, d::BLACK, 0.6 * p);
-        c.rrect(x, y, pw, ph, 14.0 * s, d::SURFACE_HI, 0.985 * p);
-        c.rrect_border(x, y, pw, ph, 14.0 * s, 1.0, d::WHITE, 0.11 * p);
+        c.shadow(x, y, pw, ph, 14.0 * s, 30.0 * s, 12.0 * s, d::BLACK, d::k_sombra() * 0.6 * p);
+        c.rrect(x, y, pw, ph, 14.0 * s, d::surface_hi(), 0.985 * p);
+        c.rrect_border(x, y, pw, ph, 14.0 * s, 1.0, d::white(), 0.11 * p);
         let (kind, text) = self.cmd_cache.clone();
         let mid = y + ph / 2.0;
         let ipx = 18.0 * s;
@@ -1391,7 +1459,7 @@ impl Scene {
         let tw = self.mono.measure(&text, px);
         for (i, ch) in text.chars().enumerate() {
             let cw = self.mono.advance(ch, px);
-            c.glyph_at(&mut self.mono, px, tx + i as f32 * cw, mid + px * 0.34, ch, d::TEXT_STRONG, p);
+            c.glyph_at(&mut self.mono, px, tx + i as f32 * cw, mid + px * 0.34, ch, d::text_strong(), p);
         }
         // cursor de texto
         c.rrect(tx + tw + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
@@ -1412,9 +1480,9 @@ impl Scene {
         let y0 = (y1 - ph).round();
         let prev = c.clip;
         c.set_clip(x0 as i32, y0 as i32, w as i32, y1 as i32);
-        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::BG, 1.0);
-        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::SURFACE, 0.9);
-        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::WHITE, if tv.focus { 0.16 } else { 0.08 });
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::bg(), 1.0);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, ph as i32 + 1, d::surface(), 0.9);
+        c.rect(x0 as i32, y0 as i32, (w - x0) as i32, 1.max(s as i32), d::white(), if tv.focus { 0.16 } else { 0.08 });
         self.paint_term_cells(c, &tv, x0 + 14.0 * s, y0 + 12.0 * s, y1, w, 1.0, now);
         c.clip = prev;
     }
@@ -1429,7 +1497,7 @@ impl Scene {
         let Some(tv) = self.term_cache.clone() else { return };
         let e = ease_out_expo(z);
         // véu: apaga o editor e deixa só um brilho fraco no meio
-        c.rect(0, 0, c.w, c.h, d::BG, 0.97 * e);
+        c.rect(0, 0, c.w, c.h, d::bg(), 0.97 * e);
         let (rows, cols) = self.zen_grid(w, h);
         let (cw, lh) = (self.char_w, self.line_h);
         let (gw, gh) = (cols as f32 * cw, rows as f32 * lh);
@@ -1438,18 +1506,18 @@ impl Scene {
         let rise = (1.0 - e) * 18.0 * s;
         let x = ((w - cardw) / 2.0).round();
         let y = (((h - cardh) / 2.0) + (ZEN_TOP - ZEN_BOTTOM) * s * 0.5 + rise).round();
-        c.shadow(x, y, cardw, cardh, 22.0 * s, 60.0 * s, 24.0 * s, d::BLACK, 0.55 * e);
-        c.rrect(x, y, cardw, cardh, 22.0 * s, d::SURFACE, 0.55 * e);
-        c.rrect_border(x, y, cardw, cardh, 22.0 * s, 1.0, d::WHITE, if tv.focus { 0.10 } else { 0.05 } * e);
+        c.shadow(x, y, cardw, cardh, 22.0 * s, 60.0 * s, 24.0 * s, d::BLACK, d::k_sombra() * 0.55 * e);
+        c.rrect(x, y, cardw, cardh, 22.0 * s, d::surface(), 0.55 * e);
+        c.rrect_border(x, y, cardw, cardh, 22.0 * s, 1.0, d::white(), if tv.focus { 0.10 } else { 0.05 } * e);
         // título discreto acima do cartão e dica de saída abaixo
         let tpx = 12.0 * s;
         let titulo = "AGENTE";
         let tw = self.ui_semi.measure(titulo, tpx);
-        c.text(&mut self.ui_semi, tpx, ((w - tw) / 2.0).round(), y - 18.0 * s, titulo, d::DIM, 0.9 * e);
+        c.text(&mut self.ui_semi, tpx, ((w - tw) / 2.0).round(), y - 18.0 * s, titulo, d::dim(), 0.9 * e);
         let dica = "Ctrl-\\  Ctrl-n  volta ao editor";
         let dpx = 11.5 * s;
         let dw = self.ui.measure(dica, dpx);
-        c.text(&mut self.ui, dpx, ((w - dw) / 2.0).round(), y + cardh + 26.0 * s, dica, d::FAINT, 0.9 * e);
+        c.text(&mut self.ui, dpx, ((w - dw) / 2.0).round(), y + cardh + 26.0 * s, dica, d::faint(), 0.9 * e);
         let prev = c.clip;
         c.set_clip(x as i32, y as i32, (x + cardw) as i32, (y + cardh) as i32);
         self.paint_term_cells(c, &tv, x + pad, y + 24.0 * s, y + cardh - 24.0 * s, x + cardw - pad + cw, e, now);
@@ -1488,7 +1556,7 @@ impl Scene {
                 if cell.cont || cell.ch == ' ' {
                     continue;
                 }
-                let color = cell.fg.unwrap_or(d::TEXT);
+                let color = cell.fg.unwrap_or(d::text());
                 let font = if cell.italic && self.mono_italic.is_some() {
                     self.mono_italic.as_mut().unwrap()
                 } else if cell.bold && self.mono_bold.is_some() {
@@ -1511,7 +1579,7 @@ impl Scene {
                 c.rrect(x, y + 1.0, cw, lh - 2.0, 2.0 * s, d::GREEN, 0.9 * blink.max(0.35) * k);
                 if let Some(cell) = tv.screen.rows.get(cr).and_then(|r| r.get(cc)) {
                     if cell.ch != ' ' && !cell.cont {
-                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::BG, blink.max(0.35) * k);
+                        c.glyph_at(&mut self.mono, px, x, y + self.ascent, cell.ch, d::bg(), blink.max(0.35) * k);
                     }
                 }
             } else {
@@ -1525,8 +1593,8 @@ impl Scene {
             let tw = self.ui_semi.measure(&txt, tpx);
             let (bw, bh) = (tw + 20.0 * s, 22.0 * s);
             let bx = (xmax - bw - 6.0 * s).max(left);
-            c.rrect(bx, top - 4.0 * s, bw, bh, bh / 2.0, d::SURFACE_HI, 0.95 * k);
-            c.text(&mut self.ui_semi, tpx, bx + 10.0 * s, top - 4.0 * s + bh / 2.0 + tpx * 0.36, &txt, d::TEXT, k);
+            c.rrect(bx, top - 4.0 * s, bw, bh, bh / 2.0, d::surface_hi(), 0.95 * k);
+            c.text(&mut self.ui_semi, tpx, bx + 10.0 * s, top - 4.0 * s + bh / 2.0 + tpx * 0.36, &txt, d::text(), k);
         }
         // processo terminou: avisa na última linha
         if tv.screen.exited {
@@ -1536,9 +1604,9 @@ impl Scene {
             let (bw, bh) = (tw + 28.0 * s, 26.0 * s);
             let bx = (left + (xmax - left - bw) / 2.0).max(left);
             let by = (y1 - bh - 8.0 * s).max(top);
-            c.rrect(bx, by, bw, bh, bh / 2.0, d::SURFACE_HI, 0.97 * k);
+            c.rrect(bx, by, bw, bh, bh / 2.0, d::surface_hi(), 0.97 * k);
             c.rrect_border(bx, by, bw, bh, bh / 2.0, 1.0, d::ORANGE, 0.5 * k);
-            c.text(&mut self.ui, tpx, bx + 14.0 * s, by + bh / 2.0 + tpx * 0.36, txt, d::TEXT_STRONG, k);
+            c.text(&mut self.ui, tpx, bx + 14.0 * s, by + bh / 2.0 + tpx * 0.36, txt, d::text_strong(), k);
         }
     }
 
@@ -1569,16 +1637,16 @@ impl Scene {
         let prev_clip = c.clip;
         c.set_clip(0, 0, sw as i32, c.h);
         // fundo e borda
-        c.rect(0, 0, sw as i32, c.h, d::SURFACE, 0.55);
-        c.rect((sw - 1.0) as i32, 0, 1.max(s as i32), c.h, d::WHITE, 0.07);
+        c.rect(0, 0, sw as i32, c.h, d::surface(), 0.55);
+        c.rect((sw - 1.0) as i32, 0, 1.max(s as i32), c.h, d::white(), 0.07);
         // título
         let hpx = 12.0 * s;
-        c.text(&mut self.ui_semi, hpx, 20.0 * s, top * 0.5 + hpx * 0.36, &tv.root.to_uppercase(), d::DIM, 0.95);
+        c.text(&mut self.ui_semi, hpx, 20.0 * s, top * 0.5 + hpx * 0.36, &tv.root.to_uppercase(), d::dim(), 0.95);
         c.set_clip(0, top as i32, sw as i32, (c.h as f32 - d::M.bottom * s) as i32);
         let t0 = self.tree_top.x;
         // seleção
         let sy = top + (self.tree_sel.x - t0) * row_h;
-        let (col, al) = if tv.focus { (d::ACCENT, 0.24) } else { (d::WHITE, 0.07) };
+        let (col, al) = if tv.focus { (d::ACCENT, 0.24) } else { (d::white(), 0.07) };
         c.rrect(8.0 * s, sy + 1.0, sw - 16.0 * s - 1.0, row_h - 2.0, 8.0 * s, col, al);
         let npx = 13.0 * s;
         for (i, it) in tv.items.iter().enumerate() {
@@ -1593,12 +1661,22 @@ impl Scene {
                 // seta: aponta à direita (fechada) ou para baixo (aberta)
                 let g = if it.open { "⌄" } else { "›" };
                 if self.ui.has(it.open.then_some('⌄').unwrap_or('›')) {
-                    c.text(&mut self.ui_semi, npx, x, base - if it.open { 3.0 * s } else { 0.0 }, g, d::DIM, 1.0);
+                    c.text(&mut self.ui_semi, npx, x, base - if it.open { 3.0 * s } else { 0.0 }, g, d::dim(), 1.0);
                 }
             }
             let nx = x + 15.0 * s;
-            let (font_semi, color) = if it.dir { (true, d::TEXT_STRONG) } else { (false, if abs == tv.sel { d::TEXT_STRONG } else { d::TEXT }) };
-            let maxw = sw - nx - 12.0 * s;
+            let (font_semi, mut color) = if it.dir { (true, d::text_strong()) } else { (false, if abs == tv.sel { d::text_strong() } else { d::text() }) };
+            // git: o nome ganha a cor do estado e uma letra à direita
+            let git_cor = match it.git {
+                'M' | 'R' => Some(d::ORANGE),
+                'A' | '?' => Some(d::GREEN),
+                'D' | 'U' => Some(d::RED),
+                _ => None,
+            };
+            if let (Some(gc), false) = (git_cor, it.dir) {
+                color = gc;
+            }
+            let maxw = sw - nx - 12.0 * s - if git_cor.is_some() { 16.0 * s } else { 0.0 };
             let mut name = it.name.clone();
             while self.ui.measure(&name, npx) > maxw && name.chars().count() > 3 {
                 name.pop();
@@ -1610,6 +1688,11 @@ impl Scene {
                 c.text(&mut self.ui_semi, npx, nx, base, &name, color, 1.0);
             } else {
                 c.text(&mut self.ui, npx, nx, base, &name, color, 0.92);
+            }
+            if let Some(gc) = git_cor {
+                let marca = if it.dir { "•".to_string() } else if it.git == '?' { "U".to_string() } else { it.git.to_string() };
+                let mw = self.ui_semi.measure(&marca, 11.0 * s);
+                c.text(&mut self.ui_semi, 11.0 * s, sw - 14.0 * s - mw, base, &marca, gc, 0.9);
             }
         }
         c.clip = prev_clip;
@@ -1625,41 +1708,45 @@ impl Scene {
         let e = ease_out_expo(p);
         let rows = pv.items.len().max(1) as f32;
         let (pw0, row_h, head) = ((680.0 * s).min(w - 48.0 * s), 34.0 * s, 56.0 * s);
-        let ph0 = head + rows * row_h + 18.0 * s;
+        // o trecho usa o que sobra da altura da janela (no máximo as linhas que vieram)
+        let sobra = h - h * 0.14 - head - rows * row_h - 18.0 * s - 40.0 * s - 22.0 * s;
+        let prev_n = ((sobra / (self.font_px * 1.3)).floor().max(0.0) as usize).min(pv.preview.len());
+        let prev_h = if prev_n < 3 { 0.0 } else { prev_n as f32 * self.font_px * 1.3 + 22.0 * s };
+        let ph0 = head + rows * row_h + 18.0 * s + prev_h;
         let k = lerp(0.965, 1.0, e);
         let (pw, ph) = (pw0 * k, ph0 * k);
         let x = ((w - pw) / 2.0).round();
         let y = (h * 0.14 + (1.0 - e) * -8.0 * s).round();
-        c.shadow(x, y, pw, ph, 16.0 * s, 34.0 * s, 14.0 * s, d::BLACK, 0.6 * p);
-        c.rrect(x, y, pw, ph, 16.0 * s, d::SURFACE_HI, 0.985 * p);
-        c.rrect_border(x, y, pw, ph, 16.0 * s, 1.0, d::WHITE, 0.11 * p);
+        c.shadow(x, y, pw, ph, 16.0 * s, 34.0 * s, 14.0 * s, d::BLACK, d::k_sombra() * 0.6 * p);
+        c.rrect(x, y, pw, ph, 16.0 * s, d::surface_hi(), 0.985 * p);
+        c.rrect_border(x, y, pw, ph, 16.0 * s, 1.0, d::white(), 0.11 * p);
         // campo
         let mid = y + head / 2.0 * k;
         let ipx = 13.0 * s;
-        c.text(&mut self.ui_semi, ipx, x + 22.0 * s, mid + ipx * 0.36, &pv.title, d::DIM, p);
+        c.text(&mut self.ui_semi, ipx, x + 22.0 * s, mid + ipx * 0.36, &pv.title, d::dim(), p);
         let tw0 = self.ui_semi.measure(&pv.title, ipx);
         let px = self.font_px * 1.05;
         let tx = x + 22.0 * s + tw0 + 16.0 * s;
         let mut pen = tx;
         for ch in pv.query.chars() {
             let cw = self.mono.advance(ch, px);
-            c.glyph_at(&mut self.mono, px, pen, mid + px * 0.34, ch, d::TEXT_STRONG, p);
+            c.glyph_at(&mut self.mono, px, pen, mid + px * 0.34, ch, d::text_strong(), p);
             pen += cw;
         }
         c.rrect(pen + 1.0 * s, mid - px * 0.62, 2.0 * s, px * 1.24, 1.0 * s, d::ACCENT, p);
         let cnt = format!("{}", pv.total);
         let cw = self.ui.measure(&cnt, 12.0 * s);
-        c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw, mid + 12.0 * s * 0.36, &cnt, d::FAINT, p);
+        c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw, mid + 12.0 * s * 0.36, &cnt, d::faint(), p);
         if pv.buscando {
             let b = "buscando…";
             let bw = self.ui.measure(b, 12.0 * s);
-            c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw - 14.0 * s - bw, mid + 12.0 * s * 0.36, b, d::ACCENT_SOFT, p * 0.9);
+            c.text(&mut self.ui, 12.0 * s, x + pw - 22.0 * s - cw - 14.0 * s - bw, mid + 12.0 * s * 0.36, b, d::accent_soft(), p * 0.9);
         }
-        c.rect((x + 14.0 * s) as i32, (y + head - 2.0 * s) as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::WHITE, 0.07 * p);
+        c.rect((x + 14.0 * s) as i32, (y + head - 2.0 * s) as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::white(), 0.07 * p);
         // lista
         let top = y + head + 6.0 * s;
         if pv.items.is_empty() {
-            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.buscando { "Buscando…" } else if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::DIM, p);
+            c.text(&mut self.ui, 13.0 * s, x + 22.0 * s, top + row_h * 0.62, if pv.buscando { "Buscando…" } else if pv.query.is_empty() { "Nada por aqui ainda" } else { "Nenhum resultado" }, d::dim(), p);
             return;
         }
         // seleção desliza entre as linhas
@@ -1677,7 +1764,7 @@ impl Scene {
                     break;
                 }
                 let hit = it.hits.contains(&j);
-                let col = if hit { d::ACCENT_SOFT } else if i == pv.sel { d::TEXT_STRONG } else { d::TEXT };
+                let col = if hit { d::accent_soft() } else if i == pv.sel { d::text_strong() } else { d::text() };
                 c.glyph_at(&mut self.mono, fpx, pen, base, ch, col, a);
                 pen += cw;
             }
@@ -1688,7 +1775,39 @@ impl Scene {
                     if pen + cw > maxx {
                         break;
                     }
-                    c.glyph_at(&mut self.mono, fpx * 0.92, pen, base, ch, d::DIM, a);
+                    c.glyph_at(&mut self.mono, fpx * 0.92, pen, base, ch, d::dim(), a);
+                    pen += cw;
+                }
+            }
+        }
+        // trecho do arquivo selecionado, embaixo da lista
+        if prev_h > 0.0 {
+            let py = top + rows * row_h * k + 8.0 * s;
+            c.rect((x + 14.0 * s) as i32, py as i32, (pw - 28.0 * s) as i32, 1.max(s as i32), d::white(), 0.07 * p);
+            let lh = self.font_px * 1.3;
+            let ppx = self.font_px * 0.92;
+            let gutter = pv.preview.get(prev_n.saturating_sub(1)).map_or(2, |l| l.0.to_string().len()).max(2);
+            for (i, (num, texto, hit)) in pv.preview.iter().take(prev_n).enumerate() {
+                let ly = py + 10.0 * s + i as f32 * lh;
+                if *hit {
+                    c.rrect(x + 10.0 * s, ly, pw - 20.0 * s, lh, 5.0 * s, d::ACCENT, 0.2 * p);
+                }
+                let base = ly + lh * 0.5 + ppx * 0.34;
+                let mut pen = x + 22.0 * s;
+                for ch in format!("{num:>gutter$}  ").chars() {
+                    let cw = self.mono.advance(ch, ppx);
+                    c.glyph_at(&mut self.mono, ppx, pen, base, ch, d::faint(), p * 0.9);
+                    pen += cw;
+                }
+                let maxx = x + pw - 22.0 * s;
+                for ch in texto.chars() {
+                    let cw = if ch == '\t' { self.mono.advance(' ', ppx) * 4.0 } else { self.mono.advance(ch, ppx) };
+                    if pen + cw > maxx {
+                        break;
+                    }
+                    if ch != '\t' {
+                        c.glyph_at(&mut self.mono, ppx, pen, base, ch, if *hit { d::text_strong() } else { d::dim() }, p * 0.95);
+                    }
                     pen += cw;
                 }
             }
@@ -1707,16 +1826,16 @@ impl Scene {
         let (bw, bh) = (tw + 56.0 * s, 40.0 * s);
         let x = (w - bw - 24.0 * s + (1.0 - e) * 34.0 * s).round();
         let y = (lay.text_y + 6.0 * s).round();
-        c.shadow(x, y, bw, bh, 12.0 * s, 22.0 * s, 8.0 * s, d::BLACK, 0.5 * p);
-        c.rrect(x, y, bw, bh, 12.0 * s, d::SURFACE_HI, 0.98 * p);
-        c.rrect_border(x, y, bw, bh, 12.0 * s, 1.0, d::WHITE, 0.10 * p);
+        c.shadow(x, y, bw, bh, 12.0 * s, 22.0 * s, 8.0 * s, d::BLACK, d::k_sombra() * 0.5 * p);
+        c.rrect(x, y, bw, bh, 12.0 * s, d::surface_hi(), 0.98 * p);
+        c.rrect_border(x, y, bw, bh, 12.0 * s, 1.0, d::white(), 0.10 * p);
         let col = match kind {
             ToastKind::Info => d::ACCENT,
             ToastKind::Error => d::RED,
             ToastKind::Done => d::GREEN,
         };
         c.rrect(x + 18.0 * s, y + bh / 2.0 - 4.0 * s, 8.0 * s, 8.0 * s, 4.0 * s, col, p);
-        c.text(&mut self.ui, tpx, x + 36.0 * s, y + bh / 2.0 + tpx * 0.36, &text, d::TEXT_STRONG, p);
+        c.text(&mut self.ui, tpx, x + 36.0 * s, y + bh / 2.0 + tpx * 0.36, &text, d::text_strong(), p);
     }
 }
 
@@ -1822,14 +1941,14 @@ mod testes {
         s.resize(lay.cols, lay.rows.floor());
         let vm = s.view_model();
         let buf = quadro(&mut sc, &vm, 640, 400, Instant::now());
-        assert!(buf.iter().any(|p| *p == d::BG), "fundo");
+        assert!(buf.iter().any(|p| *p == d::bg()), "fundo");
         let cores: std::collections::HashSet<u32> = buf.iter().copied().collect();
         assert!(cores.len() > 40, "texto com antialias e cores: {}", cores.len());
         // o cursor (azul) está pintado na primeira linha de texto
         let y = (lay.text_y + lay.line_h / 2.0) as usize;
         let x = (lay.text_x + lay.char_w / 2.0) as usize;
         let p = buf[y * 640 + x];
-        assert_ne!(p, d::BG);
+        assert_ne!(p, d::bg());
         assert!((p & 0xff) > (p >> 16 & 0xff), "azulado: {p:#x}");
     }
 

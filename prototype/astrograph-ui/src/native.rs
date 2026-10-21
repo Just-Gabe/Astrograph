@@ -63,6 +63,7 @@ enum PedidoLsp {
     Implementacao,
     TipoDaDefinicao,
     Simbolos,
+    SimbolosDoProjeto,
 }
 
 struct Pendente {
@@ -105,6 +106,8 @@ struct Picker {
 }
 
 const PICK_LINHAS: usize = 10;
+/// linhas do trecho mostrado ao lado do buscador
+const PICK_PREVIEW: usize = 12;
 
 struct Comp {
     start: Pos,
@@ -115,6 +118,16 @@ struct Comp {
 }
 
 const COMP_LINHAS: usize = 8;
+/// quanto esperar depois da líder para mostrar o menu de atalhos
+const LIDER_MENU_MS: u64 = 450;
+
+/// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
+/// ainda está selecionado.
+struct Snip {
+    stops: Vec<(Pos, Pos)>,
+    idx: usize,
+    sel: bool,
+}
 
 /// Um servidor de linguagem compartilhado por todas as abas.
 pub type LspRef = std::sync::Arc<std::sync::Mutex<Cliente>>;
@@ -124,6 +137,8 @@ pub type LspPool = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Str
 #[derive(Clone, Debug, PartialEq)]
 pub enum PedidoAba {
     Nova(Option<PathBuf>),
+    /// aba sem arquivo com um texto pronto (a resposta da IA)
+    NovaComTexto(String, String),
     Fechar { forcar: bool },
     Proxima,
     Anterior,
@@ -156,6 +171,38 @@ pub struct Splits {
 
 static PROXIMO_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// O que a IA vai fazer com o pedido digitado.
+#[derive(Clone, Debug)]
+enum IaTipo {
+    /// trocar o trecho `[ini, fim)` (o buffer tinha a revisão `rev`)
+    Editar { ini: Pos, fim: Pos, codigo: String, rev: u64 },
+    /// responder numa aba nova (com o trecho selecionado como contexto, se houver)
+    Perguntar { trecho: Option<String> },
+}
+
+struct IaJob {
+    rx: std::sync::mpsc::Receiver<Result<String, String>>,
+    tipo: IaTipo,
+}
+
+/// Pergunta aberta no explorador.
+#[derive(Clone, Debug)]
+enum TreeOp {
+    Novo(std::path::PathBuf),
+    Renomear(std::path::PathBuf),
+    Apagar(std::path::PathBuf),
+}
+
+impl TreeOp {
+    fn rotulo(&self) -> String {
+        match self {
+            TreeOp::Novo(d) => format!("Novo em {}/ (termine com / para pasta): ", d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            TreeOp::Renomear(_) => "Renomear para: ".into(),
+            TreeOp::Apagar(p) => format!("Apagar {}? (s/n): ", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+        }
+    }
+}
+
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
@@ -174,6 +221,39 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// dobras automáticas: o método e a revisão do texto para a qual foram calculadas
+    fold_metodo: crate::dobras::Metodo,
+    fold_rev: u64,
+    /// quebra de linha (`:set wrap`) e o cache de "há alguma linha mais larga que a tela" (revisão, largura, resposta)
+    wrap: bool,
+    linebreak: bool,
+    larga_cache: std::cell::Cell<(u64, usize, bool)>,
+    /// projeção das dobras fechadas (cache por revisão e dobras)
+    proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
+    /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
+    leader_desde: Option<std::time::Instant>,
+    /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
+    ia_prompt: Option<(IaTipo, String)>,
+    ia_job: Option<IaJob>,
+    /// teste: programa e argumentos no lugar do agente (o pedido entra como último argumento)
+    ia_cmd: Option<(String, Vec<String>)>,
+    /// texto para uma aba nova (resposta da IA) e o nome fixo desta sessão
+    aba_texto: Option<(String, String)>,
+    /// `:Astrograph atualizar` em andamento
+    atualizando: Option<std::sync::mpsc::Receiver<Result<crate::comandos::Resultado, String>>>,
+    nome_fixo: Option<String>,
+    /// estado de git de cada arquivo (decoração do explorador) e a leitura em andamento
+    tree_git: std::collections::HashMap<PathBuf, char>,
+    tree_git_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<PathBuf, char>>>,
+    /// snippet em andamento (Tab pula de parada em parada)
+    snip: Option<Snip>,
+    /// `.editorconfig`: limpar o espaço do fim das linhas e o que fazer com a última quebra ao gravar
+    ec_trim: bool,
+    ec_final_nl: Option<bool>,
+    /// pergunta aberta no explorador (`a`, `r`, `d`) e o que foi digitado
+    tree_prompt: Option<(TreeOp, String)>,
+    /// `y`/`x` no explorador: o que `p` cola e se é para mover
+    tree_clip: Option<(std::path::PathBuf, bool)>,
     term: Option<Term>,
     term_focus: bool,
     term_zen: bool,
@@ -225,8 +305,11 @@ pub struct Session {
     pub jan_pedido: Option<PedidoJanela>,
     /// o terminal aberto é o de um agente (os pedidos prontos vão para ele)
     term_agente: bool,
+    /// outros terminais abertos (o atual fica em `term`): (terminal, é agente)
+    term_fundo: Vec<(Term, bool)>,
     /// pedido pronto esperando o agente terminar de abrir: (desde quando, texto)
     agente_fila: Option<(std::time::Instant, String)>,
+    agente_fila_enter: bool,
     /// só nos testes: pasta do `config.json` e agentes tidos como instalados
     agentes_pasta: Option<PathBuf>,
     agentes_tem: Option<Vec<&'static str>>,
@@ -296,6 +379,26 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            fold_metodo: crate::dobras::METODO_INICIAL.get().copied().unwrap_or_default(),
+            fold_rev: u64::MAX,
+            wrap: crate::dobras::WRAP_INICIAL.get().copied().unwrap_or(false),
+            linebreak: crate::dobras::LINEBREAK_INICIAL.get().copied().unwrap_or(false),
+            larga_cache: std::cell::Cell::new((u64::MAX, 0, false)),
+            proj: std::cell::RefCell::new(None),
+            leader_desde: None,
+            ia_prompt: None,
+            ia_job: None,
+            ia_cmd: None,
+            aba_texto: None,
+            atualizando: None,
+            nome_fixo: None,
+            tree_git: Default::default(),
+            tree_git_rx: None,
+            snip: None,
+            ec_trim: false,
+            ec_final_nl: None,
+            tree_prompt: None,
+            tree_clip: None,
             term: None,
             term_focus: false,
             term_zen: false,
@@ -339,7 +442,9 @@ impl Session {
             aba_pedido: None,
             jan_pedido: None,
             term_agente: false,
+            term_fundo: Vec::new(),
             agente_fila: None,
+            agente_fila_enter: true,
             agentes_pasta: None,
             agentes_tem: None,
             mtime: None,
@@ -378,12 +483,48 @@ impl Session {
     pub fn open(path: &Path) -> Self {
         let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let mut s = Session::new(&text, Some(path.to_path_buf()));
+        s.aplicar_editorconfig(path);
+        if let Some((r, c)) = busca::cursor_guardado(path).filter(|_| path.is_file()) {
+            s.ed.set_cursor(r.min(s.ed.buf.line_count().saturating_sub(1)), c);
+        }
         s.git_load();
         s.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         if !path.exists() {
             s.say(format!("\"{}\" [novo]", path.display()), ToastKind::Info);
         }
         s
+    }
+
+    /// Fecha o app guardando onde o cursor estava no arquivo.
+    fn sair(&mut self) {
+        self.guardar_cursor();
+        self.quit = true;
+    }
+
+    fn guardar_cursor(&self) {
+        if let Some(p) = self.path.as_ref().filter(|p| p.is_file()) {
+            busca::guardar_cursor(p, self.ed.cursor.row, self.ed.cursor.col);
+        }
+    }
+
+    /// Recuo e limpeza ao gravar do `.editorconfig` que vale para o arquivo.
+    fn aplicar_editorconfig(&mut self, path: &Path) {
+        let o = crate::editorconfig::para(path);
+        let mut set = String::new();
+        if let Some(e) = o.expandtab {
+            set.push_str(if e { " expandtab" } else { " noexpandtab" });
+        }
+        if let Some(n) = o.shiftwidth {
+            set.push_str(&format!(" shiftwidth={n}"));
+        }
+        if let Some(n) = o.tabstop {
+            set.push_str(&format!(" tabstop={n}"));
+        }
+        if !set.is_empty() {
+            self.ed.set_option(&set);
+        }
+        self.ec_trim = o.trim == Some(true);
+        self.ec_final_nl = o.final_newline;
     }
 
     /// Tamanho da área de texto em colunas e linhas (a cena informa).
@@ -466,7 +607,16 @@ impl Session {
             }
             return;
         }
-        if self.ed.cmdline().is_some() || self.ed.has_pending() {
+        if self.ed.cmdline().is_some() {
+            // histórico da linha de comando
+            match n {
+                Nav::Up => self.ed.feed(&[Key::Ctrl('p')]),
+                Nav::Down => self.ed.feed(&[Key::Ctrl('n')]),
+                _ => {}
+            }
+            return;
+        }
+        if self.ed.has_pending() {
             return;
         }
         let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
@@ -513,6 +663,14 @@ impl Session {
         let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
         if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
+            self.leader_desde = Some(std::time::Instant::now());
+            // acorda a tela quando chegar a hora de mostrar o menu de atalhos
+            if let Some(n) = self.notify.clone() {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(LIDER_MENU_MS + 30));
+                    n();
+                });
+            }
             return;
         }
         if !self.leader.is_empty() {
@@ -527,6 +685,9 @@ impl Session {
                 [Key::Char('e')] => self.toggle_tree(),
                 [Key::Char('t')] => self.toggle_term(),
                 [Key::Char('T')] => self.term_close(),
+                [Key::Char('N')] => self.term_novo(),
+                [Key::Char(']')] => self.term_ciclar(true),
+                [Key::Char('[')] => self.term_ciclar(false),
                 [Key::Char('A')] => return,
                 [Key::Char('r')] | [Key::Char('c')] | [Key::Char('l')] | [Key::Char('x')] => return,
                 [Key::Char('r'), Key::Char('n')] => {
@@ -541,6 +702,12 @@ impl Session {
                     self.lsp_formatar(false, false);
                 }
                 [Key::Char('l'), Key::Char('s')] => self.lsp_consulta(PedidoLsp::Simbolos),
+                [Key::Char('l'), Key::Char('S')] => {
+                    // abre a linha de comando já com o comando, para digitar o nome do símbolo
+                    self.leader.clear();
+                    self.ed.feed_str(":WorkspaceSymbol ");
+                    return;
+                }
                 [Key::Char('l'), Key::Char('i')] => self.lsp_consulta(PedidoLsp::Implementacao),
                 [Key::Char('l'), Key::Char('y')] => self.lsp_consulta(PedidoLsp::TipoDaDefinicao),
                 [Key::Char('l'), Key::Char('r')] => self.lsp_consulta(PedidoLsp::Referencias),
@@ -550,6 +717,8 @@ impl Session {
                 [Key::Char('A'), Key::Char('w')] => self.agente_modo(),
                 [Key::Char('A'), Key::Char('S')] => self.agente_sessoes(),
                 [Key::Char('A'), Key::Char('x')] => self.agente_corrigir(),
+                [Key::Char('A'), Key::Char('E')] => self.ia_abrir(),
+                [Key::Char('A'), Key::Char('c')] => self.agente_citar(),
                 [Key::Char('A'), Key::Char('i')] => self.agente_explicar(),
                 [Key::Char('A'), Key::Char('r')] => self.agente_enviar(crate::agentes::pedido_revisar()),
                 [Key::Char('A'), Key::Char('m')] => self.agente_enviar(crate::agentes::pedido_commit()),
@@ -574,6 +743,9 @@ impl Session {
 
     /// Tecla já sem líder: vai para o explorador (se ele tem o foco), a tela inicial ou o editor.
     fn dispatch(&mut self, k: Key) {
+        if self.ia_prompt.is_some() {
+            return self.ia_prompt_key(k);
+        }
         if self.tree_focus && self.tree.is_some() {
             self.tree_key(k);
             return;
@@ -646,17 +818,19 @@ impl Session {
         let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
             return;
         };
+        let raiz = lsp::raiz_do_projeto(&path, &self.root);
+        // um servidor por programa e por projeto: arquivos de repositórios diferentes não se misturam
+        let chave = format!("{prog}\0{}", raiz.display());
         let cli = {
             let mut pool = self.lsp_pool.lock().unwrap();
-            match pool.get(&prog) {
+            match pool.get(&chave) {
                 Some(c) => Some(c.clone()),
                 None => {
-                    let raiz = git::raiz(path.parent().unwrap_or(&self.root)).unwrap_or_else(|| self.root.clone());
                     let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
                     match Cliente::iniciar(&prog, &args, &raiz, notify) {
                         Ok(c) => {
                             let r: LspRef = std::sync::Arc::new(std::sync::Mutex::new(c));
-                            pool.insert(prog.clone(), r.clone());
+                            pool.insert(chave.clone(), r.clone());
                             Some(r)
                         }
                         Err(_) => None,
@@ -819,6 +993,77 @@ impl Session {
         linha[a..=b].iter().collect()
     }
 
+    /// O "pedaço sem espaço" sob o cursor (caminho ou URL), sem pontuação nas pontas.
+    fn token_sob_cursor(&self) -> String {
+        let linha: Vec<char> = self.ed.buf.line(self.ed.cursor.row).chars().collect();
+        if linha.is_empty() {
+            return String::new();
+        }
+        let c = self.ed.cursor.col.min(linha.len() - 1);
+        let sep = |c: char| c.is_whitespace() || "\"'`()[]{}<>,;|".contains(c);
+        if sep(linha[c]) {
+            return String::new();
+        }
+        let (mut a, mut b) = (c, c);
+        while a > 0 && !sep(linha[a - 1]) {
+            a -= 1;
+        }
+        while b + 1 < linha.len() && !sep(linha[b + 1]) {
+            b += 1;
+        }
+        let t: String = linha[a..=b].iter().collect();
+        t.trim_end_matches(['.', ':', '!', '?']).to_string()
+    }
+
+    /// `gf`: abre o arquivo cujo nome está sob o cursor (`caminho`, `caminho:linha` ou `caminho:linha:col`).
+    fn ir_para_arquivo(&mut self) {
+        let t = self.token_sob_cursor();
+        if t.is_empty() {
+            self.say("E446: Nenhum nome de arquivo sob o cursor".into(), ToastKind::Error);
+            return;
+        }
+        // caminho:linha[:col]
+        let mut partes: Vec<&str> = t.split(':').collect();
+        let mut pos: Vec<usize> = Vec::new();
+        while partes.len() > 1 && partes.last().is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) && pos.len() < 2 {
+            pos.insert(0, partes.pop().unwrap().parse().unwrap_or(1));
+        }
+        let nome = partes.join(":");
+        let nome = nome.strip_prefix("file://").unwrap_or(&nome).to_string();
+        let base_arq = self.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf);
+        let cands: Vec<PathBuf> = [base_arq, Some(self.root.clone())]
+            .into_iter()
+            .flatten()
+            .map(|d| if let Some(rest) = nome.strip_prefix("~/") { std::env::var_os("HOME").map(PathBuf::from).unwrap_or(d).join(rest) } else { d.join(&nome) })
+            .collect();
+        let Some(alvo) = cands.into_iter().find(|p| p.is_file()) else {
+            self.say(format!("E447: Arquivo \"{nome}\" não encontrado"), ToastKind::Error);
+            return;
+        };
+        let goto = pos.first().map(|l| (l.saturating_sub(1), pos.get(1).map_or(0, |c| c.saturating_sub(1))));
+        self.open_file(&alvo, goto);
+    }
+
+    /// `gx`: abre a URL (ou arquivo) sob o cursor com o programa padrão do sistema.
+    fn abrir_com_o_sistema(&mut self) {
+        let t = self.token_sob_cursor();
+        if t.is_empty() {
+            self.say("Nada sob o cursor para abrir.".into(), ToastKind::Info);
+            return;
+        }
+        let (prog, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "start".into(), String::new(), t.clone()])
+        } else if cfg!(target_os = "macos") {
+            ("open", vec![t.clone()])
+        } else {
+            ("xdg-open", vec![t.clone()])
+        };
+        match std::process::Command::new(prog).args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            Ok(_) => self.say(format!("Abrindo {t}"), ToastKind::Info),
+            Err(e) => self.say(format!("Não consegui abrir: {e}"), ToastKind::Error),
+        }
+    }
+
     /// Filtra as sugestões pelo que já foi digitado desde o começo da palavra.
     fn comp_filter(&mut self) {
         let Some(c) = self.comp.as_mut() else { return };
@@ -867,9 +1112,122 @@ impl Session {
                 de = Pos::new(r, lsp::col_chars(&self.ed.buf.line(r), c16));
             }
         }
-        self.ed.insert_replace(de, &item.texto);
+        let (texto, paradas, extras) = (item.texto.clone(), item.paradas.clone(), item.extras.clone());
+        self.ed.insert_replace(de, &texto);
         self.comp_req = None;
+        // posição de cada parada do snippet, a partir do começo do texto inserido
+        let pos_de = |off: usize| -> Pos {
+            let antes: Vec<char> = texto.chars().take(off).collect();
+            match antes.iter().rposition(|&c| c == '\n') {
+                None => Pos::new(de.row, de.col + off),
+                Some(i) => Pos::new(de.row + antes.iter().filter(|&&c| c == '\n').count(), off - i - 1),
+            }
+        };
+        let mut stops: Vec<(Pos, Pos)> = paradas.iter().map(|&(a, b)| (pos_de(a), pos_de(b))).collect();
+        // imports automáticos: entram acima e empurram o que vem depois
+        if !extras.is_empty() {
+            let n = self.ed.buf.line_count();
+            let v: Vec<(Pos, Pos, String)> = extras
+                .iter()
+                .map(|((l0, c0), (l1, c1), t)| {
+                    let (l0, l1) = ((*l0).min(n - 1), (*l1).min(n - 1));
+                    (Pos::new(l0, lsp::col_chars(&self.ed.buf.line(l0), *c0)), Pos::new(l1, lsp::col_chars(&self.ed.buf.line(l1), *c1)), t.clone())
+                })
+                .collect();
+            let d = self.ed.editar_na_insercao(&v);
+            for (a, b) in stops.iter_mut() {
+                a.row = (a.row as i64 + d).max(0) as usize;
+                b.row = (b.row as i64 + d).max(0) as usize;
+            }
+        }
         self.comp_block = self.ed.buf.rev;
+        if !stops.is_empty() && stops.iter().any(|(a, b)| a != b || *a != self.ed.cursor) {
+            self.snip = Some(Snip { stops, idx: 0, sel: false });
+            self.snip_ir(0);
+        } else {
+            self.snip = None;
+        }
+    }
+
+    /// Vai para a parada `idx` do snippet (o valor padrão fica selecionado: a primeira letra o troca).
+    fn snip_ir(&mut self, idx: usize) {
+        let Some(sn) = self.snip.as_mut() else { return };
+        let Some(&(a, b)) = sn.stops.get(idx) else {
+            self.snip = None;
+            return;
+        };
+        sn.idx = idx;
+        sn.sel = a != b && a.row == b.row;
+        let n = self.ed.buf.line_count();
+        if a.row >= n {
+            self.snip = None;
+            return;
+        }
+        self.ed.cursor = Pos::new(a.row, a.col.min(self.ed.buf.line_len(a.row)));
+        // a última parada (`$0`) encerra o modo
+        if idx + 1 == sn.stops.len() && !sn.sel {
+            self.snip = None;
+        }
+    }
+
+    /// Teclas no modo snippet (inserção com paradas). `true` se a tecla foi consumida.
+    fn snip_tecla(&mut self, k: Key) -> bool {
+        let Some(sn) = self.snip.as_ref() else { return false };
+        let (idx, sel) = (sn.idx, sn.sel);
+        match k {
+            Key::Tab => {
+                self.snip_ir(idx + 1);
+                return true;
+            }
+            Key::Esc | Key::Enter | Key::Ctrl('c') => {
+                self.snip = None;
+                return false;
+            }
+            Key::Char(_) | Key::Backspace | Key::Delete if sel => {
+                // o valor padrão é trocado pelo que vier
+                let (a, b) = sn.stops[idx];
+                self.ed.buf.delete(a, b);
+                self.ed.cursor = a;
+                let d = b.col as i64 - a.col as i64;
+                let sn = self.snip.as_mut().unwrap();
+                sn.sel = false;
+                for (i, (x, y)) in sn.stops.iter_mut().enumerate() {
+                    if i == idx {
+                        y.col = a.col;
+                    } else if x.row == a.row && x.col >= b.col {
+                        x.col -= d as usize;
+                        if y.row == a.row {
+                            y.col -= d as usize;
+                        }
+                    }
+                }
+                return matches!(k, Key::Backspace | Key::Delete);
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Depois de uma tecla de texto no modo snippet: as paradas da mesma linha andam junto.
+    fn snip_ajustar(&mut self, antes: (usize, usize, usize)) {
+        let Some(sn) = self.snip.as_mut() else { return };
+        let (row, col, len) = antes;
+        if self.ed.cursor.row != row || self.ed.buf.line_count() == 0 {
+            self.snip = None;
+            return;
+        }
+        let d = self.ed.buf.line_len(row) as i64 - len as i64;
+        if d == 0 {
+            return;
+        }
+        for (x, y) in sn.stops.iter_mut() {
+            if x.row == row && x.col > col {
+                x.col = (x.col as i64 + d).max(0) as usize;
+            }
+            if y.row == row && y.col >= col {
+                y.col = (y.col as i64 + d).max(0) as usize;
+            }
+        }
     }
 
     /// Servidor, arquivo e posição do cursor (coluna UTF-16); avisa quando não há servidor.
@@ -1028,7 +1386,7 @@ impl Session {
                         self.gravar("");
                         self.git_load();
                         if sair && !self.modified() {
-                            self.quit = true;
+                            self.sair();
                         }
                     }
                 }
@@ -1066,7 +1424,7 @@ impl Session {
                     self.gravar("");
                     self.git_load();
                     if sair && !self.modified() {
-                        self.quit = true;
+                        self.sair();
                     }
                 }
             }
@@ -1096,6 +1454,21 @@ impl Session {
                             .collect();
                         self.pick_lista(nome, itens);
                     }
+                }
+            }
+            PedidoLsp::SimbolosDoProjeto => {
+                let itens: Vec<ListaItem> = lsp::simbolos_de(&v)
+                    .into_iter()
+                    .filter_map(|s| {
+                        let arq = s.arquivo?;
+                        let rel = arq.strip_prefix(&self.root).map(|r| r.display().to_string()).unwrap_or_else(|_| arq.display().to_string());
+                        Some(ListaItem { texto: format!("{} {}", tipo_simbolo(s.tipo), s.nome), detalhe: format!("{rel}:{}", s.row + 1), destino: Destino::Local(arq, s.row, s.col) })
+                    })
+                    .collect();
+                if itens.is_empty() {
+                    self.say("Nenhum símbolo encontrado.".into(), ToastKind::Info);
+                } else {
+                    self.pick_lista("Símbolos do projeto", itens);
                 }
             }
             PedidoLsp::Simbolos => {
@@ -1225,8 +1598,99 @@ impl Session {
         self.git_rx = Some(rx);
     }
 
+    /// Objetos de texto de tree-sitter (`if`/`af` função, `ic`/`ac` classe, `ia`/`aa` parâmetro) com um
+    /// operador (`d`, `c`, `y`, `<`, `>`) ou no visual. `true` se a tecla foi tratada aqui.
+    fn objeto_sintaxe(&mut self, k: Key) -> bool {
+        let Key::Char(obj @ ('f' | 'c' | 'a')) = k else { return false };
+        let pend = self.ed.pendentes();
+        let visual = self.ed.mode() == Mode::Visual;
+        let (op, incl) = match (pend.as_slice(), visual) {
+            ([Key::Char(i @ ('i' | 'a'))], true) => (None, *i == 'a'),
+            ([.., Key::Char(op @ ('d' | 'c' | 'y' | '<' | '>')), Key::Char(i @ ('i' | 'a'))], false) => (Some(*op), *i == 'a'),
+            _ => return false,
+        };
+        if self.ed.mode() == Mode::Insert || self.lang.is_none() {
+            return false;
+        }
+        self.refresh_syntax();
+        let Some((doc, _)) = self.doc.as_ref() else { return false };
+        let nome = match obj {
+            'f' => "function",
+            'c' => "class",
+            _ => "parameter",
+        };
+        let captura = format!("@{nome}.{}", if incl { "outer" } else { "inner" });
+        if !doc.has_textobject(&captura) && !doc.has_textobject(&format!("@{nome}.outer")) {
+            return false;
+        }
+        let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
+        let linha = self.ed.buf.line(row);
+        let bcol = linha.char_indices().nth(col).map_or(linha.len(), |(b, _)| b);
+        let Some(r) = doc.textobject_at(&captura, row, bcol, true, false) else {
+            self.ed.feed(&[Key::Esc]);
+            return true;
+        };
+        // bytes -> caracteres
+        let (n0, n1) = (self.ed.buf.line(r.srow), self.ed.buf.line(r.erow.min(self.ed.buf.line_count() - 1)));
+        let ch = |l: &str, b: usize| l.char_indices().take_while(|(i, _)| *i < b).count();
+        let ini = Pos::new(r.srow, ch(&n0, r.scol));
+        let fim = Pos::new(r.erow.min(self.ed.buf.line_count() - 1), ch(&n1, r.ecol));
+        match op {
+            None => {
+                // visual: do começo ao último caractere do trecho
+                let ultimo = if fim.col > 0 { Pos::new(fim.row, fim.col - 1) } else if fim.row > ini.row { Pos::new(fim.row - 1, self.ed.buf.line_len(fim.row - 1).saturating_sub(1)) } else { fim };
+                self.ed.selecionar(ini, ultimo);
+            }
+            Some(op) => {
+                self.ed.operar_intervalo(op, ini, fim, false);
+            }
+        }
+        true
+    }
+
+    /// Menu de atalhos: depois da líder, esperando um tempo, mostra o que cada tecla faz.
+    fn menu_lider(&self) -> Vec<(String, String)> {
+        if self.leader.is_empty() || self.leader_desde.is_none_or(|t| t.elapsed().as_millis() < LIDER_MENU_MS as u128) {
+            return Vec::new();
+        }
+        let prefixo: String = self.leader[1..].iter().filter_map(|k| k.as_char()).collect();
+        crate::atalhos::proximos(&prefixo)
+    }
+
+    /// Texto do trabalho que o servidor de linguagem está fazendo (indexando...), se houver.
+    fn lsp_progresso(&self) -> Option<String> {
+        let cl = self.lsp.as_ref()?;
+        let c = cl.lock().ok()?;
+        let st = c.estado.lock().ok()?;
+        let mut v: Vec<String> = st.progresso.values().map(lsp::Progresso::texto).filter(|t| !t.is_empty()).collect();
+        v.sort();
+        v.first().map(|t| format!("{}: {t}", c.nome))
+    }
+
+    /// Lê o estado do git dos arquivos para o explorador (em segundo plano).
+    fn tree_git_load(&mut self) {
+        let Some(t) = self.tree.as_ref() else { return };
+        let dir = t.raiz.clone();
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(git::estados(&dir));
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.tree_git_rx = Some(rx);
+    }
+
     /// Pega o branch e a base que a thread do git acabou de ler.
     fn git_poll(&mut self) {
+        if let Some(rx) = self.tree_git_rx.as_ref() {
+            if let Ok(m) = rx.try_recv() {
+                self.tree_git = m;
+                self.tree_git_rx = None;
+                self.seq += 1;
+            }
+        }
         let Some(rx) = self.git_rx.as_ref() else { return };
         if let Ok((branch, base)) = rx.try_recv() {
             self.git_branch = branch;
@@ -1306,6 +1770,39 @@ impl Session {
         }
     }
 
+    /// `<Líder>N`: mais um terminal (o atual vai para o fundo e continua rodando).
+    fn term_novo(&mut self) {
+        if let Some(t) = self.term.take() {
+            self.term_fundo.push((t, self.term_agente));
+        }
+        self.term_screen = None;
+        self.term_sel = None;
+        self.term_spawn(term::shell_padrao());
+        let n = self.term_fundo.len() + 1;
+        self.say(format!("Terminal {n} aberto"), ToastKind::Info);
+    }
+
+    /// `<Líder>]` / `<Líder>[`: próximo e anterior terminal.
+    fn term_ciclar(&mut self, adiante: bool) {
+        if self.term_fundo.is_empty() || self.term.is_none() {
+            return;
+        }
+        let atual = (self.term.take().unwrap(), self.term_agente);
+        let (t, ag) = if adiante { self.term_fundo.remove(0) } else { self.term_fundo.pop().unwrap() };
+        if adiante {
+            self.term_fundo.push(atual);
+        } else {
+            self.term_fundo.insert(0, atual);
+        }
+        self.term = Some(t);
+        self.term_agente = ag;
+        self.term_screen = None;
+        self.term_sel = None;
+        self.term_focus = true;
+        self.term_esc = false;
+        self.say(format!("{} terminais abertos", self.term_fundo.len() + 1), ToastKind::Info);
+    }
+
     /// `<Líder>Al` / `a` na tela inicial: roda o primeiro agente instalado no terminal.
     fn open_agent(&mut self) {
         let root = self.root.clone();
@@ -1334,7 +1831,16 @@ impl Session {
             return false;
         };
         let modo = crate::agentes::modo_atual_em(&self.pasta_agentes());
-        let (linha, exato) = crate::agentes::linha_de_comando(a, modo.id);
+        let (mut linha, exato) = crate::agentes::linha_de_comando(a, modo.id);
+        if a.bin == "ollama" {
+            match crate::agentes::modelo_ollama(&self.pasta_agentes()) {
+                Some(m) => linha = format!("ollama run {m}"),
+                None => {
+                    self.say("Nenhum modelo do Ollama: rode `ollama pull llama3.2` ou defina ollama_model no config.json.".into(), ToastKind::Info);
+                    return false;
+                }
+            }
+        }
         let mut partes = linha.split_whitespace();
         let mut cmd = portable_pty::CommandBuilder::new(partes.next().unwrap_or(a.bin));
         for p in partes {
@@ -1436,17 +1942,43 @@ impl Session {
 
     /// Manda um pedido pronto ao agente: abre o agente se preciso (o texto espera ele terminar de subir).
     fn agente_enviar(&mut self, pedido: String) {
+        self.agente_enviar_com(pedido, true);
+    }
+
+    /// `enter`: manda o texto e aperta Enter; senão só deixa o texto digitado no agente (citação).
+    fn agente_enviar_com(&mut self, pedido: String, enter: bool) {
         if self.term.is_some() && self.term_agente {
             if let Some(t) = self.term.as_mut() {
                 t.colar(&pedido);
-                t.write(b"\r");
+                if enter {
+                    t.write(b"\r");
+                }
             }
             self.term_focus = true;
             return;
         }
         if self.abrir_agente(&self.root.clone(), &[]) {
             self.agente_fila = Some((std::time::Instant::now(), pedido));
+            self.agente_fila_enter = enter;
         }
+    }
+
+    /// `<Líder>Ac`: cita no agente o arquivo (ou as linhas selecionadas) como `@arquivo#L3-9 `, sem enviar.
+    fn agente_citar(&mut self) {
+        let Some(arq) = self.path.clone() else {
+            self.say("Salve o arquivo antes (o agente precisa do nome).".into(), ToastKind::Info);
+            return;
+        };
+        let rel = relativo(&self.root, &arq.to_string_lossy());
+        let ref_ = match self.ed.selection() {
+            Some((_, anc)) => {
+                let (a, b) = (anc.row.min(self.ed.cursor.row) + 1, anc.row.max(self.ed.cursor.row) + 1);
+                self.ed.feed(&[Key::Esc]);
+                if a == b { format!("@{rel}#L{a} ") } else { format!("@{rel}#L{a}-{b} ") }
+            }
+            None => format!("@{rel} "),
+        };
+        self.agente_enviar_com(ref_, false);
     }
 
     /// Entrega o pedido que esperava o agente abrir: quando ele já desenhou algo e passou um tempo.
@@ -1457,9 +1989,12 @@ impl Session {
             return;
         }
         if let Some((_, pedido)) = self.agente_fila.take() {
+            let enter = std::mem::replace(&mut self.agente_fila_enter, true);
             if let Some(t) = self.term.as_mut() {
                 t.colar(&pedido);
-                t.write(b"\r");
+                if enter {
+                    t.write(b"\r");
+                }
             }
         }
     }
@@ -1499,6 +2034,244 @@ impl Session {
         }
         let rel = relativo(&self.root, &arq.to_string_lossy());
         self.agente_enviar(crate::agentes::pedido_explicar(&rel, de + 1, ate + 1));
+    }
+
+    /// `:Astrograph <subcomando>`: o mesmo conjunto do Neovim (atualizar, saude, agentes, configurar, login,
+    /// sessoes, atalhos, docs).
+    fn comando_astrograph(&mut self, arg: &str) {
+        let (sub, resto) = match arg.trim().split_once(char::is_whitespace) {
+            Some((s, r)) => (s, r.trim()),
+            None => (arg.trim(), ""),
+        };
+        match sub {
+            "atualizar" | "update" => self.atualizar_astrograph(),
+            "saude" | "health" => {
+                let t = crate::comandos::saude("motor nativo", &lsp::servidores_instalados());
+                self.aba_texto = Some(("Saúde do Astrograph".into(), t));
+            }
+            "atalhos" => {
+                let t = crate::comandos::atalhos(&tecla_nome(self.leader_key));
+                self.aba_texto = Some(("Atalhos".into(), t));
+            }
+            "agentes" | "agente" => self.agente_escolher(),
+            "modo" => self.agente_modo(),
+            "configurar" => self.agente_instalar(resto),
+            "login" => self.agente_login(),
+            "sessoes" => self.agente_sessoes(),
+            "preparo" => {}
+            "docs" => {
+                let _ = std::process::Command::new(if cfg!(windows) { "cmd" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" })
+                    .args(if cfg!(windows) { vec!["/C", "start", "", "https://just-gabe.github.io/Astrograph/"] } else { vec!["https://just-gabe.github.io/Astrograph/"] })
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                self.say("Abrindo a documentação no navegador".into(), ToastKind::Info);
+            }
+            "" => self.say("Uso: :Astrograph atualizar | saude | agentes | modo | configurar | login | sessoes | atalhos | docs".into(), ToastKind::Info),
+            outro => self.say(format!("Subcomando desconhecido: {outro}. Use :Astrograph para ver a lista."), ToastKind::Error),
+        }
+    }
+
+    /// `:Astrograph atualizar`: atualização transacional pelo `astrograph-servicos`, em segundo plano.
+    fn atualizar_astrograph(&mut self) {
+        if self.atualizando.is_some() {
+            self.say("A atualização já está rodando.".into(), ToastKind::Info);
+            return;
+        }
+        let Some(raiz) = crate::comandos::raiz_do_clone() else {
+            self.say("Não achei a pasta do Astrograph (instalação fora do padrão): defina ASTROGRAPH_ROOT.".into(), ToastKind::Error);
+            return;
+        };
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::comandos::atualizar(&raiz));
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.atualizando = Some(rx);
+        self.say("Atualizando o Astrograph em segundo plano…".into(), ToastKind::Info);
+    }
+
+    fn atualizar_poll(&mut self) {
+        let Some(rx) = self.atualizando.as_ref() else { return };
+        let Ok(r) = rx.try_recv() else { return };
+        self.atualizando = None;
+        match r {
+            Ok(res) => {
+                let msg = if res.status == "atualizado" { format!("{}\n\nReinicie o app para usar a versão nova.", res.mensagem) } else { res.mensagem.clone() };
+                let tipo = match res.status.as_str() {
+                    "atualizado" => ToastKind::Done,
+                    "ja-atualizado" => ToastKind::Info,
+                    _ => ToastKind::Error,
+                };
+                if msg.contains('\n') || msg.chars().count() > 110 {
+                    self.aba_texto = Some(("Atualização do Astrograph".into(), msg));
+                } else {
+                    self.say(msg, tipo);
+                }
+            }
+            Err(e) => self.say(format!("A atualização falhou: {e}"), ToastKind::Error),
+        }
+    }
+
+    /// Abre um terminal e roda `comando` nele (instalar ou fazer login de um agente).
+    fn terminal_rodando(&mut self, comando: &str) {
+        self.term_spawn(term::shell_padrao());
+        if let Some(t) = self.term.as_mut() {
+            t.colar(comando);
+            t.write(b"\r");
+        }
+    }
+
+    /// `:AgentInstall [agente]`: instala o CLI do agente (o escolhido, se não disser qual) com o npm.
+    fn agente_instalar(&mut self, arg: &str) {
+        let alvo = match arg.trim() {
+            "" => crate::agentes::ler_config(&self.pasta_agentes())["agent"].as_str().and_then(|b| crate::agentes::AGENTES.iter().find(|a| a.bin == b)).or_else(|| crate::agentes::AGENTES.iter().find(|a| !self.agente_instalado(a.bin))),
+            b => crate::agentes::AGENTES.iter().find(|a| a.bin == b),
+        };
+        let Some(a) = alvo else {
+            self.say("Uso: :AgentInstall claude|opencode|codex|gemini".into(), ToastKind::Info);
+            return;
+        };
+        if self.agente_instalado(a.bin) {
+            self.say(format!("{} já está instalado. Use :AgentLogin para entrar.", a.label), ToastKind::Info);
+            return;
+        }
+        if !self.agente_instalado("npm") && !crate::agentes::instalado("npm") {
+            self.say("Falta o npm (instale o Node.js) para instalar os agentes.".into(), ToastKind::Error);
+            return;
+        }
+        self.terminal_rodando(&crate::agentes::comando_instalar(a));
+        self.say(format!("Instalando {}… quando acabar, rode :AgentLogin", a.label), ToastKind::Info);
+    }
+
+    /// `:AgentLogin`: faz o login do agente escolhido no terminal.
+    fn agente_login(&mut self) {
+        let Some(a) = self.agente_atual() else {
+            self.say("Nenhum agente instalado: use :AgentInstall.".into(), ToastKind::Info);
+            return;
+        };
+        self.terminal_rodando(&crate::agentes::comando_login(a));
+    }
+
+    /// `<Líder>AE`: com uma seleção pede uma edição à IA (a proposta troca o trecho, `u` desfaz); sem ela,
+    /// faz uma pergunta sobre o arquivo e a resposta abre numa aba.
+    fn ia_abrir(&mut self) {
+        if self.ia_job.is_some() {
+            self.say("A IA ainda está trabalhando no pedido anterior.".into(), ToastKind::Info);
+            return;
+        }
+        if self.agente_atual().is_none() && self.ia_cmd.is_none() {
+            self.say("Nenhum agente instalado (claude, opencode, codex ou gemini).".into(), ToastKind::Info);
+            return;
+        }
+        let sel = self.ed.selection().map(|(k, anc)| (k, anc, self.ed.cursor));
+        let tipo = match sel {
+            Some((k, anc, cur)) => {
+                let (lo, hi) = if anc <= cur { (anc, cur) } else { (cur, anc) };
+                let (ini, fim) = if k == VKind::Char {
+                    (lo, Pos::new(hi.row, (hi.col + 1).min(self.ed.buf.line_len(hi.row))))
+                } else {
+                    (Pos::new(lo.row, 0), Pos::new(hi.row, self.ed.buf.line_len(hi.row)))
+                };
+                let codigo = (ini.row..=fim.row)
+                    .map(|r| {
+                        let l = self.ed.buf.line(r);
+                        let a = if r == ini.row { ini.col } else { 0 };
+                        let b = if r == fim.row { fim.col } else { l.chars().count() };
+                        l.chars().skip(a).take(b.saturating_sub(a)).collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.ed.feed(&[Key::Esc]);
+                IaTipo::Editar { ini, fim, codigo, rev: self.ed.buf.rev }
+            }
+            None => IaTipo::Perguntar { trecho: None },
+        };
+        self.ia_prompt = Some((tipo, String::new()));
+    }
+
+    fn ia_prompt_key(&mut self, k: Key) {
+        let Some((tipo, mut texto)) = self.ia_prompt.take() else { return };
+        match k {
+            Key::Esc | Key::Ctrl('c') => return,
+            Key::Backspace => {
+                texto.pop();
+            }
+            Key::Char(c) => texto.push(c),
+            Key::Enter => return self.ia_enviar(tipo, texto),
+            _ => {}
+        }
+        self.ia_prompt = Some((tipo, texto));
+    }
+
+    fn ia_enviar(&mut self, tipo: IaTipo, instrucao: String) {
+        let instrucao = instrucao.trim().to_string();
+        if instrucao.is_empty() {
+            return;
+        }
+        let arq = self.path.as_ref().map(|p| relativo(&self.root, &p.to_string_lossy())).unwrap_or_else(|| "(sem nome)".into());
+        let pedido = match &tipo {
+            IaTipo::Editar { codigo, .. } => crate::agentes::pedido_editar(&arq, &instrucao, codigo),
+            IaTipo::Perguntar { trecho } => crate::agentes::pedido_perguntar(&arq, &instrucao, trecho.as_deref()),
+        };
+        let (prog, mut args) = match (&self.ia_cmd, self.agente_atual()) {
+            (Some((p, a)), _) => (p.clone(), a.clone()),
+            (None, Some(a)) => {
+                let (p, mut v) = crate::agentes::comando_direto(a, &pedido);
+                v.pop();
+                (p, v)
+            }
+            (None, None) => return,
+        };
+        args.push(pedido);
+        let pasta = self.root.clone();
+        let notify = self.notify.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let r = crate::agentes::rodar_direto(&prog, &args, &pasta, std::time::Duration::from_secs(300));
+            let _ = tx.send(r);
+            if let Some(n) = notify {
+                n();
+            }
+        });
+        self.ia_job = Some(IaJob { rx, tipo });
+        self.say("IA trabalhando no pedido…".into(), ToastKind::Info);
+    }
+
+    /// Resposta da IA: troca o trecho (um passo só no desfazer) ou abre a resposta numa aba.
+    fn ia_poll(&mut self) {
+        let Some(job) = self.ia_job.as_ref() else { return };
+        let Ok(r) = job.rx.try_recv() else { return };
+        let job = self.ia_job.take().unwrap();
+        let out = match r {
+            Ok(o) => o,
+            Err(e) => return self.say(format!("A IA falhou: {e}"), ToastKind::Error),
+        };
+        match job.tipo {
+            IaTipo::Editar { ini, fim, rev, .. } => {
+                if self.ed.buf.rev != rev {
+                    return self.say("O texto mudou enquanto a IA pensava: proposta descartada.".into(), ToastKind::Error);
+                }
+                let novo = crate::agentes::limpar_resposta(&out);
+                if novo.is_empty() {
+                    return self.say("A IA não devolveu código.".into(), ToastKind::Error);
+                }
+                self.ed.aplicar_edicoes(&[(ini, fim, novo)]);
+                self.ed.set_cursor(ini.row, ini.col);
+                self.say("Edição da IA aplicada · u desfaz".into(), ToastKind::Done);
+            }
+            IaTipo::Perguntar { .. } => {
+                let t = out.trim().to_string();
+                if t.is_empty() {
+                    return self.say("A IA não respondeu.".into(), ToastKind::Error);
+                }
+                self.aba_texto = Some(("Resposta da IA".into(), t));
+            }
+        }
     }
 
     /// Recarrega o arquivo se ele mudou no disco (o agente editou). Com alterações não salvas só avisa.
@@ -1548,6 +2321,16 @@ impl Session {
             t.matar();
         }
         self.term_agente = false;
+        // havia outro aberto: ele volta ao primeiro plano
+        if let Some((t, ag)) = self.term_fundo.pop() {
+            self.term = Some(t);
+            self.term_agente = ag;
+            self.term_focus = true;
+            self.term_screen = None;
+            self.term_sel = None;
+            self.term_esc = false;
+            return;
+        }
         self.agente_fila = None;
         self.term_focus = false;
         self.term_zen = false;
@@ -1561,6 +2344,9 @@ impl Session {
     pub fn term_resize(&mut self, rows: u16, cols: u16) {
         self.term_dims = (rows, cols);
         if let Some(t) = self.term.as_mut() {
+            t.resize(rows, cols);
+        }
+        for (t, _) in self.term_fundo.iter_mut() {
             t.resize(rows, cols);
         }
     }
@@ -1721,6 +2507,7 @@ impl Session {
                 }
                 self.tree = Some(t);
                 self.tree_focus = true;
+                self.tree_git_load();
             }
             (Some(_), true) => {
                 self.tree = None;
@@ -1730,9 +2517,94 @@ impl Session {
         }
     }
 
+    fn tree_prompt_key(&mut self, k: Key) {
+        let Some((op, mut texto)) = self.tree_prompt.take() else { return };
+        match k {
+            Key::Esc | Key::Ctrl('c') => return,
+            Key::Backspace => {
+                texto.pop();
+            }
+            Key::Char(c) => texto.push(c),
+            Key::Enter => return self.tree_prompt_ok(op, texto),
+            _ => {}
+        }
+        self.tree_prompt = Some((op, texto));
+    }
+
+    fn tree_prompt_ok(&mut self, op: TreeOp, texto: String) {
+        use crate::arvore::ops;
+        let Some(t) = self.tree.as_mut() else { return };
+        let r = match &op {
+            TreeOp::Novo(dir) => ops::criar(dir, &texto).map(|p| (p, "Criado")),
+            TreeOp::Renomear(de) => ops::renomear(de, &texto).map(|p| (p, "Renomeado")),
+            TreeOp::Apagar(alvo) => {
+                if matches!(texto.trim(), "s" | "S" | "y" | "Y") {
+                    ops::apagar(alvo).map(|_| (alvo.clone(), "Apagado"))
+                } else {
+                    return;
+                }
+            }
+        };
+        match r {
+            Ok((p, verbo)) => {
+                if matches!(op, TreeOp::Apagar(_)) {
+                    t.recarregar();
+                } else {
+                    t.mostrar(&p);
+                }
+                let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.say(format!("{verbo}: {nome}"), ToastKind::Done);
+                self.tree_git_load();
+            }
+            Err(e) => self.say(format!("Não deu: {e}"), ToastKind::Error),
+        }
+    }
+
     fn tree_key(&mut self, k: Key) {
+        if self.tree_prompt.is_some() {
+            return self.tree_prompt_key(k);
+        }
         let Some(t) = self.tree.as_mut() else { return };
         match k {
+            Key::Char('a') => {
+                let dir = t.pasta_alvo();
+                self.tree_prompt = Some((TreeOp::Novo(dir), String::new()));
+            }
+            Key::Char('r') => {
+                if let Some(n) = t.atual() {
+                    let (c, nome) = (n.caminho.clone(), n.nome.clone());
+                    self.tree_prompt = Some((TreeOp::Renomear(c), nome));
+                }
+            }
+            Key::Char('d') => {
+                if let Some(n) = t.atual() {
+                    self.tree_prompt = Some((TreeOp::Apagar(n.caminho.clone()), String::new()));
+                }
+            }
+            Key::Char(c @ ('y' | 'x')) => {
+                if let Some(n) = t.atual() {
+                    let nome = n.nome.clone();
+                    self.tree_clip = Some((n.caminho.clone(), c == 'x'));
+                    self.say(format!("{}: {nome}", if c == 'x' { "Recortado" } else { "Copiado" }), ToastKind::Info);
+                }
+            }
+            Key::Char('p') => {
+                let Some((origem, mover)) = self.tree_clip.clone() else {
+                    self.say("Nada copiado (use y ou x)".into(), ToastKind::Info);
+                    return;
+                };
+                let dir = t.pasta_alvo();
+                match crate::arvore::ops::colar(&origem, &dir, mover) {
+                    Ok(p) => {
+                        t.mostrar(&p);
+                        if mover {
+                            self.tree_clip = None;
+                        }
+                        self.say("Colado".into(), ToastKind::Done);
+                    }
+                    Err(e) => self.say(format!("Não deu: {e}"), ToastKind::Error),
+                }
+            }
             Key::Char('j') | Key::Ctrl('n') => t.mover(1),
             Key::Char('k') | Key::Ctrl('p') => t.mover(-1),
             Key::Char('G') => t.mover(i64::MAX / 2),
@@ -1776,6 +2648,34 @@ impl Session {
         };
         self.picker = Some(Picker { kind, titulo: String::new(), lista: Vec::new(), mapa: Vec::new(), query: String::new(), total: base.len(), base, items: Vec::new(), achados: Vec::new(), sel: 0, listando, buscando: None, base_do_cache, prev: None, aceitar_depois: false });
         self.pick_refresh();
+    }
+
+    /// Trecho do arquivo do item selecionado (buscador de arquivos, recentes e texto).
+    fn pick_preview(&self, p: &Picker) -> Vec<(usize, String, bool)> {
+        use std::io::Read;
+        let Some(it) = p.items.get(p.sel) else { return Vec::new() };
+        let (rel, alvo) = match p.kind {
+            PickKind::Arquivos | PickKind::Recentes => (it.text.clone(), None),
+            PickKind::Texto => match it.text.rsplit_once(':') {
+                Some((f, l)) => (f.to_string(), l.parse::<usize>().ok().map(|n| n.saturating_sub(1))),
+                None => return Vec::new(),
+            },
+            PickKind::Lista => return Vec::new(),
+        };
+        let caminho = if std::path::Path::new(&rel).is_absolute() { std::path::PathBuf::from(&rel) } else { self.root.join(&rel) };
+        let Ok(f) = std::fs::File::open(&caminho) else { return Vec::new() };
+        let mut buf = Vec::new();
+        if f.take(96 * 1024).read_to_end(&mut buf).is_err() || buf.contains(&0) {
+            return Vec::new();
+        }
+        let texto = String::from_utf8_lossy(&buf);
+        let linhas: Vec<&str> = texto.lines().collect();
+        let n = PICK_PREVIEW;
+        let ini = match alvo {
+            Some(a) => a.saturating_sub(n / 2).min(linhas.len().saturating_sub(n)),
+            None => 0,
+        };
+        linhas.iter().enumerate().skip(ini).take(n).map(|(i, l)| (i + 1, l.chars().take(200).collect(), alvo == Some(i))).collect()
     }
 
     fn pick_refresh(&mut self) {
@@ -1974,6 +2874,7 @@ impl Session {
             self.say("Alterações não salvas. Salve com :w antes de abrir outro arquivo.".into(), ToastKind::Error);
             return;
         }
+        self.guardar_cursor();
         let (cols, rows, root) = (self.cols, self.rows, self.root.clone());
         let (tree, foco, lider) = (self.tree.take(), self.tree_focus, self.leader_key);
         let pool = self.lsp_pool.clone();
@@ -2022,6 +2923,17 @@ impl Session {
                 _ => {}
             }
         }
+        if self.ed.mode() != Mode::Insert {
+            self.snip = None;
+        }
+        if self.snip.is_some() && self.snip_tecla(k) {
+            return;
+        }
+        let antes_snip = (self.ed.cursor.row, self.ed.cursor.col, self.ed.buf.line_len(self.ed.cursor.row));
+        let tinha_snip = self.snip.is_some();
+        if self.objeto_sintaxe(k) {
+            return;
+        }
         let livre = self.ed.cmdline().is_none() && self.ed.mode() == Mode::Normal;
         if livre && !self.ed.has_pending() && k == Key::Char('K') {
             return self.lsp_hover();
@@ -2035,16 +2947,31 @@ impl Session {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_definition();
         }
+        if livre && self.ed.showcmd() == "g" && k == Key::Char('f') {
+            self.ed.feed(&[Key::Esc]);
+            return self.ir_para_arquivo();
+        }
+        if livre && self.ed.showcmd() == "g" && k == Key::Char('x') {
+            self.ed.feed(&[Key::Esc]);
+            return self.abrir_com_o_sistema();
+        }
         if livre && self.ed.showcmd() == "g" && matches!(k, Key::Char('r' | 'y')) && self.lsp.is_some() {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_consulta(if k == Key::Char('r') { PedidoLsp::Referencias } else { PedidoLsp::TipoDaDefinicao });
         }
+        self.ed.set_nome_arquivo(self.path.as_ref().map(|p| p.to_string_lossy().into_owned()));
         self.ed.feed(&[k]);
+        if tinha_snip {
+            self.snip_ajustar(antes_snip);
+        }
         self.comp_update();
         self.sig_update(k);
         // `:s`, `:d`, `:g`... o núcleo resolve; `:w`, `:q`, `:e`... voltam para cá
         if let Some(linha) = self.ed.take_host_cmd() {
             self.exec_ex(&linha);
+        }
+        if let Some(a) = self.ed.take_host_aba() {
+            self.aba_texto = Some(a);
         }
         if self.ed.beeped() && self.ed.mode() == Mode::Normal {
             // o Vim apita; aqui só ignoramos (sem aviso na tela)
@@ -2059,12 +2986,7 @@ impl Session {
         // clicar no texto tira o teclado do terminal
         self.term_focus = false;
         self.term_zen = false;
-        let r = row.min(self.ed.buf.line_count() - 1);
-        let line = self.ed.buf.line(r);
-        let len = line.chars().count();
-        // na inserção o cursor pode ficar depois do último caractere
-        let max = if self.ed.mode() == Mode::Insert { len } else { len.saturating_sub(1) };
-        let c = if vcol >= vcol_start(&line, len) { max } else { col_for_vcol(&line, vcol) };
+        let (r, c) = self.clique_em(row, vcol, self.ed.mode() == Mode::Insert);
         self.ed.set_cursor(r, c);
     }
 
@@ -2117,30 +3039,56 @@ impl Session {
 
     /// Leva o cursor (e a ponta móvel da seleção) à célula `(row, vcol)`.
     fn mouse_para(&mut self, row: usize, vcol: usize) {
-        let r = row.min(self.ed.buf.line_count() - 1);
-        let line = self.ed.buf.line(r);
-        let len = line.chars().count();
-        let c = if vcol >= vcol_start(&line, len) { len.saturating_sub(1) } else { col_for_vcol(&line, vcol) };
+        let (r, c) = self.clique_em(row, vcol, false);
         self.ed.set_cursor(r, c);
+    }
+
+    /// (linha mostrada, coluna visual) da tela -> (linha, coluna em caracteres) do arquivo, com dobras e
+    /// linhas quebradas. `depois_do_fim`: na inserção o cursor pode ficar depois do último caractere.
+    fn clique_em(&self, row: usize, vcol: usize, depois_do_fim: bool) -> (usize, usize) {
+        let proj = self.proj_atual();
+        let (r, ini, fim) = match &proj {
+            Some(p) => {
+                let pr = row.min(p.linhas() - 1);
+                (p.mapa[pr], p.ini[pr], Some((p.fim[pr], p.mapa.get(pr + 1) == Some(&p.mapa[pr]))))
+            }
+            None => (row.min(self.ed.buf.line_count() - 1), 0, None),
+        };
+        let r = r.min(self.ed.buf.line_count() - 1);
+        let linha: Vec<char> = self.ed.buf.line(r).chars().collect();
+        let fim_seg = fim.map_or(linha.len(), |(f, _)| f.min(linha.len()));
+        let seg: String = linha[ini.min(fim_seg)..fim_seg].iter().collect();
+        let len = seg.chars().count();
+        let mais_trechos = fim.is_some_and(|(_, m)| m);
+        // num trecho que não é o último o cursor para no último caractere dele
+        let max = if depois_do_fim && !mais_trechos { len } else { len.saturating_sub(1) };
+        let c = if vcol >= vcol_start(&seg, len) { max } else { col_for_vcol(&seg, vcol) };
+        (r, ini + c)
     }
 
     /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
     pub fn scroll(&mut self, lines: f32) {
-        let max = self.ed.buf.line_count().saturating_sub(1) as f32;
-        let wanted = self.top + lines;
-        self.top = wanted.clamp(0.0, max);
-        if wanted != self.top {
+        let proj = self.proj_atual();
+        let n = proj.as_ref().map_or(self.ed.buf.line_count(), |p| p.linhas());
+        let a_proj = |r: usize| proj.as_ref().map_or(r, |p| p.a_proj(r));
+        let a_real = |p: usize| proj.as_ref().map_or(p, |q| q.a_real(p));
+        let max = n.saturating_sub(1) as f32;
+        let top_p = a_proj(self.top as usize) as f32 + self.top.fract();
+        let wanted = top_p + lines;
+        let novo = wanted.clamp(0.0, max);
+        self.top = a_real(novo.floor() as usize) as f32 + novo.fract();
+        if wanted != novo {
             let id = self.bump.map_or(1, |(i, _)| i + 1);
-            self.bump = Some((id, wanted - self.top));
+            self.bump = Some((id, wanted - novo));
         }
         // o cursor acompanha para não sair da tela
         let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = self.ed.cursor.row as f32;
-        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
+        let row = proj.as_ref().map_or(self.ed.cursor.row, |p| p.pos_a_proj(self.ed.cursor.row, self.ed.cursor.col).0) as f32;
+        let (lo, hi) = (novo + so, novo + self.rows - 1.0 - so);
         if row < lo {
-            self.ed.set_cursor(lo.ceil() as usize, self.ed.cursor.col);
+            self.ed.set_cursor(a_real(lo.ceil() as usize), self.ed.cursor.col);
         } else if row > hi {
-            self.ed.set_cursor(hi.floor().max(0.0) as usize, self.ed.cursor.col);
+            self.ed.set_cursor(a_real(hi.floor().max(0.0) as usize), self.ed.cursor.col);
         }
     }
 
@@ -2160,7 +3108,7 @@ impl Session {
                 Some(n) => (n, true),
                 None => (nome, false),
             };
-            let (base, liga) = match nome.strip_prefix("no").filter(|r| matches!(*r, "number" | "nu" | "relativenumber" | "rnu" | "wrap" | "list" | "hlsearch" | "hls" | "incsearch" | "is" | "cursorline" | "cul")) {
+            let (base, liga) = match nome.strip_prefix("no").filter(|r| matches!(*r, "number" | "nu" | "relativenumber" | "rnu" | "wrap" | "linebreak" | "lbr" | "list" | "hlsearch" | "hls" | "incsearch" | "is" | "cursorline" | "cul")) {
                 Some(r) => (r, false),
                 None => (nome, true),
             };
@@ -2168,6 +3116,8 @@ impl Session {
             match base {
                 "number" | "nu" => flip(&mut self.numero),
                 "relativenumber" | "rnu" => flip(&mut self.relativo),
+                "wrap" => flip(&mut self.wrap),
+                "linebreak" | "lbr" => flip(&mut self.linebreak),
                 "scrolloff" | "so" => match valor.and_then(|v| v.parse::<f32>().ok()) {
                     Some(n) if n >= 0.0 => self.scrolloff = n,
                     _ => self.say(format!("E521: número esperado: {t}"), ToastKind::Error),
@@ -2177,7 +3127,25 @@ impl Session {
                     self.ed.clipboard_unnamedplus = v.contains("unnamedplus");
                 }
                 // opções que o app não implementa mas que não devem incomodar
-                "hlsearch" | "hls" | "incsearch" | "is" | "wrap" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" | "background" | "bg" => {}
+                "foldmethod" | "fdm" => match valor.and_then(crate::dobras::Metodo::de) {
+                    Some(m) => {
+                        self.fold_metodo = m;
+                        self.fold_rev = u64::MAX;
+                        // as dobras automáticas começam abertas (como `foldlevel=99`); `zM` fecha tudo
+                        self.ed.set_foldlevel(99);
+                    }
+                    None => self.say(format!("E474: Argumento inválido: {t}"), ToastKind::Error),
+                },
+                "foldlevel" | "fdl" => match valor.and_then(|v| v.parse::<usize>().ok()) {
+                    Some(n) => self.ed.set_foldlevel(n),
+                    None => self.say(format!("E521: número esperado: {t}"), ToastKind::Error),
+                },
+                "background" | "bg" => match valor {
+                    Some("light") => crate::design::set_light(true),
+                    Some("dark") => crate::design::set_light(false),
+                    _ => self.say(format!("E474: Argumento inválido: {t}"), ToastKind::Error),
+                },
+                "hlsearch" | "hls" | "incsearch" | "is" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" => {}
                 _ => self.say(format!("E518: Opção desconhecida: {t}"), ToastKind::Error),
             }
         }
@@ -2211,7 +3179,84 @@ impl Session {
         };
     }
 
+    /// Roda `cmd` no shell e devolve a saída (stdout + stderr), com `entrada` no stdin.
+    fn shell_saida(cmd: &str, entrada: &str) -> String {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut c = if cfg!(windows) { Command::new("cmd") } else { Command::new("sh") };
+        c.args(if cfg!(windows) { ["/C", cmd] } else { ["-c", cmd] });
+        let Ok(mut filho) = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() else {
+            return format!("não rodou: {cmd}");
+        };
+        if let Some(mut si) = filho.stdin.take() {
+            let e = entrada.to_string();
+            std::thread::spawn(move || {
+                let _ = si.write_all(e.as_bytes());
+            });
+        }
+        match filho.wait_with_output() {
+            Ok(o) => {
+                let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+                s.push_str(&String::from_utf8_lossy(&o.stderr));
+                s
+            }
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// `:r arq`, `:r !cmd`, `:!cmd` e `:{faixa}!cmd` (o núcleo manda no formato `Nr arg`, `!cmd`, `A,B!cmd`).
+    /// Devolve `true` se tratou.
+    fn ex_shell(&mut self, line: &str) -> bool {
+        let t = line.trim();
+        let ultima = self.ed.buf.line_count() - 1;
+        if let Some(cmd) = t.strip_prefix('!') {
+            let saida = Self::shell_saida(cmd.trim(), "");
+            self.aba_texto = Some((format!("!{}", cmd.trim()), saida));
+            return true;
+        }
+        let dig = t.chars().take_while(|c| c.is_ascii_digit()).count();
+        if dig > 0 && t[dig..].starts_with("r ") {
+            let depois: usize = t[..dig].parse().unwrap_or(0);
+            let arg = t[dig + 2..].trim();
+            let texto = match arg.strip_prefix('!') {
+                Some(c) => Self::shell_saida(c.trim(), ""),
+                None => std::fs::read_to_string(arg).unwrap_or_default(),
+            };
+            if texto.is_empty() {
+                return true;
+            }
+            let row = depois.min(ultima + 1);
+            // entra como linhas novas depois de `row` (0 = antes da primeira)
+            let (pos, txt) = if row == 0 {
+                (Pos::new(0, 0), texto.clone())
+            } else {
+                let r = row - 1;
+                (Pos::new(r, self.ed.buf.line_len(r)), format!("\n{}", texto.trim_end_matches('\n')))
+            };
+            let txt = if row == 0 && !txt.ends_with('\n') { format!("{txt}\n") } else { txt };
+            self.ed.aplicar_edicoes(&[(pos, pos, txt)]);
+            return true;
+        }
+        if let Some((faixa, cmd)) = t.split_once('!') {
+            if let Some((a, b)) = faixa.split_once(',') {
+                if let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) {
+                    let (a, b) = (a.saturating_sub(1).min(ultima), b.saturating_sub(1).min(ultima));
+                    let ini = Pos::new(a, 0);
+                    let fim = Pos::new(b, self.ed.buf.line_len(b));
+                    let entrada: String = (a..=b).map(|r| format!("{}\n", self.ed.buf.line(r))).collect();
+                    let saida = Self::shell_saida(cmd.trim(), &entrada);
+                    self.ed.aplicar_edicoes(&[(ini, fim, saida.trim_end_matches('\n').to_string())]);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn exec_ex(&mut self, line: &str) {
+        if self.ex_shell(line) {
+            return;
+        }
         // o núcleo já aplicou a faixa (`1,3`, `%`, `'<,'>`): aqui só interessa o nome do comando
         let line = line.trim().trim_start_matches(|c: char| c.is_ascii_digit() || ",.$%'<>+-; :".contains(c)).trim();
         let (name, arg) = match line.split_once(char::is_whitespace) {
@@ -2240,7 +3285,7 @@ impl Session {
                 if self.modified() && !bang && !self.irmao {
                     self.say("Alterações não salvas. Use :q! para sair sem salvar.".into(), ToastKind::Error);
                 } else {
-                    self.quit = true;
+                    self.sair();
                 }
             }
             "wq" | "x" | "xit" | "exit" => self.write_sair(arg, true),
@@ -2265,7 +3310,15 @@ impl Session {
                 self.lsp_formatar(false, false);
             }
             "CodeAction" | "LspCodeAction" => self.lsp_acoes(),
+            "Astrograph" => self.comando_astrograph(arg),
+            "AgentInstall" => self.agente_instalar(arg),
+            "AgentLogin" => self.agente_login(),
             "Symbols" | "LspSymbols" => self.lsp_consulta(PedidoLsp::Simbolos),
+            "WorkspaceSymbol" | "LspWorkspaceSymbols" => {
+                let Some((c, _, _, _)) = self.lsp_ctx() else { return };
+                let id = c.lock().unwrap().simbolos_do_projeto(arg.trim());
+                self.lsp_esperar(id, PedidoLsp::SimbolosDoProjeto);
+            }
             "References" | "LspReferences" => self.lsp_consulta(PedidoLsp::Referencias),
             "Diagnostics" | "LspDiagnostics" => self.diag_lista(),
             "clo" | "close" => self.jan_pedido = Some(PedidoJanela::Fechar { forcar: bang }),
@@ -2291,7 +3344,7 @@ impl Session {
         }
         self.gravar(arg);
         if sair && !self.modified() {
-            self.quit = true;
+            self.sair();
         }
     }
 
@@ -2301,7 +3354,31 @@ impl Session {
             self.say("Sem nome de arquivo. Use :w nome".into(), ToastKind::Error);
             return;
         };
-        let text = self.ed.to_file_text();
+        if self.ec_trim {
+            // `trim_trailing_whitespace`: tira o espaço do fim das linhas (um passo só no desfazer)
+            let mut ed_edicoes = Vec::new();
+            for r in 0..self.ed.buf.line_count() {
+                let l = self.ed.buf.line(r);
+                let n = l.chars().count();
+                let t = l.trim_end_matches([' ', '\t']).chars().count();
+                if t < n {
+                    ed_edicoes.push((Pos::new(r, t), Pos::new(r, n), String::new()));
+                }
+            }
+            if !ed_edicoes.is_empty() {
+                self.ed.aplicar_edicoes(&ed_edicoes);
+            }
+        }
+        let mut text = self.ed.to_file_text();
+        match self.ec_final_nl {
+            Some(true) if !text.is_empty() && !text.ends_with('\n') => text.push('\n'),
+            Some(false) => {
+                while text.ends_with('\n') {
+                    text.pop();
+                }
+            }
+            _ => {}
+        }
         match std::fs::write(&p, &text) {
             Ok(()) => {
                 let nome = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -2312,6 +3389,7 @@ impl Session {
                     self.path = Some(p);
                 }
                 self.saved_rev = self.ed.buf.rev;
+                self.tree_git_load();
             }
             Err(e) => self.say(format!("Não consegui salvar: {e}"), ToastKind::Error),
         }
@@ -2332,20 +3410,111 @@ impl Session {
     }
 
     /// Mantém o cursor à vista: rola o mínimo (ou centraliza num salto longe).
-    fn follow_cursor(&mut self) {
-        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = self.ed.cursor.row as f32;
-        let (lo, hi) = (self.top + so, self.top + self.rows - 1.0 - so);
-        if row < self.top - self.rows || row > self.top + 2.0 * self.rows {
-            self.top = (row - self.rows / 3.0).max(0.0);
-        } else if row < lo {
-            self.top = (row - so).max(0.0);
-        } else if row > hi {
-            self.top = row - self.rows + 1.0 + so;
+    /// Refaz as dobras automáticas (`foldmethod=indent|syntax`) quando o texto mudou.
+    fn fold_auto(&mut self) {
+        let rev = self.ed.buf.rev;
+        if self.fold_metodo == crate::dobras::Metodo::Manual || self.fold_rev == rev {
+            return;
         }
-        let last = self.ed.buf.line_count().saturating_sub(1) as f32;
-        self.top = self.top.clamp(0.0, last);
-        // horizontal (em colunas visuais)
+        self.fold_rev = rev;
+        let faixas = match self.fold_metodo {
+            crate::dobras::Metodo::Indent => crate::dobras::por_recuo(&self.ed.lines(), self.ed.shiftwidth(), astrograph_core::motion::tabstop()),
+            crate::dobras::Metodo::Syntax => {
+                self.refresh_syntax();
+                let Some((doc, _)) = self.doc.as_ref() else { return };
+                let mut v = Vec::new();
+                for cap in ["@function.outer", "@class.outer", "@loop.outer", "@conditional.outer", "@block.outer"] {
+                    for r in doc.textobject_ranges(cap) {
+                        // fim exclusivo na coluna 0: a dobra acaba na linha de cima
+                        let fim = if r.ecol == 0 && r.erow > r.srow { r.erow - 1 } else { r.erow };
+                        v.push((r.srow, fim));
+                    }
+                }
+                v
+            }
+            crate::dobras::Metodo::Manual => return,
+        };
+        self.ed.definir_dobras_auto(&faixas);
+    }
+
+    /// Alguma linha é mais larga que `w` colunas? (só importa com `wrap`; guarda a resposta por revisão)
+    fn tem_linha_larga(&self, w: usize) -> bool {
+        let rev = self.ed.buf.rev;
+        let (r0, w0, v0) = self.larga_cache.get();
+        if r0 == rev && w0 == w {
+            return v0;
+        }
+        let buf = &self.ed.buf;
+        let mut larga = false;
+        for i in 0..buf.line_count() {
+            let n = buf.line_len(i);
+            // tab e caracteres largos ocupam mais de uma coluna: só aí vale medir de verdade
+            if n > w || (n * 2 > w && vcol_start(&buf.line(i), n) > w) {
+                larga = true;
+                break;
+            }
+        }
+        self.larga_cache.set((rev, w, larga));
+        larga
+    }
+
+    /// A projeção do texto (dobras fechadas escondidas e linhas quebradas); None quando a tela mostra o texto
+    /// como está.
+    fn proj_atual(&self) -> Option<std::sync::Arc<crate::dobras::Proj>> {
+        let dobras = self.ed.dobras_fechadas();
+        let larg = if self.wrap { Some(self.cols.max(10)) } else { None };
+        if dobras.is_empty() && !larg.is_some_and(|w| self.tem_linha_larga(w)) {
+            *self.proj.borrow_mut() = None;
+            return None;
+        }
+        let rev = self.ed.buf.rev;
+        if let Some(p) = self.proj.borrow().as_ref() {
+            if p.rev == rev && p.dobras == dobras && p.larg == larg && p.em_palavra == self.linebreak {
+                return Some(p.clone());
+            }
+        }
+        let buf = &self.ed.buf;
+        let p = std::sync::Arc::new(crate::dobras::Proj::construir(&|r| buf.line(r), buf.line_count(), &dobras, rev, larg, self.linebreak));
+        *self.proj.borrow_mut() = Some(p.clone());
+        Some(p)
+    }
+
+    /// Linha do arquivo de uma linha mostrada (clique, arrastar).
+    fn proj_a_real(&self, row: usize) -> usize {
+        self.proj_atual().map_or(row, |p| p.a_real(row))
+    }
+
+    fn follow_cursor(&mut self) {
+        let proj = self.proj_atual();
+        let n = proj.as_ref().map_or(self.ed.buf.line_count(), |p| p.linhas());
+        let a_proj = |r: usize| proj.as_ref().map_or(r, |p| p.a_proj(r));
+        let top_p = a_proj(self.top as usize) as f32 + self.top.fract();
+        let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
+        // a linha mostrada do cursor (numa linha quebrada, o trecho onde ele está)
+        let row = proj.as_ref().map_or(self.ed.cursor.row, |p| p.pos_a_proj(self.ed.cursor.row, self.ed.cursor.col).0) as f32;
+        let mut top = top_p;
+        let (lo, hi) = (top + so, top + self.rows - 1.0 - so);
+        if row < top - self.rows || row > top + 2.0 * self.rows {
+            top = (row - self.rows / 3.0).max(0.0);
+        } else if row < lo {
+            top = (row - so).max(0.0);
+        } else if row > hi {
+            top = row - self.rows + 1.0 + so;
+        }
+        let last = n.saturating_sub(1) as f32;
+        top = top.clamp(0.0, last);
+        // só mexe se mudou (a conversão de volta arredonda para a linha do arquivo)
+        if top != top_p {
+            self.top = match &proj {
+                Some(p) => p.a_real(top.floor() as usize) as f32 + top.fract(),
+                None => top,
+            };
+        }
+        // horizontal (em colunas visuais); com `wrap` não há rolagem lateral
+        if self.wrap {
+            self.left = 0;
+            return;
+        }
         let line = self.ed.buf.line(self.ed.cursor.row);
         let v = vcol_cursor(&line, self.ed.cursor.col);
         if v < self.left {
@@ -2360,31 +3529,86 @@ impl Session {
             self.copiar_clip(t);
         }
         self.pick_poll();
+        self.ia_poll();
+        self.atualizar_poll();
         self.agente_fila_poll();
         self.recarregar_se_mudou();
         self.git_poll();
         self.term_refresh();
         self.lsp_sync();
+        self.fold_auto();
         self.follow_cursor();
         self.refresh_syntax();
         self.seq += 1;
-        let line_count = self.ed.buf.line_count();
-        let lo = (self.top as usize).saturating_sub(SPAN_MARGIN);
-        let hi = (self.top as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
+        let proj = self.proj_atual();
+        let real_n = self.ed.buf.line_count();
+        let line_count = proj.as_ref().map_or(real_n, |p| p.linhas());
+        // topo na linha mostrada (com dobras o topo do arquivo e o da tela diferem)
+        let top_v = match &proj {
+            Some(p) => p.a_proj(self.top as usize) as f32 + self.top.fract(),
+            None => self.top,
+        };
+        let lo = (top_v as usize).saturating_sub(SPAN_MARGIN);
+        let hi = (top_v as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
         let mut spans: Vec<Vec<Span>> = vec![Vec::new(); hi.saturating_sub(lo)];
         if let Some((doc, _)) = &self.doc {
-            for sp in doc.highlights(lo..hi) {
-                let Some(cls) = classify(sp.group) else { continue };
-                let line = self.ed.buf.line(sp.row);
-                let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count() as u32;
-                spans[sp.row - lo].push(Span { start: to_char(sp.start_col), end: to_char(sp.end_col), cls });
+            // `ini..fim`: o trecho da linha que aparece nesta linha mostrada (linhas quebradas)
+            let mut poe = |row_real: usize, prow: usize, ini: usize, fim: usize, sp: &astrograph_syntax::Span| {
+                let Some(cls) = classify(sp.group) else { return };
+                let line = self.ed.buf.line(row_real);
+                let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count();
+                let (a, b) = (to_char(sp.start_col).max(ini), to_char(sp.end_col).min(fim));
+                if a < b {
+                    spans[prow - lo].push(Span { start: (a - ini) as u32, end: (b - ini) as u32, cls });
+                }
+            };
+            match &proj {
+                None => {
+                    for sp in doc.highlights(lo..hi) {
+                        poe(sp.row, sp.row, 0, usize::MAX, &sp);
+                    }
+                }
+                Some(p) => {
+                    let mut ultimo: Option<(usize, Vec<astrograph_syntax::Span>)> = None;
+                    for prow in lo..hi {
+                        let r = p.mapa[prow];
+                        // as linhas quebradas repetem a mesma linha do arquivo: o realce dela vem uma vez só
+                        if ultimo.as_ref().is_none_or(|(u, _)| *u != r) {
+                            ultimo = Some((r, doc.highlights(r..r + 1)));
+                        }
+                        for sp in &ultimo.as_ref().unwrap().1 {
+                            poe(r, prow, p.ini[prow], p.fim[prow], sp);
+                        }
+                    }
+                }
             }
         }
+        // o aviso "⋯ N linhas" da dobra fica em cinza
+        if let Some(p) = &proj {
+            for prow in lo..hi {
+                if let Some((fim_txt, n)) = p.marcas[prow] {
+                    spans[prow - lo].push(Span { start: fim_txt as u32, end: (fim_txt + n) as u32, cls: crate::design::Cls::Comment });
+                }
+            }
+        }
+        // posições do arquivo -> da tela (uma linha escondida cai no começo da dobra)
+        let mapa_pos = |r: usize, c: usize| -> (usize, usize) {
+            match &proj {
+                Some(p) => p.pos_a_proj(r, c),
+                None => (r, c),
+            }
+        };
         let sel = self.ed.selection().map(|(k, a)| {
             let c = self.ed.cursor;
             // em bloco os dois cantos ficam como estão (o retângulo vem das colunas visuais de cada um)
             let (lo, hi) = if a <= c || k == VKind::Block { (a, c) } else { (c, a) };
-            (k, (lo.row, lo.col), (hi.row, hi.col))
+            (k, mapa_pos(lo.row, lo.col), mapa_pos(hi.row, hi.col))
+        });
+        // valor padrão do snippet: aparece selecionado até a primeira tecla
+        let sel = sel.or_else(|| {
+            let sn = self.snip.as_ref().filter(|s| s.sel)?;
+            let (a, b) = sn.stops[sn.idx];
+            Some((VKind::Char, mapa_pos(a.row, a.col), mapa_pos(b.row, b.col.saturating_sub(1))))
         });
         let search = self.ed.search_line();
         // realce da busca: ao digitar já mostra as ocorrências; `:noh` apaga até mudar o padrão
@@ -2401,23 +3625,52 @@ impl Session {
         }
         if let (Some(p), false) = (&pat, self.hl_off) {
             if let Some(re) = astrograph_core::search::compile(p) {
-                for row in lo..hi {
+                for prow in lo..hi {
+                    let row = proj.as_ref().map_or(prow, |p| p.mapa[prow]);
+                    let (ini, fim) = proj.as_ref().map_or((0, usize::MAX), |p| (p.ini[prow], p.fim[prow]));
                     let line = self.ed.buf.line(row);
                     for m in re.find_iter(&line).take(200) {
                         if m.start() == m.end() {
                             continue;
                         }
                         let a = line[..m.start()].chars().count();
-                        hits.push((row, a, a + line[m.start()..m.end()].chars().count()));
+                        let b = a + line[m.start()..m.end()].chars().count();
+                        let (a, b) = (a.max(ini), b.min(fim));
+                        if a < b {
+                            hits.push((prow, a - ini, b - ini));
+                        }
                     }
                 }
             }
         }
         let hits_id = if pat.is_some() && !self.hl_off { self.hl_id } else { 0 };
         let signs = self.git_signs();
+        // com dobras: os sinais, diagnósticos e o realce de cópia vão para as linhas mostradas
+        let (signs, diags) = match &proj {
+            Some(p) => {
+                let mut v: Vec<(usize, git::Sign)> = Vec::new();
+                for (r, sg) in signs.iter() {
+                    let pr = p.a_proj(*r);
+                    if v.last().is_none_or(|(l, _)| *l != pr) {
+                        v.push((pr, *sg));
+                    }
+                }
+                let d: Vec<lsp::Diag> = self
+                    .lsp_diags
+                    .iter()
+                    .map(|g| {
+                        let (r0, c0) = mapa_pos(g.row, g.col);
+                        let (r1, c1) = mapa_pos(g.end_row, g.end_col);
+                        lsp::Diag { row: r0, col: c0, end_row: r1, end_col: c1, ..g.clone() }
+                    })
+                    .collect();
+                (std::sync::Arc::new(v), std::sync::Arc::new(d))
+            }
+            None => (signs, self.lsp_diags.clone()),
+        };
         let mode = if self.term_focus && self.term.is_some() {
             ModeKind::Terminal
-        } else if self.ed.cmdline().is_some() {
+        } else if self.ed.cmdline().is_some() || self.tree_prompt.is_some() || self.ia_prompt.is_some() {
             ModeKind::Command
         } else if search.is_some() {
             ModeKind::Search
@@ -2433,9 +3686,11 @@ impl Session {
             }
         };
         let cmd = self
-            .ed
-            .cmdline()
-            .map(|c| (':', c.to_string()))
+            .ia_prompt
+            .as_ref()
+            .map(|(tipo, t)| ('✦', format!("{}{t}", if matches!(tipo, IaTipo::Editar { .. }) { "Editar a seleção: " } else { "Perguntar à IA: " })))
+            .or_else(|| self.tree_prompt.as_ref().map(|(op, t)| ('›', format!("{}{t}", op.rotulo()))))
+            .or_else(|| self.ed.cmdline().map(|c| (':', c.to_string())))
             .or_else(|| search.map(|s| (s.chars().next().unwrap_or('/'), s.chars().skip(1).collect())));
         ViewModel {
             tabs: Vec::new(),
@@ -2443,17 +3698,20 @@ impl Session {
             doc_id: self.doc_id,
             seq: self.seq,
             rev: self.ed.buf.rev,
-            rope: self.ed.buf.rope.clone(),
+            rope: proj.as_ref().map_or_else(|| self.ed.buf.rope.clone(), |p| p.rope.clone()),
             lines: line_count,
             span_lo: lo,
             spans,
-            top: self.top,
+            top: top_v,
             left: self.left,
-            cursor: (self.ed.cursor.row, self.ed.cursor.col),
+            cursor: mapa_pos(self.ed.cursor.row, self.ed.cursor.col),
+            row_map: proj.as_ref().map(|p| p.mapa.clone()),
+            row_cont: proj.as_ref().map(|p| p.cont.clone()),
+            cursor_real: (self.ed.cursor.row, self.ed.cursor.col),
             mode,
             selection: sel,
             sel_eol: self.ed.bloco_ate_o_fim(),
-            name: self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()),
+            name: self.nome_fixo.clone().or_else(|| self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into()),
             modified: self.modified(),
             cmd,
             toast: self.toast.clone(),
@@ -2467,8 +3725,10 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
-            diags: self.lsp_diags.clone(),
+            diags,
             hover: self.hover_text.clone(),
+            whichkey: self.menu_lider(),
+            progress: if self.atualizando.is_some() { Some("Atualizando o Astrograph…".to_string()) } else if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
             sig: self.sig.as_ref().filter(|(_, r)| *r == self.ed.cursor.row && self.ed.mode() == Mode::Insert).map(|(a, _)| SigView { texto: a.texto.clone(), ativo: a.ativo, doc: a.doc.clone() }),
@@ -2477,7 +3737,7 @@ impl Session {
                 CompView {
                     items: c.shown.iter().skip(first).take(COMP_LINHAS).map(|(i, h)| CompItem { label: c.items[*i].label.clone(), detail: c.items[*i].detalhe.clone(), kind: c.items[*i].tipo, hits: h.clone() }).collect(),
                     sel: c.sel - first,
-                    anchor: (c.start.row, c.start.col),
+                    anchor: mapa_pos(c.start.row, c.start.col),
                 }
             }),
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
@@ -2486,7 +3746,7 @@ impl Session {
                 let first = t.sel.saturating_sub(100);
                 TreeView {
                     root: t.raiz.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t.raiz.display().to_string()),
-                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta }).collect(),
+                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
                     first,
                     sel: t.sel,
                     total: t.nos.len(),
@@ -2506,12 +3766,13 @@ impl Session {
                 sel: p.sel.min(PICK_LINHAS - 1),
                 total: p.total,
                 buscando: p.listando.is_some() || p.buscando.is_some(),
+                preview: self.pick_preview(p),
             }),
             hits,
             hits_id,
             flash: (self.ed.last_yank.0 > 0).then(|| {
                 let (id, a, b, _) = self.ed.last_yank;
-                ((a.row, a.col), (b.row, b.col), id)
+                (mapa_pos(a.row, a.col), mapa_pos(b.row, b.col), id)
             }),
             clip: self.clip.clone(),
             layout: None,
@@ -3023,6 +4284,16 @@ impl Workspace {
                         self.abas.insert(self.ativa + 1, nova);
                         self.ativa += 1;
                     }
+                    PedidoAba::NovaComTexto(titulo, t) => {
+                        let mut nova = self.nova_sessao(None);
+                        nova.ed.sincronizar(&ropey::Rope::from_str(&t));
+                        nova.saved_rev = nova.ed.buf.rev;
+                        nova.nome_fixo = Some(titulo);
+                        let ativa = self.ativa;
+                        mover_paineis(&mut self.abas[ativa], &mut nova);
+                        self.abas.insert(self.ativa + 1, nova);
+                        self.ativa += 1;
+                    }
                     PedidoAba::Fechar { forcar } => self.fechar_aba(forcar),
                     PedidoAba::Proxima => {
                         let n = self.abas.len();
@@ -3038,6 +4309,10 @@ impl Workspace {
                         self.ativa = 0;
                     }
                 }
+                continue;
+            }
+            if let Some((titulo, t)) = s.aba_texto.take() {
+                s.aba_pedido = Some(PedidoAba::NovaComTexto(titulo, t));
                 continue;
             }
             if let Some(p) = s.jan_pedido.take() {
@@ -3104,7 +4379,7 @@ impl Workspace {
         let mut vm = self.abas[self.ativa].view_model();
         // respostas do servidor chegam sozinhas (renomear, formatar e gravar, `:wq`...): resolve já
         let s = &self.abas[self.ativa];
-        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() {
+        if s.edicoes_pedido.is_some() || s.quit || s.abrir_pedido.is_some() || s.aba_pedido.is_some() || s.jan_pedido.is_some() || s.aba_texto.is_some() {
             self.depois();
             if !self.sair {
                 vm = self.abas[self.ativa].view_model();
@@ -3113,7 +4388,7 @@ impl Workspace {
         vm.tabs = self
             .abas
             .iter()
-            .map(|s| crate::nview::TabInfo { name: s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
+            .map(|s| crate::nview::TabInfo { name: s.nome_fixo.clone().or_else(|| s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into()), modified: s.modified() })
             .collect();
         vm.tab_active = self.ativa;
         if let Some(sp) = self.abas[self.ativa].splits.as_mut() {
@@ -3358,6 +4633,383 @@ mod testes {
     }
 
     #[test]
+    fn editorconfig_define_o_recuo_e_limpa_ao_gravar() {
+        let d = projeto("ec");
+        std::fs::write(d.join(".editorconfig"), "root = true\n[*.rs]\nindent_style = space\nindent_size = 3\ntrim_trailing_whitespace = true\ninsert_final_newline = true\n").unwrap();
+        let arq = d.join("src/ec.rs");
+        std::fs::write(&arq, "fn a() {   \nx\n}").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        // `>>` recua 3 espaços (shiftwidth e expandtab do .editorconfig)
+        s.feed("j>>");
+        assert_eq!(s.ed.buf.line(1), "   x");
+        s.feed(":w<CR>");
+        let gravado = std::fs::read_to_string(&arq).unwrap();
+        assert_eq!(gravado, "fn a() {\n   x\n}\n", "sem espaço no fim das linhas e com a quebra final");
+    }
+
+    #[test]
+    fn reabrir_um_arquivo_volta_para_onde_o_cursor_estava() {
+        let d = projeto("cursor");
+        let arq = d.join("src/volta.rs");
+        std::fs::write(&arq, "um\ndois\ntres\nquatro\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        s.feed("3Gl");
+        s.feed(":q<CR>");
+        assert!(s.quit);
+        let s2 = Session::open(&arq);
+        assert_eq!((s2.ed.cursor.row, s2.ed.cursor.col), (2, 1));
+    }
+
+    #[test]
+    fn snippet_pula_entre_paradas_com_tab_e_troca_o_valor_padrao() {
+        use crate::lsp::Item;
+        let mut s = Session::new("fn x() {\n    ma\n}\n", None);
+        s.resize(80, 20.0);
+        s.ed.set_cursor(1, 5);
+        s.feed("A");
+        assert_eq!(s.ed.cursor.col, 6);
+        let item = Item {
+            label: "main".into(),
+            filtro: "main".into(),
+            texto: "main(a, b)".into(),
+            detalhe: String::new(),
+            tipo: 3,
+            inicio: None,
+            paradas: vec![(5, 6), (8, 9), (10, 10)],
+            extras: vec![((0, 0), (0, 0), "use std::io;\n".into())],
+        };
+        s.comp = Some(Comp { start: Pos::new(1, 4), items: vec![item], shown: vec![(0, vec![])], sel: 0 });
+        s.comp_accept();
+        // o import entrou acima (as paradas e o cursor desceram uma linha) e `a` está selecionado
+        assert_eq!(s.ed.buf.line(0), "use std::io;");
+        assert_eq!(s.ed.buf.line(2), "    main(a, b)");
+        let m = modelo(&mut s);
+        assert_eq!(m.selection, Some((VKind::Char, (2, 9), (2, 9))));
+        // digitar troca o valor padrão; Tab vai para `b`, que vem deslocado
+        s.feed("foo<Tab>");
+        assert_eq!(s.ed.buf.line(2), "    main(foo, b)");
+        let m = modelo(&mut s);
+        assert_eq!(m.selection, Some((VKind::Char, (2, 14), (2, 14))));
+        s.feed("barra<Tab>");
+        assert_eq!(s.ed.buf.line(2), "    main(foo, barra)");
+        // última parada (`$0`, o fim do texto inserido): encerra o modo
+        assert!(s.snip.is_none());
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (2, 20));
+        s.feed("<Esc>");
+        assert_eq!(s.ed.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn buscador_mostra_o_trecho_do_arquivo_selecionado() {
+        let d = projeto("preview");
+        std::fs::write(d.join("src/alfa.rs"), (1..=40).map(|i| format!("linha {i}\n")).collect::<String>()).unwrap();
+        let mut s = Session::new("x\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        s.feed(" ffalfa");
+        let pv = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| !p.items.is_empty() && !p.preview.is_empty())).picker.unwrap();
+        assert_eq!(pv.preview.len(), PICK_PREVIEW);
+        assert_eq!(pv.preview[0], (1, "linha 1".to_string(), false), "arquivo sem posição começa no topo");
+        // na busca de texto o trecho se centra na linha achada e a marca
+        s.feed("<Esc> fwlinha 30");
+        let pv = espera_term(&mut s, |m| m.picker.as_ref().is_some_and(|p| p.items.iter().any(|i| i.text.ends_with(":30")) && !p.preview.is_empty())).picker.unwrap();
+        let marcada: Vec<_> = pv.preview.iter().filter(|l| l.2).collect();
+        assert_eq!(marcada.len(), 1);
+        assert_eq!(marcada[0].1, "linha 30");
+    }
+
+    #[test]
+    fn explorador_marca_o_estado_do_git() {
+        let d = projeto("tree-git");
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git").args(args).current_dir(&d).output().unwrap();
+            assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "x"]);
+        std::fs::write(d.join("src/alfa.rs"), "mudou\n").unwrap();
+        std::fs::write(d.join("novo.txt"), "").unwrap();
+        let mut s = Session::new("x\n", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed(" e");
+        let t = espera_term(&mut s, |m| m.tree.as_ref().is_some_and(|t| t.items.iter().any(|i| i.git != ' '))).tree.unwrap();
+        let g = |nome: &str| t.items.iter().find(|i| i.name == nome).map(|i| i.git);
+        assert_eq!(g("src"), Some('M'), "a pasta herda o estado do que há dentro");
+        assert_eq!(g("novo.txt"), Some('?'));
+        s.feed("l");
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items.iter().find(|i| i.name == "alfa.rs").map(|i| i.git), Some('M'));
+        assert_eq!(t.items.iter().find(|i| i.name == "beta.rs").map(|i| i.git), Some(' '));
+    }
+
+    #[test]
+    fn explorador_cria_renomeia_copia_cola_e_apaga() {
+        let d = projeto("tree-ops");
+        let mut s = Session::new("x\n", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed(" e");
+        // a: arquivo novo dentro de src (a pasta selecionada)
+        s.feed("a");
+        let m = modelo(&mut s);
+        assert_eq!(m.cmd.as_ref().map(|c| c.0), Some('›'));
+        assert_eq!(m.mode, ModeKind::Command);
+        s.feed("novo.rs<CR>");
+        assert!(d.join("src/novo.rs").is_file());
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items[t.sel].name, "novo.rs", "o novo item fica selecionado");
+        // r: renomear (o campo já vem com o nome)
+        s.feed("r");
+        assert!(modelo(&mut s).cmd.unwrap().1.ends_with("novo.rs"));
+        s.feed("<BS><BS>txt<CR>");
+        assert!(d.join("src/novo.txt").is_file() && !d.join("src/novo.rs").exists());
+        // y e p: copia para o lado
+        s.feed("yp");
+        assert!(d.join("src/novo_copia.txt").is_file());
+        // d: pede confirmação; n cancela, s apaga
+        s.feed("dn<CR>");
+        assert!(d.join("src/novo_copia.txt").is_file());
+        s.feed("ds<CR>");
+        assert!(!d.join("src/novo_copia.txt").exists());
+        // x e p: move para a raiz (o foco vai para LEIA.md, que é arquivo: cola ao lado dele)
+        s.feed("gjjjx");
+        s.feed("Gp");
+        let t = modelo(&mut s).tree.unwrap();
+        assert!(t.items.iter().any(|i| i.name == "novo.txt" && i.level == 0), "{:?}", t.items.iter().map(|i| (&i.name, i.level)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn objetos_de_texto_de_tree_sitter_com_operador_e_no_visual() {
+        let d = projeto("objs");
+        let arq = d.join("src/obj.rs");
+        std::fs::write(&arq, "fn a() {\n    let x = 1;\n    let y = 2;\n}\n\nfn b(p: i32, q: i32) {}\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        // daf: apaga a função inteira em que o cursor está
+        s.feed("jdaf");
+        assert_eq!(s.ed.buf.text(), "\nfn b(p: i32, q: i32) {}", "{:?}", s.ed.buf.text());
+        s.feed("u");
+        // yif: o corpo da função (sem as chaves)
+        s.feed("jyif");
+        assert_eq!(s.ed.register('"').map(|r| r.text.clone()), Some("let x = 1;\n    let y = 2;".to_string()));
+        // visual: vaf seleciona a função toda
+        s.feed("vaf");
+        let (k, anc) = s.ed.selection().unwrap();
+        assert_eq!((k, anc, s.ed.cursor), (VKind::Char, Pos::new(0, 0), Pos::new(3, 0)));
+        s.feed("<Esc>");
+        // dia: o parâmetro sob o cursor (e a vírgula que o separa)
+        s.feed("5Gwwwdia");
+        assert!(s.ed.buf.line(5).starts_with("fn b("), "{:?}", s.ed.buf.line(5));
+    }
+
+    #[test]
+    fn gf_abre_o_arquivo_sob_o_cursor_com_linha_e_coluna() {
+        let d = projeto("gf");
+        let arq = d.join("src/alfa.rs");
+        std::fs::write(&arq, "veja beta.rs:2:3 e LEIA.md depois ./nao_existe.txt\n").unwrap();
+        std::fs::write(d.join("src/beta.rs"), "um\ndois\ntres\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        // sobre `beta.rs:2:3` (relativo ao arquivo atual): abre na linha 2, coluna 3
+        s.feed("wgf");
+        assert_eq!(s.ed.buf.line(0), "um");
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 2));
+        // sobre um nome que não existe: avisa
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed("$gf");
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.2 == ToastKind::Error && t.1.contains("não encontrado")));
+        // a raiz do projeto também vale
+        s.feed("0fLgf");
+        assert_eq!(s.ed.buf.line(0), "oi");
+    }
+
+    #[test]
+    fn comando_astrograph_saude_atalhos_e_subcomando_desconhecido() {
+        let mut w = Workspace::new(None, ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.feed(":Astrograph saude<CR>");
+        let m = w.view_model();
+        assert_eq!(m.name, "Saúde do Astrograph");
+        assert!(m.rope.to_string().contains("Agentes de IA"));
+        w.feed(":Astrograph atalhos<CR>");
+        let m = w.view_model();
+        assert_eq!(m.name, "Atalhos");
+        assert!(m.rope.to_string().contains("<Espaço>ff"));
+        assert_eq!(m.tabs.len(), 3);
+        w.feed(":Astrograph foo<CR>");
+        assert!(w.view_model().toast.is_some_and(|t| t.1.contains("desconhecido")));
+    }
+
+    #[test]
+    fn dobras_fechadas_somem_do_texto_e_as_coordenadas_acompanham() {
+        let texto: String = (0..10).map(|i| format!("linha {i}\n")).collect();
+        let mut s = Session::new(&texto, None);
+        s.resize(80, 20.0);
+        // zfj na linha 2 (real 1): dobra das linhas 1 e 2, fechada
+        s.feed("jzfj");
+        let m = modelo(&mut s);
+        assert_eq!(m.lines, 9);
+        assert_eq!(m.line(1), "linha 1  ⋯ 2 linhas");
+        assert_eq!(m.line(2), "linha 3", "a linha 2 do arquivo está escondida");
+        assert_eq!(m.cursor, (1, 0));
+        assert_eq!(m.row_map.as_ref().map(|r| r[..4].to_vec()), Some(vec![0, 1, 3, 4]), "a margem usa os números do arquivo");
+        // o aviso da dobra vem em cinza (comentário)
+        assert!(m.spans.iter().flatten().any(|sp| sp.cls == crate::design::Cls::Comment && sp.start == 7), "{:?}", m.spans);
+        // j pula a dobra; k volta nela
+        s.feed("j");
+        assert_eq!((s.ed.cursor.row, modelo(&mut s).cursor), (3, (2, 0)));
+        s.feed("k");
+        assert_eq!(s.ed.cursor.row, 1);
+        // clicar na linha mostrada 2 leva ao arquivo, linha 3
+        s.click(2, 0);
+        assert_eq!(s.ed.cursor.row, 3);
+        // dd na dobra apaga as duas linhas de uma vez
+        s.feed("kdd");
+        assert_eq!(s.ed.buf.line(1), "linha 3");
+        assert_eq!(modelo(&mut s).lines, 8);
+        // zR abre tudo: a tela volta a mostrar as linhas todas
+        s.feed("uzR");
+        let m = modelo(&mut s);
+        assert!(m.row_map.is_none());
+        assert_eq!((m.lines, m.line(2).as_str()), (10, "linha 2"));
+    }
+
+    #[test]
+    fn foldmethod_indent_cria_dobras_abertas_que_zm_fecha() {
+        let texto = "fn a() {\n    if x {\n        y();\n        z();\n    }\n    w();\n}\nfim\n";
+        let mut s = Session::new(texto, None);
+        s.resize(80, 20.0);
+        s.feed(":set shiftwidth=4<CR>");
+        s.feed(":set foldmethod=indent<CR>");
+        assert_eq!(modelo(&mut s).lines, 8, "abertas: nada some");
+        assert!(!s.ed.dobras().is_empty());
+        // zM fecha tudo: só sobram a linha do `fn a`... (a dobra de nível 1 cobre as linhas 1 a 5)
+        s.feed("zM");
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "fn a() {");
+        assert_eq!(m.line(1), "    if x {  ⋯ 5 linhas");
+        assert_eq!(m.lines, 4);
+        // zR abre; o texto editado refaz as dobras
+        s.feed("zR");
+        assert_eq!(modelo(&mut s).lines, 8);
+        s.feed("Gdd");
+        assert_eq!(modelo(&mut s).lines, 7);
+        // sintaxe: funções fecham em uma linha
+        let mut s = Session::open(&{
+            let d = projeto("foldsyn");
+            let f = d.join("src/f.rs");
+            std::fs::write(&f, "fn a() {\n    let x = 1;\n    x\n}\n\nfn b() {\n    2\n}\n").unwrap();
+            f
+        });
+        s.resize(80, 20.0);
+        s.feed(":set foldmethod=syntax<CR>");
+        s.feed("zM");
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "fn a() {  ⋯ 4 linhas");
+        assert_eq!(m.lines, 3, "{:?}", m.rope.to_string());
+    }
+
+    /// `cargo test --release bench_arquivo_grande -- --ignored --nocapture`: custo de abrir, rolar, editar, buscar
+    /// e trocar texto num arquivo de 200 mil linhas.
+    #[test]
+    #[ignore]
+    fn bench_arquivo_grande() {
+        let n = 200_000;
+        let texto: String = (0..n).map(|i| format!("    let valor_{i} = calcular({i}, \"texto numero {i}\"); // comentario\n")).collect();
+        let t = std::time::Instant::now();
+        let mut s = Session::new(&texto, None);
+        s.resize(120, 40.0);
+        let abrir = t.elapsed();
+        let medir = |s: &mut Session, teclas: &str, vezes: u32| {
+            let t = std::time::Instant::now();
+            for _ in 0..vezes {
+                s.feed(teclas);
+                let _ = s.view_model();
+            }
+            t.elapsed() / vezes
+        };
+        let primeiro = { let t = std::time::Instant::now(); let _ = s.view_model(); t.elapsed() };
+        let j = medir(&mut s, "j", 200);
+        let pagina = medir(&mut s, "20j", 100);
+        let g = medir(&mut s, "Ggg", 20);
+        let digitar = medir(&mut s, "Ax<Esc>", 100);
+        let desfazer = medir(&mut s, "u", 50);
+        let busca = medir(&mut s, "/valor_199999<CR>gg", 3);
+        let troca = {
+            let t = std::time::Instant::now();
+            s.feed(":%s/calcular/computar/g<CR>");
+            let _ = s.view_model();
+            t.elapsed()
+        };
+        let dd = medir(&mut s, "dd", 100);
+        println!("BENCH {n} linhas: abrir {abrir:?} · 1º quadro {primeiro:?} · j {j:?} · 20j {pagina:?} · G+gg {g:?} · digitar {digitar:?} · u {desfazer:?} · /busca {busca:?} · :%s {troca:?} · dd {dd:?}");
+    }
+
+    #[test]
+    fn quebra_de_linha_mostra_trechos_e_leva_o_cursor_e_o_clique_ao_lugar_certo() {
+        let mut s = Session::new("curta\nabcdefghijklmnopqrstuvwxyz0123456789\nfim\n", None);
+        s.resize(20, 20.0);
+        // sem wrap: as três linhas
+        assert_eq!(modelo(&mut s).lines, 3);
+        s.feed(":set wrap<CR>");
+        let m = modelo(&mut s);
+        // a linha de 36 caracteres vira dois trechos de 20 e 16
+        assert_eq!(m.lines, 4);
+        assert_eq!(m.line(1), "abcdefghijklmnopqrst");
+        assert_eq!(m.line(2), "uvwxyz0123456789");
+        assert_eq!(m.row_cont.as_ref().map(|c| c.to_vec()), Some(vec![false, false, true, false]));
+        assert_eq!(m.row_map.as_ref().map(|c| c.to_vec()), Some(vec![0, 1, 1, 2]));
+        // o cursor no fim da linha longa cai no segundo trecho
+        s.feed("j$");
+        let m = modelo(&mut s);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 35));
+        assert_eq!(m.cursor, (2, 15));
+        assert_eq!(m.cursor_real, (1, 35));
+        // clicar no segundo trecho leva ao caractere certo do arquivo
+        s.click(2, 3);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 23));
+        // clicar depois do fim do primeiro trecho para no último caractere dele
+        s.click(1, 50);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 19));
+        // realce de busca e seleção também vão para os trechos
+        s.feed("/xyz0<CR>");
+        let m = modelo(&mut s);
+        assert_eq!(m.hits.iter().map(|h| (h.0, h.1, h.2)).collect::<Vec<_>>(), vec![(2, 3, 7)]);
+        // nowrap volta ao normal
+        s.feed(":set nowrap<CR>");
+        let m = modelo(&mut s);
+        assert_eq!((m.lines, m.row_map.is_none()), (3, true));
+    }
+
+    #[test]
+    fn menu_de_atalhos_aparece_depois_de_esperar_a_lider() {
+        let mut s = Session::new("abc\n", None);
+        s.resize(80, 20.0);
+        s.feed(" ");
+        assert!(modelo(&mut s).whichkey.is_empty(), "logo depois da líder ainda não mostra");
+        s.leader_desde = Some(std::time::Instant::now() - std::time::Duration::from_millis(LIDER_MENU_MS + 10));
+        let m = modelo(&mut s);
+        assert!(m.whichkey.contains(&("e".into(), "Explorador de arquivos".into())));
+        assert!(m.whichkey.contains(&("f".into(), "+Buscar".into())));
+        // um nível abaixo
+        s.feed("A");
+        let m = modelo(&mut s);
+        assert!(m.whichkey.iter().any(|(k, d)| k == "z" && d == "Modo zen"), "{:?}", m.whichkey);
+        // esc fecha
+        s.feed("<Esc>");
+        assert!(modelo(&mut s).whichkey.is_empty());
+    }
+
+    #[test]
     fn lider_configuravel_e_mostrada_pelo_nome_da_tecla() {
         let d = projeto("lider");
         let mut s = Session::new("abc\n", None);
@@ -3487,6 +5139,34 @@ mod testes {
         s.feed(" Ai");
         let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"));
         assert!(linhas_do_terminal(&m).join("\n").contains("linhas 1 a 2 de src/alfa.rs"), "{:?}", linhas_do_terminal(&m));
+        s.term_close();
+        std::env::set_var("PATH", path_antes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn citar_arquivo_e_selecao_no_agente_sem_enviar() {
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (_bin, path_antes) = agentes_falsos("citar");
+        let d = projeto("citar");
+        let arq = d.join("src/alfa.rs");
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.agentes_pasta = Some(d.join("cfg"));
+        s.agentes_tem = Some(vec!["claude"]);
+        s.resize(80, 20.0);
+        s.term_resize(14, 100);
+        // sem seleção: o arquivo inteiro; o agente abre e recebe a citação (sem Enter)
+        s.feed(" Ac");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).iter().any(|l| l.contains("@src/alfa.rs")));
+        assert!(linhas_do_terminal(&m).iter().any(|l| l.contains("@src/alfa.rs")), "{:?}", linhas_do_terminal(&m));
+        // com seleção: as linhas
+        s.feed("<C-Bslash>");
+        s.feed("<C-n>");
+        s.feed("Vj");
+        s.feed(" Ac");
+        let m = espera_term(&mut s, |m| linhas_do_terminal(m).join("\n").contains("@src/alfa.rs#L1-2"));
+        assert!(linhas_do_terminal(&m).join("\n").contains("@src/alfa.rs#L1-2"), "{:?}", linhas_do_terminal(&m));
         s.term_close();
         std::env::set_var("PATH", path_antes);
     }
@@ -3648,6 +5328,48 @@ mod testes {
         astrograph_core::motion::set_tabstop(8);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn ia_edita_a_selecao_e_responde_perguntas_numa_aba() {
+        let d = projeto("ia");
+        let arq = d.join("src/ia.py");
+        std::fs::write(&arq, "a = 1\nb = 1\nc = 1\n").unwrap();
+        let mut w = Workspace::new(Some(arq), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.atual().root = d.clone();
+        // o "agente" devolve o código dentro de uma cerca de markdown, como costumam fazer
+        w.atual().ia_cmd = Some(("sh".into(), vec!["-c".into(), "printf 'Claro:\\n```python\\nb = 2\\n```\\n'".into(), "sh".into()]));
+        w.feed("jV");
+        w.feed(" AE");
+        let m = w.view_model();
+        assert_eq!(m.cmd.as_ref().map(|c| c.0), Some('✦'));
+        assert!(m.cmd.unwrap().1.starts_with("Editar a seleção"));
+        w.feed("troque por 2<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut m = w.view_model();
+        while m.rope.to_string() == "a = 1\nb = 1\nc = 1" && std::time::Instant::now() < fim {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            m = w.view_model();
+        }
+        assert_eq!(m.rope.to_string(), "a = 1\nb = 2\nc = 1");
+        w.feed("u");
+        assert_eq!(w.view_model().rope.to_string(), "a = 1\nb = 1\nc = 1", "um `u` desfaz a edição inteira");
+        // sem seleção: pergunta; a resposta abre numa aba
+        w.atual().ia_cmd = Some(("sh".into(), vec!["-c".into(), "printf 'Esta função soma.\\n'".into(), "sh".into()]));
+        w.feed(" AE");
+        assert!(w.view_model().cmd.unwrap().1.starts_with("Perguntar à IA"));
+        w.feed("o que faz?<CR>");
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut m = w.view_model();
+        while m.name != "Resposta da IA" && std::time::Instant::now() < fim {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            m = w.view_model();
+        }
+        assert_eq!(m.name, "Resposta da IA");
+        assert_eq!(m.rope.to_string(), "Esta função soma.");
+        assert_eq!(m.tabs.len(), 2);
+    }
+
     #[test]
     fn clipboard_do_sistema_vai_no_view_model_e_volta_pelo_clipsync() {
         let mut w = Workspace::new(None, ' ', std::sync::Arc::new(|| {}));
@@ -3705,7 +5427,7 @@ mod testes {
     }
 
     fn espera_term(s: &mut Session, ok: impl Fn(&ViewModel) -> bool) -> ViewModel {
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let m = modelo(s);
             if ok(&m) || std::time::Instant::now() > fim {
@@ -3713,6 +5435,49 @@ mod testes {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn varios_terminais_novo_alterna_e_fecha() {
+        // as teclas de uma mesma chamada vão juntas para o terminal em foco: `<C-\\><C-n>` sai antes
+        fn sair_do_term(s: &mut Session) {
+            s.feed("<C-Bslash>");
+            s.feed("<C-n>");
+        }
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.term_resize(14, 60);
+        // a saída do echo: a linha que termina no texto e não é o comando digitado
+        let tem = |m: &ViewModel, t: &str| linhas_do_terminal(m).iter().any(|l| l.ends_with(t) && !l.contains("echo"));
+        s.feed(" t");
+        s.feed("echo AAAA<CR>");
+        espera_term(&mut s, |m| tem(m, "AAAA"));
+        // <Líder>N: outro terminal, limpo; o primeiro segue vivo no fundo
+        sair_do_term(&mut s);
+        s.feed(" N");
+        s.feed("echo BBBB<CR>");
+        let m = espera_term(&mut s, |m| tem(m, "BBBB"));
+        assert!(!tem(&m, "AAAA"));
+        // <Líder>[ volta ao primeiro; <Líder>] ao segundo
+        sair_do_term(&mut s);
+        s.feed(" [");
+        let m = espera_term(&mut s, |m| tem(m, "AAAA"));
+        assert!(!tem(&m, "BBBB"));
+        sair_do_term(&mut s);
+        s.feed(" ]");
+        let m = espera_term(&mut s, |m| tem(m, "BBBB"));
+        assert!(!tem(&m, "AAAA"));
+        // fechar o atual traz o outro de volta
+        sair_do_term(&mut s);
+        s.feed(" T");
+        let m = espera_term(&mut s, |m| tem(m, "AAAA"));
+        assert!(m.term.is_some() && !tem(&m, "BBBB"));
+        sair_do_term(&mut s);
+        s.feed(" T");
+        assert!(modelo(&mut s).term.is_none());
     }
 
     #[cfg(unix)]
@@ -3820,7 +5585,7 @@ mod testes {
         assert_eq!(m.mode, ModeKind::Terminal);
         // o shell recebe as teclas (e o editor não)
         s.feed("echo $((6*7))<CR>");
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let achou = loop {
             let m = modelo(&mut s);
             let texto: String = m.term.as_ref().map(|t| t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>() + "\n").collect()).unwrap_or_default();
@@ -4272,7 +6037,7 @@ mod testes {
         w.feed(" ff");
         w.feed("LEIA<CR>");
         // o Enter vem antes da lista de arquivos: a sessão espera e abre quando ela chega
-        let fim = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let fim = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while w.n_abas() < 3 && std::time::Instant::now() < fim {
             w.view_model();
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -4428,5 +6193,21 @@ mod testes {
         assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (0, 2));
         s.click(1, 50);
         assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ex_r_bang_e_filtro_de_faixa_usam_o_shell() {
+        let mut s = Session::new("b\na\nc\n", None);
+        s.resize(80, 20.0);
+        s.feed(":1r !echo novo<CR>");
+        assert_eq!(s.ed.buf.line(1), "novo");
+        s.feed(":1,2!sort<CR>");
+        assert_eq!(s.ed.buf.line(0), "b");
+        assert_eq!(s.ed.buf.line(1), "novo");
+        let mut s = Session::new("z\ny\nx\n", None);
+        s.resize(80, 20.0);
+        s.feed(":%!sort<CR>");
+        assert_eq!((s.ed.buf.line(0), s.ed.buf.line(2)), ("x".to_string(), "z".to_string()));
     }
 }

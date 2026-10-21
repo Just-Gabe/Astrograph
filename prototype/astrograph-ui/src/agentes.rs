@@ -21,7 +21,23 @@ pub const AGENTES: &[Agente] = &[
     Agente { bin: "opencode", label: "opencode", npm: "opencode-ai" },
     Agente { bin: "codex", label: "Codex CLI", npm: "@openai/codex" },
     Agente { bin: "gemini", label: "Gemini CLI", npm: "@google/gemini-cli" },
+    // IA local: sem login nem chave; o modelo vem de `ollama_model` no config.json ou do primeiro de `ollama list`
+    Agente { bin: "ollama", label: "Ollama (local)", npm: "" },
 ];
+
+/// O modelo do Ollama: `ollama_model` do config ou o primeiro de `ollama list`.
+pub fn modelo_ollama(pasta: &Path) -> Option<String> {
+    if let Some(m) = ler_config(pasta)["ollama_model"].as_str().filter(|m| !m.is_empty()) {
+        return Some(m.to_string());
+    }
+    let o = std::process::Command::new("ollama").arg("list").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    primeiro_modelo(&String::from_utf8_lossy(&o.stdout))
+}
+
+/// Primeiro nome da saída de `ollama list` (a primeira linha é o cabeçalho).
+pub fn primeiro_modelo(saida: &str) -> Option<String> {
+    saida.lines().skip(1).find_map(|l| l.split_whitespace().next().map(str::to_string))
+}
 
 pub struct Modo {
     pub id: &'static str,
@@ -223,8 +239,160 @@ pub fn pedido_commit() -> String {
     "Escreva uma mensagem de commit para as alterações em stage (use `git diff --staged`), no estilo do histórico do repositório. Só mostre a mensagem, não faça o commit.".into()
 }
 
+/// Comando (para o shell) que instala o CLI do agente.
+pub fn comando_instalar(a: &Agente) -> String {
+    if a.bin == "ollama" {
+        return if cfg!(windows) { "winget install Ollama.Ollama".into() } else { "curl -fsSL https://ollama.com/install.sh | sh".into() };
+    }
+    format!("npm install -g {}", a.npm)
+}
+
+/// Comando (para o shell) que faz o login do agente.
+pub fn comando_login(a: &Agente) -> String {
+    match a.bin {
+        "claude" => "claude /login".into(),
+        "ollama" => "ollama list".into(),
+        "opencode" => "opencode auth login".into(),
+        "codex" => "codex login".into(),
+        _ => a.bin.to_string(),
+    }
+}
+
+/// Programa e argumentos para rodar o agente uma vez, sem terminal, com `prompt` (a resposta sai no stdout).
+pub fn comando_direto(a: &Agente, prompt: &str) -> (String, Vec<String>) {
+    let args: Vec<String> = match a.bin {
+        "claude" => vec!["-p".into(), prompt.into()],
+        "opencode" => vec!["run".into(), prompt.into()],
+        "codex" => vec!["exec".into(), "--skip-git-repo-check".into(), prompt.into()],
+        "gemini" => vec!["-p".into(), prompt.into()],
+        "ollama" => vec!["run".into(), modelo_ollama(&pasta_config()).unwrap_or_else(|| "llama3.2".into()), prompt.into()],
+        _ => vec![prompt.into()],
+    };
+    (a.bin.to_string(), args)
+}
+
+/// Pedido de edição do trecho `codigo` (do `arquivo`) seguindo `instrucao`: só o trecho novo na resposta.
+pub fn pedido_editar(arquivo: &str, instrucao: &str, codigo: &str) -> String {
+    format!(
+        "Edite o trecho de código abaixo seguindo a instrução. Responda SOMENTE com o trecho já editado, \
+         pronto para substituir o original: sem explicações e sem cercas de markdown. Mantenha o recuo.\n\
+         Arquivo: {arquivo}\nInstrução: {instrucao}\n--- CÓDIGO ---\n{codigo}\n--- FIM ---"
+    )
+}
+
+/// Pergunta sobre o arquivo (e o trecho selecionado, se houver).
+pub fn pedido_perguntar(arquivo: &str, pergunta: &str, trecho: Option<&str>) -> String {
+    match trecho {
+        Some(t) => format!("Arquivo: {arquivo}\nTrecho:\n{t}\n\nPergunta: {pergunta}\nResponda em português, de forma direta. Não altere nenhum arquivo."),
+        None => format!("Arquivo: {arquivo}\n\nPergunta: {pergunta}\nResponda em português, de forma direta. Não altere nenhum arquivo."),
+    }
+}
+
+/// Tira as cercas de markdown (```lang ... ```) da resposta e as linhas em branco das pontas.
+pub fn limpar_resposta(t: &str) -> String {
+    let t = t.replace("\r\n", "\n");
+    let linhas: Vec<&str> = t.lines().collect();
+    // se houver um bloco cercado, vale o primeiro
+    let corpo: Vec<&str> = match linhas.iter().position(|l| l.trim_start().starts_with("```")) {
+        Some(i) => {
+            let resto = &linhas[i + 1..];
+            let fim = resto.iter().position(|l| l.trim_start().starts_with("```")).unwrap_or(resto.len());
+            resto[..fim].to_vec()
+        }
+        None => linhas,
+    };
+    let ini = corpo.iter().position(|l| !l.trim().is_empty()).unwrap_or(0);
+    let fim = corpo.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
+    corpo[ini..fim.max(ini)].join("\n")
+}
+
+/// Roda `prog args` em `pasta` e devolve o stdout; para depois de `limite` (mata o processo).
+pub fn rodar_direto(prog: &str, args: &[String], pasta: &Path, limite: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    let mut filho = std::process::Command::new(prog)
+        .args(args)
+        .current_dir(pasta)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("não consegui rodar {prog}: {e}"))?;
+    let mut so = filho.stdout.take().unwrap();
+    let mut se = filho.stderr.take().unwrap();
+    let t_out = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = so.read_to_end(&mut b);
+        b
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = se.read_to_end(&mut b);
+        b
+    });
+    let ate = std::time::Instant::now() + limite;
+    let status = loop {
+        match filho.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() >= ate => {
+                let _ = filho.kill();
+                let _ = filho.wait();
+                return Err(format!("{prog} demorou mais de {} s", limite.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(40)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let (out, err) = (t_out.join().unwrap_or_default(), t_err.join().unwrap_or_default());
+    if !status.success() {
+        let msg = String::from_utf8_lossy(&err).trim().to_string();
+        return Err(if msg.is_empty() { format!("{prog} terminou com erro") } else { msg.lines().last().unwrap_or("").to_string() });
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 #[cfg(test)]
 mod testes {
+    #[test]
+    fn ollama_modelo_e_comandos() {
+        let saida = "NAME            ID            SIZE    MODIFIED\nllama3.2:3b     a80c4f17acd5  2.0 GB  2 weeks ago\nqwen2.5:7b      845dbda0ea48  4.7 GB  3 weeks ago\n";
+        assert_eq!(super::primeiro_modelo(saida).as_deref(), Some("llama3.2:3b"));
+        assert_eq!(super::primeiro_modelo("NAME ID\n"), None);
+        let o = super::AGENTES.iter().find(|a| a.bin == "ollama").unwrap();
+        let (p, a) = super::comando_direto(o, "oi");
+        assert_eq!(p, "ollama");
+        assert_eq!(a[0], "run");
+        assert_eq!(a.last().unwrap(), "oi");
+    }
+
+    #[test]
+    fn comandos_de_instalar_e_login() {
+        let a = |b: &str| super::AGENTES.iter().find(|a| a.bin == b).unwrap();
+        assert_eq!(super::comando_instalar(a("claude")), "npm install -g @anthropic-ai/claude-code");
+        assert_eq!(super::comando_login(a("codex")), "codex login");
+        assert_eq!(super::comando_login(a("gemini")), "gemini");
+    }
+
+    #[test]
+    fn limpa_cercas_e_bordas_da_resposta() {
+        use super::limpar_resposta as l;
+        assert_eq!(l("```rust\nfn a() {}\n```\n"), "fn a() {}");
+        assert_eq!(l("Claro! Aqui está:\n```\n  x = 1\n  y = 2\n```\nPronto."), "  x = 1\n  y = 2");
+        assert_eq!(l("\n\n  x = 1\n\n"), "  x = 1");
+        assert_eq!(l("sem cercas\nduas linhas"), "sem cercas\nduas linhas");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn roda_direto_devolve_stdout_erro_e_limite() {
+        let d = std::env::temp_dir();
+        let ok = super::rodar_direto("sh", &["-c".into(), "printf 'oi\\n'".into()], &d, std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(ok, "oi\n");
+        let erro = super::rodar_direto("sh", &["-c".into(), "echo falhou >&2; exit 3".into()], &d, std::time::Duration::from_secs(5)).unwrap_err();
+        assert_eq!(erro, "falhou");
+        let lento = super::rodar_direto("sh", &["-c".into(), "sleep 5".into()], &d, std::time::Duration::from_millis(200)).unwrap_err();
+        assert!(lento.contains("demorou"), "{lento}");
+    }
+
     use super::*;
 
     fn tmp(nome: &str) -> PathBuf {

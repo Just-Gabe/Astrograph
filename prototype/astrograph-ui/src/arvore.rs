@@ -136,6 +136,138 @@ impl Arvore {
     }
 }
 
+/// Operações de arquivo do explorador (`a`, `r`, `d`, `y`/`x`, `p`).
+pub mod ops {
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    /// Cria um arquivo (ou uma pasta, se `nome` termina em `/`) dentro de `dir`; cria as pastas do caminho.
+    pub fn criar(dir: &Path, nome: &str) -> io::Result<PathBuf> {
+        let nome = nome.trim();
+        if nome.is_empty() || nome.starts_with('/') || nome.split('/').any(|c| c == "..") {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "nome inválido"));
+        }
+        let destino = dir.join(nome.trim_end_matches('/'));
+        if destino.exists() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "já existe"));
+        }
+        if nome.ends_with('/') {
+            std::fs::create_dir_all(&destino)?;
+        } else {
+            if let Some(pai) = destino.parent() {
+                std::fs::create_dir_all(pai)?;
+            }
+            std::fs::File::create(&destino)?;
+        }
+        Ok(destino)
+    }
+
+    pub fn renomear(de: &Path, novo_nome: &str) -> io::Result<PathBuf> {
+        let novo_nome = novo_nome.trim();
+        if novo_nome.is_empty() || novo_nome.contains('/') || novo_nome.contains('\\') {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "nome inválido"));
+        }
+        let para = de.with_file_name(novo_nome);
+        if para.exists() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "já existe"));
+        }
+        std::fs::rename(de, &para)?;
+        Ok(para)
+    }
+
+    pub fn apagar(alvo: &Path) -> io::Result<()> {
+        if alvo.is_dir() {
+            std::fs::remove_dir_all(alvo)
+        } else {
+            std::fs::remove_file(alvo)
+        }
+    }
+
+    fn copiar_rec(de: &Path, para: &Path) -> io::Result<()> {
+        if de.is_dir() {
+            std::fs::create_dir_all(para)?;
+            for e in std::fs::read_dir(de)? {
+                let e = e?;
+                copiar_rec(&e.path(), &para.join(e.file_name()))?;
+            }
+            Ok(())
+        } else {
+            std::fs::copy(de, para).map(|_| ())
+        }
+    }
+
+    /// Nome livre em `dir` para colar `origem` (acrescenta `_copia`, `_copia2`... se já existir).
+    fn destino_livre(dir: &Path, origem: &Path) -> PathBuf {
+        let nome = origem.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let direto = dir.join(&nome);
+        if !direto.exists() {
+            return direto;
+        }
+        let (base, ext) = match nome.rsplit_once('.') {
+            Some((b, e)) if !b.is_empty() => (b.to_string(), format!(".{e}")),
+            _ => (nome.clone(), String::new()),
+        };
+        for n in 1.. {
+            let sufixo = if n == 1 { "_copia".to_string() } else { format!("_copia{n}") };
+            let c = dir.join(format!("{base}{sufixo}{ext}"));
+            if !c.exists() {
+                return c;
+            }
+        }
+        unreachable!()
+    }
+
+    /// Cola `origem` dentro de `dir` (copiando, ou movendo se `mover`).
+    pub fn colar(origem: &Path, dir: &Path, mover: bool) -> io::Result<PathBuf> {
+        if dir.starts_with(origem) && origem.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "não dá para colar uma pasta dentro dela mesma"));
+        }
+        let para = if mover { dir.join(origem.file_name().unwrap_or_default()) } else { destino_livre(dir, origem) };
+        if mover {
+            if para == origem {
+                return Ok(para);
+            }
+            if para.exists() {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "já existe"));
+            }
+            if std::fs::rename(origem, &para).is_err() {
+                copiar_rec(origem, &para)?;
+                apagar(origem)?;
+            }
+        } else {
+            copiar_rec(origem, &para)?;
+        }
+        Ok(para)
+    }
+}
+
+impl Arvore {
+    /// Pasta onde um item novo entra: a pasta selecionada (se aberta ou não) ou a que contém o arquivo.
+    pub fn pasta_alvo(&self) -> PathBuf {
+        match self.atual() {
+            Some(n) if n.pasta => n.caminho.clone(),
+            Some(n) => n.caminho.parent().map(Path::to_path_buf).unwrap_or_else(|| self.raiz.clone()),
+            None => self.raiz.clone(),
+        }
+    }
+
+    /// Abre a pasta (para mostrar o que acabou de entrar nela) e seleciona `caminho`.
+    pub fn mostrar(&mut self, caminho: &Path) {
+        let mut pai = caminho.parent();
+        while let Some(p) = pai {
+            if p == self.raiz || !p.starts_with(&self.raiz) {
+                break;
+            }
+            self.abertas.insert(p.to_path_buf());
+            pai = p.parent();
+        }
+        self.recarregar();
+        if let Some(i) = self.nos.iter().position(|n| n.caminho == caminho) {
+            self.sel = i;
+        }
+    }
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
@@ -184,5 +316,32 @@ mod testes {
         a.recarregar();
         assert_eq!(a.atual().unwrap().nome, "x.rs");
         assert_eq!(a.nos.iter().filter(|n| n.nome.ends_with(".rs")).count(), 4);
+    }
+
+    #[test]
+    fn operacoes_de_arquivo() {
+        let d = projeto("ops");
+        let novo = ops::criar(&d, "a/b/c.txt").unwrap();
+        assert!(novo.is_file());
+        assert!(ops::criar(&d, "pasta/").unwrap().is_dir());
+        assert!(ops::criar(&d, "a/b/c.txt").is_err(), "já existe");
+        assert!(ops::criar(&d, "../fora").is_err());
+        let r = ops::renomear(&novo, "d.txt").unwrap();
+        assert!(r.is_file() && !novo.exists());
+        assert!(ops::renomear(&r, "x/y").is_err());
+        let c1 = ops::colar(&d.join("LEIA.md"), &d, false).unwrap();
+        assert_eq!(c1.file_name().unwrap(), "LEIA_copia.md");
+        let c2 = ops::colar(&d.join("LEIA.md"), &d, false).unwrap();
+        assert_eq!(c2.file_name().unwrap(), "LEIA_copia2.md");
+        let m = ops::colar(&d.join("LEIA.md"), &d.join("pasta"), true).unwrap();
+        assert!(m.is_file() && !d.join("LEIA.md").exists());
+        let pasta = ops::colar(&d.join("src"), &d.join("pasta"), false).unwrap();
+        assert!(pasta.join("mod/x.rs").is_file());
+        assert!(ops::colar(&d.join("src"), &d.join("src/mod"), false).is_err());
+        ops::apagar(&d.join("pasta")).unwrap();
+        assert!(!d.join("pasta").exists());
+        let mut a = Arvore::nova(&d);
+        a.mostrar(&d.join("a/b/d.txt"));
+        assert_eq!(a.atual().unwrap().nome, "d.txt");
     }
 }

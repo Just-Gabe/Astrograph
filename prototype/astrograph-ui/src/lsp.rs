@@ -42,6 +42,80 @@ pub struct Item {
     pub tipo: u8,
     /// `textEdit.range` inicial (linha, coluna UTF-16), se houver
     pub inicio: Option<(usize, usize)>,
+    /// paradas do snippet (`$1`, `${2:nome}`...) em ordem de uso: (início, fim) em caracteres do `texto`
+    pub paradas: Vec<(usize, usize)>,
+    /// `additionalTextEdits` (imports automáticos): faixas (linha, coluna UTF-16) e texto
+    pub extras: Vec<((usize, usize), (usize, usize), String)>,
+}
+
+/// Lê a sintaxe de snippet do LSP: devolve o texto (com os valores padrão) e as paradas em ordem
+/// de uso (`$1`, `$2`... e por último `$0`), como (início, fim) em caracteres do texto.
+pub fn snippet(t: &str) -> (String, Vec<(usize, usize)>) {
+    fn rec(c: &[char], out: &mut String, paradas: &mut Vec<(u32, usize, usize)>) {
+        let mut i = 0;
+        while i < c.len() {
+            let ch = c[i];
+            if ch == '\\' && i + 1 < c.len() {
+                out.push(c[i + 1]);
+                i += 2;
+            } else if ch == '$' && i + 1 < c.len() && c[i + 1].is_ascii_digit() {
+                let mut j = i + 1;
+                let mut n = 0u32;
+                while j < c.len() && c[j].is_ascii_digit() {
+                    n = n * 10 + c[j].to_digit(10).unwrap();
+                    j += 1;
+                }
+                let at = out.chars().count();
+                paradas.push((n, at, at));
+                i = j;
+            } else if ch == '$' && i + 1 < c.len() && c[i + 1] == '{' {
+                // ${1}  ${1:padrão}  ${1|a,b|}  ${VAR:padrão}
+                let mut j = i + 2;
+                let mut n: Option<u32> = None;
+                while j < c.len() && c[j].is_ascii_digit() {
+                    n = Some(n.unwrap_or(0) * 10 + c[j].to_digit(10).unwrap());
+                    j += 1;
+                }
+                let mut depth = 1;
+                let mut k = j;
+                while k < c.len() && depth > 0 {
+                    match c[k] {
+                        '\\' => k += 1,
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                let fim = if depth == 0 { k - 1 } else { k.min(c.len()) };
+                let corpo: &[char] = &c[j.min(fim)..fim];
+                let at = out.chars().count();
+                if corpo.first() == Some(&':') {
+                    rec(&corpo[1..], out, paradas);
+                } else if corpo.first() == Some(&'|') {
+                    // escolha: vale a primeira opção
+                    let opts: String = corpo[1..].iter().take_while(|&&x| x != '|' && x != ',').collect();
+                    out.push_str(&opts);
+                }
+                let fim_txt = out.chars().count();
+                if let Some(n) = n {
+                    paradas.push((n, at, fim_txt));
+                }
+                i = k;
+            } else {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    let c: Vec<char> = t.chars().collect();
+    let mut out = String::new();
+    let mut ps: Vec<(u32, usize, usize)> = Vec::new();
+    rec(&c, &mut out, &mut ps);
+    // `$0` é a última parada; as outras seguem a numeração (a mesma número repete: fica a primeira)
+    ps.sort_by_key(|p| (p.0 == 0, p.0));
+    ps.dedup_by_key(|p| p.0);
+    (out, ps.into_iter().map(|(_, a, b)| (a, b)).collect())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -52,6 +126,31 @@ enum Tipo {
     Completar,
     /// resposta crua guardada em `Estado::respostas` (renomear, ações, formatar, assinatura...)
     Generico,
+}
+
+/// Um trabalho do servidor (`$/progress`): título, mensagem e porcentagem.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progresso {
+    pub titulo: String,
+    pub mensagem: String,
+    pub pct: Option<u64>,
+}
+
+impl Progresso {
+    /// "Indexando - src 40%"
+    pub fn texto(&self) -> String {
+        let mut t = self.titulo.clone();
+        if !self.mensagem.is_empty() {
+            if !t.is_empty() {
+                t.push_str(" - ");
+            }
+            t.push_str(&self.mensagem);
+        }
+        if let Some(p) = self.pct {
+            t.push_str(&format!(" {p}%"));
+        }
+        t
+    }
 }
 
 /// O que o servidor já contou (lido pela UI).
@@ -67,6 +166,8 @@ pub struct Estado {
     pub edicoes_externas: Vec<Value>,
     /// `window/showMessage`: (tipo 1 erro..4 log, texto)
     pub mensagens: Vec<(u8, String)>,
+    /// trabalhos em andamento (`$/progress`): token -> texto ("Indexando 40%")
+    pub progresso: HashMap<String, Progresso>,
     pub pronto: bool,
 }
 
@@ -80,6 +181,8 @@ pub struct Cliente {
     /// mensagens que esperam o `initialize` terminar
     fila: Arc<Mutex<Vec<Value>>>,
     pronto: Arc<AtomicBool>,
+    /// o servidor aceita `didChange` só com o trecho que mudou (`textDocumentSync` = 2)
+    incremental: Arc<AtomicBool>,
     /// por arquivo: quantos painéis o têm aberto, a versão enviada e o hash do último texto
     docs: HashMap<PathBuf, Doc>,
 }
@@ -89,6 +192,31 @@ struct Doc {
     abertos: usize,
     versao: i64,
     hash: u64,
+    /// último texto enviado (base do `didChange` incremental)
+    texto: String,
+}
+
+/// Trecho que mudou entre `velho` e `novo` como um único `contentChange` (faixa em UTF-16 + texto novo).
+pub fn mudanca_incremental(velho: &str, novo: &str) -> Value {
+    let (vb, nb) = (velho.as_bytes(), novo.as_bytes());
+    let mut p = vb.iter().zip(nb).take_while(|(a, b)| a == b).count();
+    while p > 0 && !(velho.is_char_boundary(p) && novo.is_char_boundary(p)) {
+        p -= 1;
+    }
+    let max_s = vb.len().min(nb.len()) - p;
+    let mut s = vb.iter().rev().zip(nb.iter().rev()).take(max_s).take_while(|(a, b)| a == b).count();
+    while s > 0 && !(velho.is_char_boundary(vb.len() - s) && novo.is_char_boundary(nb.len() - s)) {
+        s -= 1;
+    }
+    let pos = |t: &str, upto: usize| -> (usize, usize) {
+        let antes = &t[..upto];
+        let linha = antes.matches('\n').count();
+        let ini = antes.rfind('\n').map_or(0, |i| i + 1);
+        (linha, antes[ini..].encode_utf16().count())
+    };
+    let (l0, c0) = pos(velho, p);
+    let (l1, c1) = pos(velho, vb.len() - s);
+    json!({"range": {"start": {"line": l0, "character": c0}, "end": {"line": l1, "character": c1}}, "text": &novo[p..nb.len() - s]})
 }
 
 fn hash_texto(t: &str) -> u64 {
@@ -117,6 +245,21 @@ pub fn servidor_para(arquivo: &Path) -> Option<(String, Vec<String>, &'static st
         "c" | "h" => (&[("clangd", &[])], "c"),
         "cpp" | "cc" | "hpp" => (&[("clangd", &[])], "cpp"),
         "sh" | "bash" => (&[("bash-language-server", &["start"])], "shellscript"),
+        "json" | "jsonc" => (&[("vscode-json-language-server", &["--stdio"])], "json"),
+        "html" | "htm" => (&[("vscode-html-language-server", &["--stdio"])], "html"),
+        "css" | "scss" => (&[("vscode-css-language-server", &["--stdio"])], "css"),
+        "yaml" | "yml" => (&[("yaml-language-server", &["--stdio"])], "yaml"),
+        "toml" => (&[("taplo", &["lsp", "stdio"])], "toml"),
+        "md" | "markdown" => (&[("marksman", &["server"])], "markdown"),
+        "zig" => (&[("zls", &[])], "zig"),
+        "java" => (&[("jdtls", &[])], "java"),
+        "rb" => (&[("ruby-lsp", &[]), ("solargraph", &["stdio"])], "ruby"),
+        "php" => (&[("intelephense", &["--stdio"])], "php"),
+        "cs" => (&[("csharp-ls", &[])], "csharp"),
+        "kt" | "kts" => (&[("kotlin-language-server", &[])], "kotlin"),
+        "swift" => (&[("sourcekit-lsp", &[])], "swift"),
+        "dart" => (&[("dart", &["language-server"])], "dart"),
+        "ex" | "exs" => (&[("elixir-ls", &[])], "elixir"),
         _ => return None,
     };
     cmds.iter().find_map(|(nome, args)| achar(nome).map(|p| (p.to_string_lossy().into_owned(), args.iter().map(|a| a.to_string()).collect(), lang)))
@@ -133,6 +276,32 @@ fn achar(nome: &str) -> Option<PathBuf> {
     }
     let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat"] } else { &[""] };
     dirs.iter().find_map(|d| exts.iter().map(|e| d.join(format!("{nome}{e}"))).find(|p| p.is_file()))
+}
+
+/// Os servidores mais comuns e se estão instalados (PATH ou Mason): para o `:Astrograph saude`.
+pub fn servidores_instalados() -> Vec<(&'static str, bool)> {
+    ["rust-analyzer", "pyright-langserver", "typescript-language-server", "gopls", "lua-language-server", "clangd", "bash-language-server", "vscode-json-language-server", "yaml-language-server", "taplo", "marksman", "zls"]
+        .into_iter()
+        .map(|n| (n, achar(n).is_some()))
+        .collect()
+}
+
+/// Raiz do projeto de `arquivo` para o servidor: a raiz do git; sem git, a pasta mais perto com um
+/// marcador de projeto; senão `padrao`.
+pub fn raiz_do_projeto(arquivo: &Path, padrao: &Path) -> PathBuf {
+    let dir = arquivo.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(padrao);
+    if let Some(r) = crate::git::raiz(dir) {
+        return r;
+    }
+    const MARCADORES: &[&str] = &["Cargo.toml", "package.json", "go.mod", "pyproject.toml", "setup.py", "tsconfig.json", ".luarc.json", "compile_commands.json", "Makefile"];
+    let mut d = Some(dir);
+    while let Some(p) = d {
+        if MARCADORES.iter().any(|m| p.join(m).exists()) {
+            return p.to_path_buf();
+        }
+        d = p.parent();
+    }
+    padrao.to_path_buf()
 }
 
 pub fn uri(p: &Path) -> String {
@@ -195,8 +364,9 @@ impl Cliente {
         let kinds: Arc<Mutex<HashMap<i64, Tipo>>> = Arc::new(Mutex::new(HashMap::new()));
         let fila: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let pronto = Arc::new(AtomicBool::new(false));
+        let incremental = Arc::new(AtomicBool::new(false));
         {
-            let (stdin, estado, kinds, fila, pronto) = (stdin.clone(), estado.clone(), kinds.clone(), fila.clone(), pronto.clone());
+            let (stdin, estado, kinds, fila, pronto, incremental) = (stdin.clone(), estado.clone(), kinds.clone(), fila.clone(), pronto.clone(), incremental.clone());
             std::thread::spawn(move || {
                 let mut r = BufReader::new(stdout);
                 while let Some(msg) = ler(&mut r) {
@@ -223,6 +393,31 @@ impl Cliente {
                                 notify();
                             }
                         }
+                        if m == "$/progress" {
+                            let p = &msg["params"];
+                            let token = p["token"].as_str().map(str::to_string).or_else(|| p["token"].as_i64().map(|n| n.to_string())).unwrap_or_default();
+                            let v = &p["value"];
+                            match v["kind"].as_str() {
+                                Some("end") => {
+                                    estado.lock().unwrap().progresso.remove(&token);
+                                }
+                                Some(k) => {
+                                    let mut e = estado.lock().unwrap();
+                                    let pr = e.progresso.entry(token).or_default();
+                                    if k == "begin" || !v["title"].is_null() {
+                                        pr.titulo = v["title"].as_str().unwrap_or("").to_string();
+                                    }
+                                    if let Some(m) = v["message"].as_str() {
+                                        pr.mensagem = m.to_string();
+                                    }
+                                    if let Some(p) = v["percentage"].as_u64() {
+                                        pr.pct = Some(p);
+                                    }
+                                }
+                                None => {}
+                            }
+                            notify();
+                        }
                         if m == "textDocument/publishDiagnostics" {
                             let p = &msg["params"];
                             if let Some(u) = p["uri"].as_str() {
@@ -242,6 +437,9 @@ impl Cliente {
                             for m in fila.lock().unwrap().drain(..) {
                                 let _ = escrever(&mut *w, &m);
                             }
+                            let sync = &msg["result"]["capabilities"]["textDocumentSync"];
+                            let modo = sync.as_i64().or_else(|| sync["change"].as_i64()).unwrap_or(1);
+                            incremental.store(modo == 2, Ordering::Release);
                             pronto.store(true, Ordering::Release);
                             estado.lock().unwrap().pronto = true;
                             notify();
@@ -268,7 +466,7 @@ impl Cliente {
                 }
             });
         }
-        let c = Cliente { nome: prog.rsplit(['/', '\\']).next().unwrap_or(prog).to_string(), child, stdin, next: AtomicI64::new(1), kinds, estado, fila, pronto, docs: HashMap::new() };
+        let c = Cliente { nome: prog.rsplit(['/', '\\']).next().unwrap_or(prog).to_string(), child, stdin, next: AtomicI64::new(1), kinds, estado, fila, pronto, incremental, docs: HashMap::new() };
         let init = json!({
             "processId": std::process::id(),
             "rootUri": uri(raiz),
@@ -327,6 +525,7 @@ impl Cliente {
         }
         d.versao = 1;
         d.hash = hash_texto(texto);
+        d.texto = texto.to_string();
         let versao = d.versao;
         self.notificacao("textDocument/didOpen", json!({"textDocument": {"uri": uri(arquivo), "languageId": linguagem, "version": versao, "text": texto}}));
     }
@@ -341,7 +540,9 @@ impl Cliente {
         d.hash = h;
         d.versao += 1;
         let versao = d.versao;
-        self.notificacao("textDocument/didChange", json!({"textDocument": {"uri": uri(arquivo), "version": versao}, "contentChanges": [{"text": texto}]}));
+        let mudanca = if self.incremental.load(Ordering::Acquire) { mudanca_incremental(&d.texto, texto) } else { json!({"text": texto}) };
+        d.texto = texto.to_string();
+        self.notificacao("textDocument/didChange", json!({"textDocument": {"uri": uri(arquivo), "version": versao}, "contentChanges": [mudanca]}));
     }
 
     /// Versão do arquivo no servidor (0 = não aberto).
@@ -442,6 +643,11 @@ impl Cliente {
 
     pub fn simbolos(&self, arquivo: &Path) -> i64 {
         self.requisitar("textDocument/documentSymbol", json!({"textDocument": {"uri": uri(arquivo)}}))
+    }
+
+    /// `workspace/symbol`: símbolos de todo o projeto que casam com `consulta`.
+    pub fn simbolos_do_projeto(&self, consulta: &str) -> i64 {
+        self.requisitar("workspace/symbol", json!({"query": consulta}))
     }
 
     pub fn executar(&self, comando: &str, args: Vec<Value>) -> i64 {
@@ -571,7 +777,19 @@ fn itens(r: &Value) -> Vec<Item> {
             let label = v["label"].as_str()?.to_string();
             let snippet = v["insertTextFormat"].as_u64() == Some(2);
             let bruto = v["textEdit"]["newText"].as_str().or_else(|| v["insertText"].as_str()).unwrap_or(&label).to_string();
-            let texto = if snippet { sem_snippet(&bruto) } else { bruto };
+            let (texto, paradas) = if snippet { self::snippet(&bruto) } else { (bruto, Vec::new()) };
+            let extras = v["additionalTextEdits"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|e| {
+                            let g = |p: &Value, k: &str| p[k].as_u64().map(|n| n as usize);
+                            let (r, n) = (&e["range"], e["newText"].as_str()?.to_string());
+                            Some(((g(&r["start"], "line")?, g(&r["start"], "character")?), (g(&r["end"], "line")?, g(&r["end"], "character")?), n))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let inicio = v["textEdit"]["range"]["start"].as_object().and_then(|s| Some((s.get("line")?.as_u64()? as usize, s.get("character")?.as_u64()? as usize)));
             Some(Item {
                 filtro: v["filterText"].as_str().unwrap_or(&label).to_string(),
@@ -580,6 +798,8 @@ fn itens(r: &Value) -> Vec<Item> {
                 label,
                 texto,
                 inicio,
+                paradas,
+                extras,
             })
         })
         .collect()
@@ -673,6 +893,8 @@ pub fn acoes_de(r: &Value) -> Vec<Acao> {
 /// Um símbolo do documento (função, struct...), em ordem de leitura; `nivel` é o aninhamento.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Simbolo {
+    /// arquivo do símbolo (só nas respostas de `workspace/symbol`)
+    pub arquivo: Option<PathBuf>,
     pub nome: String,
     pub tipo: u8,
     pub detalhe: String,
@@ -688,7 +910,7 @@ pub fn simbolos_de(r: &Value) -> Vec<Simbolo> {
         let rg = v.get("selectionRange").or_else(|| v.get("range")).or_else(|| v["location"].get("range"));
         if let Some(rg) = rg {
             if let (Some(row), Some(col)) = (rg["start"]["line"].as_u64(), rg["start"]["character"].as_u64()) {
-                out.push(Simbolo { nome: nome.to_string(), tipo: v["kind"].as_u64().unwrap_or(0) as u8, detalhe: v["detail"].as_str().unwrap_or("").to_string(), row: row as usize, col: col as usize, nivel });
+                out.push(Simbolo { arquivo: v["location"]["uri"].as_str().and_then(de_uri), nome: nome.to_string(), tipo: v["kind"].as_u64().unwrap_or(0) as u8, detalhe: v["detail"].as_str().unwrap_or("").to_string(), row: row as usize, col: col as usize, nivel });
             }
         }
         if let Some(f) = v["children"].as_array() {
@@ -741,6 +963,43 @@ pub fn locais_de(r: &Value) -> Vec<Local> {
 
 #[cfg(test)]
 pub(crate) mod testes {
+    #[test]
+    fn snippet_com_paradas() {
+        let (t, p) = super::snippet("foo(${1:a}, ${2:b})$0");
+        assert_eq!(t, "foo(a, b)");
+        assert_eq!(p, vec![(4, 5), (7, 8), (9, 9)]);
+        // $2 antes de $1 no texto: a ordem de uso é a numeração
+        let (t, p) = super::snippet("for $2 in ${1:items} {\n\t$0\n}");
+        assert_eq!(t, "for  in items {\n\t\n}");
+        assert_eq!(p[0], (8, 13));
+        assert_eq!(p[1], (4, 4));
+        assert_eq!(p.last().unwrap(), &(17, 17));
+        // escolha, aninhado e escape
+        assert_eq!(super::snippet("${1|um,dois|}").0, "um");
+        assert_eq!(super::snippet("${1:f(${2:x})}\\$").0, "f(x)$");
+        assert_eq!(super::snippet("a").1, vec![]);
+    }
+
+    #[test]
+    fn mudanca_incremental_acha_o_trecho_em_utf16() {
+        use super::mudanca_incremental as m;
+        let r = m("fn a() {}\nlet x = 1;\n", "fn a() {}\nlet xy = 1;\n");
+        assert_eq!(r["range"]["start"], serde_json::json!({"line": 1, "character": 5}));
+        assert_eq!(r["range"]["end"], serde_json::json!({"line": 1, "character": 5}));
+        assert_eq!(r["text"], "y");
+        // apagar uma linha inteira
+        let r = m("a\nb\nc\n", "a\nc\n");
+        assert_eq!((r["range"]["start"]["line"].as_u64(), r["range"]["end"]["line"].as_u64()), (Some(1), Some(2)));
+        assert_eq!(r["text"], "");
+        // emoji conta 2 em UTF-16 e o corte respeita o limite do caractere
+        let r = m("😀a\n", "😀ba\n");
+        assert_eq!(r["range"]["start"]["character"], 2);
+        assert_eq!(r["text"], "b");
+        // texto igual não quebra
+        let r = m("x", "x");
+        assert_eq!(r["text"], "");
+    }
+
     use super::*;
     use std::time::{Duration, Instant};
 
@@ -768,9 +1027,14 @@ while True:
     meth = m.get('method'); i = m.get('id')
     if meth == 'textDocument/didOpen': ultimo = m['params']['textDocument']['uri']
     if meth == 'initialize': enviar({'jsonrpc':'2.0','id':i,'result':{'capabilities':{}}})
+    if meth == 'initialized':
+        enviar({'jsonrpc':'2.0','method':'$/progress','params':{'token':'t1','value':{'kind':'begin','title':'Indexando','percentage':10}}})
+        enviar({'jsonrpc':'2.0','method':'$/progress','params':{'token':'t1','value':{'kind':'report','message':'src','percentage':40}}})
     elif meth == 'textDocument/didOpen' or meth == 'textDocument/didChange':
         td = m['params']['textDocument']
         enviar({'jsonrpc':'2.0','method':'textDocument/publishDiagnostics','params':{'uri':td['uri'],'diagnostics':[{'range':{'start':{'line':0,'character':1},'end':{'line':0,'character':3}},'severity':2,'message':'cuidado aqui'}]}})
+    elif meth == 'workspace/symbol':
+        enviar({'jsonrpc':'2.0','id':i,'result':[{'name':'Foo','kind':5,'location':{'uri':'file:///tmp/sym%20a.py','range':{'start':{'line':2,'character':1},'end':{'line':2,'character':4}}}}]})
     elif meth == 'textDocument/completion': enviar({'jsonrpc':'2.0','id':i,'result':{'isIncomplete':False,'items':[{'label':'println!','kind':3,'detail':'macro','insertText':'println!("$1")$0','insertTextFormat':2},{'label':'print','kind':3,'detail':'fn print()'},{'label':'private','kind':14},{'label':'zeta','kind':6}]}})
     elif meth == 'textDocument/hover': enviar({'jsonrpc':'2.0','id':i,'result':{'contents':{'kind':'markdown','value':'```rust\nfn x()\n```\ndoc da x'}}})
     elif meth == 'textDocument/rename':
@@ -877,6 +1141,26 @@ while True:
 
     fn resposta(c: &Cliente, id: i64) -> Value {
         esperar(|| c.resposta(id)).expect("resposta do servidor")
+    }
+
+    #[test]
+    fn progresso_e_simbolos_do_projeto() {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+            return;
+        }
+        let (mut c, _d, _arq) = cliente_falso();
+        // `$/progress` do servidor: begin + report (o título do begin fica)
+        let p = esperar(|| {
+            let st = c.estado.lock().unwrap();
+            st.progresso.values().find(|t| t.pct == Some(40)).cloned()
+        });
+        assert_eq!(p.map(|t| t.texto()).as_deref(), Some("Indexando - src 40%"));
+        let id = c.simbolos_do_projeto("Fo");
+        let sims = simbolos_de(&resposta(&c, id));
+        assert_eq!(sims.len(), 1);
+        assert_eq!((sims[0].nome.as_str(), sims[0].row, sims[0].col), ("Foo", 2, 1));
+        assert_eq!(sims[0].arquivo, Some(PathBuf::from("/tmp/sym a.py")));
+        c.encerrar();
     }
 
     #[test]

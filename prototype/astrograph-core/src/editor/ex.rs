@@ -30,9 +30,38 @@ impl Editor {
     pub(super) fn cmdline_key(&mut self, k: Key) -> bool {
         let Some(cl) = self.cmdline.as_mut() else { return false };
         match k {
-            Key::Esc | Key::Ctrl('c') => self.cmdline = None,
+            Key::Esc | Key::Ctrl('c') => {
+                self.cmdline = None;
+                self.cmd_hist_idx = None;
+            }
+            // `<C-p>`/`<C-n>` (e as setas): linhas de comando anteriores
+            Key::Ctrl('p') | Key::Ctrl('n') => {
+                let n = self.cmd_hist.len();
+                let novo = match (k, self.cmd_hist_idx) {
+                    (Key::Ctrl('p'), None) if n > 0 => Some(n - 1),
+                    (Key::Ctrl('p'), Some(i)) => Some(i.saturating_sub(1)),
+                    (Key::Ctrl('n'), Some(i)) if i + 1 < n => Some(i + 1),
+                    (Key::Ctrl('n'), Some(_)) => None,
+                    _ => self.cmd_hist_idx,
+                };
+                if novo != self.cmd_hist_idx || k == Key::Ctrl('n') {
+                    self.cmd_hist_idx = novo;
+                    *cl = novo.map(|i| self.cmd_hist[i].clone()).unwrap_or_default();
+                }
+            }
             Key::Enter => {
                 let linha = self.cmdline.take().unwrap_or_default();
+                self.cmd_hist_idx = None;
+                if !linha.is_empty() {
+                    if self.cmd_hist.last() != Some(&linha) {
+                        self.cmd_hist.push(linha.clone());
+                        if self.cmd_hist.len() > 200 {
+                            self.cmd_hist.remove(0);
+                        }
+                    }
+                    self.last_cmdline = Some(linha.clone());
+                    self.regs.insert(':', super::Reg { text: linha.clone(), linewise: false, block: false, bwidth: 0 });
+                }
                 self.run_cmdline(&linha);
             }
             Key::Backspace => {
@@ -161,7 +190,7 @@ impl Editor {
         Some((Faixa { a, b, dado }, i))
     }
 
-    fn run_cmdline(&mut self, linha: &str) {
+    pub(super) fn run_cmdline(&mut self, linha: &str) {
         let s: Vec<char> = linha.chars().collect();
         let Some((faixa, mut i)) = self.faixa(&s) else {
             self.failed = true;
@@ -178,12 +207,12 @@ impl Editor {
         // `s/x/y/`, `g/x/d`, `>`, `<`: o nome é uma letra seguida do delimitador
         if nome.is_empty() {
             if let Some(&c) = s.get(i) {
-                if c == '>' || c == '<' {
+                if c == '>' || c == '<' || c == '&' || c == '~' || c == '!' {
                     nome = c.to_string();
                     i += 1;
                 }
             }
-        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap") {
+        } else if !matches!(nome.as_str(), "d" | "delete" | "y" | "yank" | "j" | "join" | "normal" | "norm" | "noh" | "nohlsearch" | "w" | "write" | "q" | "quit" | "wq" | "x" | "xit" | "e" | "edit" | "set" | "syntax" | "filetype" | "sp" | "split" | "vs" | "vsp" | "vsplit" | "vne" | "vnew" | "new" | "clo" | "close" | "on" | "only" | "vm" | "vmap" | "vn" | "vnoremap" | "vu" | "vunmap" | "t" | "co" | "copy" | "m" | "move" | "sort" | "sor" | "reg" | "registers" | "di" | "display" | "marks" | "delm" | "delmarks" | "let" | "r" | "read") {
             // `sx`, `gx`: nome de uma letra colado ao delimitador (`s#a#b#`, `g!/x/d`)
             let primeiro = nome.chars().next().unwrap();
             if matches!(primeiro, 's' | 'g' | 'v') && nome.len() > 1 && !nome.starts_with("set") && !nome.starts_with("sy") {
@@ -206,8 +235,15 @@ impl Editor {
                 }
             }
             "s" | "sub" | "substitute" => {
-                self.substituir(faixa.a, faixa.b, &resto);
+                if resto.is_empty() || resto.starts_with(|c: char| c.is_ascii_alphabetic() || c == '&') {
+                    // `:s` e `:s g`: repete a última substituição
+                    self.repetir_substituicao(faixa.a, faixa.b, &resto, false);
+                } else {
+                    self.substituir(faixa.a, faixa.b, &resto);
+                }
             }
+            "&" => self.repetir_substituicao(faixa.a, faixa.b, &resto, false),
+            "~" => self.repetir_substituicao(faixa.a, faixa.b, &resto, true),
             "d" | "delete" => self.ex_apagar(faixa.a, faixa.b),
             "y" | "yank" => {
                 let texto = (faixa.a..=faixa.b).map(|r| self.buf.line(r)).collect::<Vec<_>>().join("\n");
@@ -234,9 +270,31 @@ impl Editor {
                 }
  self.cursor = Pos::new(faixa.b, self.buf.first_nonblank(faixa.b));
                 self.fix_cursor();
-                self.curswant = self.want_here();
             }
             "set" | "se" => self.ex_set(&resto),
+            "reg" | "registers" | "di" | "display" => self.ex_listar_registradores(),
+            "marks" => self.ex_listar_marcas(),
+            "delm" | "delmarks" => self.ex_delmarks(&resto),
+            "let" => self.ex_let(&resto),
+            "r" | "read" => {
+                // quem hospeda lê o arquivo (ou roda o comando): `<linha depois da qual entra>r <arg>`
+                let depois = if faixa.dado { faixa.b + 1 } else { self.cursor.row + 1 };
+                self.host_cmd = Some(format!("{depois}r {}", resto.trim()));
+            }
+            "!" => {
+                // `:!cmd` roda e mostra; `:{faixa}!cmd` filtra as linhas pelo comando
+                if faixa.dado {
+                    self.host_cmd = Some(format!("{},{}!{}", faixa.a + 1, faixa.b + 1, resto));
+                } else {
+                    self.host_cmd = Some(format!("!{resto}"));
+                }
+            }
+            "t" | "co" | "copy" => self.ex_copiar(faixa.a, faixa.b, &resto),
+            "m" | "move" => self.ex_mover(faixa.a, faixa.b, &resto),
+            "sort" | "sor" => {
+                let (a, b) = if faixa.dado { (faixa.a, faixa.b) } else { (0, self.last_row()) };
+                self.ex_ordenar(a, b, &resto);
+            }
             "map" | "nm" | "nmap" | "im" | "imap" | "vm" | "vmap" | "xm" | "xmap" | "no" | "noremap" | "nn" | "nnoremap" | "ino" | "inoremap" | "vn" | "vnoremap" | "xn" | "xnoremap" | "unm" | "unmap" | "nun" | "nunmap"
             | "iu" | "iunmap" | "vu" | "vunmap" | "xu" | "xunmap" | "mapc" | "mapclear" => self.ex_mapa(&nome, &resto),
             "normal" | "norm" => {
@@ -256,6 +314,12 @@ impl Editor {
 
     /// `:set opção`, `:set noopção`, `:set opção!`, `:set opção=valor` (vários na mesma linha). As que o
     /// núcleo não conhece (`number`, `scrolloff`, `clipboard`...) voltam para quem hospeda (`take_host_cmd`).
+    /// `:set` vindo de fora (`.editorconfig`): só as opções que o núcleo conhece; as outras são ignoradas.
+    pub fn set_option(&mut self, args: &str) {
+        self.ex_set(args);
+        self.host_cmd = None;
+    }
+
     fn ex_set(&mut self, args: &str) {
         let mut fora: Vec<&str> = Vec::new();
         for t in args.split_whitespace() {
@@ -274,6 +338,7 @@ impl Editor {
             let num = valor.and_then(|v| v.parse::<usize>().ok());
             match (base, num) {
                 ("shiftwidth" | "sw", Some(n)) if n > 0 => self.shiftwidth = n,
+                ("textwidth" | "tw", Some(n)) => self.textwidth = n,
                 ("tabstop" | "ts", Some(n)) if n > 0 => motion::set_tabstop(n),
                 ("ignorecase" | "ic", _) => self.ignorecase = if inverte { !self.ignorecase } else { liga },
                 ("smartcase" | "scs", _) => self.smartcase = if inverte { !self.smartcase } else { liga },
@@ -327,6 +392,286 @@ impl Editor {
             return;
         }
         self.mapear(modos, lhs, rhs, recursivo);
+    }
+
+    /// Destino de `:t` e `:m`: o número da linha depois da qual inserir (`0` = antes da primeira).
+    fn ex_destino(&self, resto: &str) -> Option<i64> {
+        let s: Vec<char> = resto.trim().chars().collect();
+        if s.is_empty() {
+            return None;
+        }
+        if s.iter().all(|c| *c == '0') {
+            return Some(-1);
+        }
+        let mut i = 0;
+        let r = self.endereco(&s, &mut i)??;
+        (i == s.len()).then_some(r as i64)
+    }
+
+    fn ex_copiar(&mut self, a: usize, b: usize, resto: &str) {
+        let Some(dest) = self.ex_destino(resto) else {
+            self.failed = true;
+            return;
+        };
+        let old = self.buf.rope.clone();
+        self.checkpoint();
+        let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+        let ini = (dest + 1) as usize;
+        for (k, l) in linhas.iter().enumerate() {
+            self.buf.insert_line(ini + k, l);
+        }
+        self.adjust_marks(&old);
+        let r = ini + linhas.len() - 1;
+        self.cursor = Pos::new(r, self.col_for_want(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    fn ex_mover(&mut self, a: usize, b: usize, resto: &str) {
+        let Some(dest) = self.ex_destino(resto) else {
+            self.failed = true;
+            return;
+        };
+        // E134: não dá para mover para dentro do próprio trecho
+        if dest >= a as i64 && dest < b as i64 {
+            self.failed = true;
+            return;
+        }
+        let n = b - a + 1;
+        let fim = if dest >= b as i64 {
+            let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+            self.checkpoint();
+            let ini = (dest + 1) as usize;
+            for (k, l) in linhas.iter().enumerate() {
+                self.buf.insert_line(ini + k, l);
+            }
+            self.buf.delete_lines(a, b);
+            dest as usize
+        } else if dest + 1 == a as i64 {
+            b
+        } else {
+            let linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+            self.checkpoint();
+            self.buf.delete_lines(a, b);
+            let ini = (dest + 1) as usize;
+            for (k, l) in linhas.iter().enumerate() {
+                self.buf.insert_line(ini + k, l);
+            }
+            ini + n - 1
+        };
+        let r = fim.min(self.last_row());
+        self.cursor = Pos::new(r, self.col_for_want(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    /// `:sort[!] [n] [i] [u]` (sem `/padrão/` nem `x`/`o`/`b`/`f`).
+    fn ex_ordenar(&mut self, a: usize, b: usize, args: &str) {
+        let (mut rev, mut num, mut ic, mut uniq) = (false, false, false, false);
+        let args = args.trim_start();
+        let args = match args.strip_prefix('!') {
+            Some(r) => {
+                rev = true;
+                r
+            }
+            None => args,
+        };
+        for c in args.chars() {
+            match c {
+                'n' => num = true,
+                'i' => ic = true,
+                'u' => uniq = true,
+                ' ' => {}
+                _ => {
+                    self.failed = true;
+                    return;
+                }
+            }
+        }
+        let numero = |l: &str| -> Option<i128> {
+            let cs: Vec<char> = l.chars().collect();
+            let i = cs.iter().position(|c| c.is_ascii_digit())?;
+            let neg = i > 0 && cs[i - 1] == '-';
+            let v: i128 = cs[i..].iter().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
+            Some(if neg { -v } else { v })
+        };
+        let chave = |l: &str| -> String { if ic { l.to_lowercase() } else { l.to_string() } };
+        let mut linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
+        let original = linhas.clone();
+        if num {
+            linhas.sort_by(|x, y| numero(x).cmp(&numero(y)));
+        } else {
+            linhas.sort_by(|x, y| chave(x).as_bytes().cmp(chave(y).as_bytes()));
+        }
+        if rev {
+            // o Vim percorre o resultado de trás para frente (empates também invertem)
+            linhas.reverse();
+        }
+        if uniq {
+            let mut fora: Vec<String> = Vec::new();
+            for l in linhas {
+                let igual = fora.last().is_some_and(|p| if num { numero(p) == numero(&l) } else { chave(p) == chave(&l) });
+                if !igual {
+                    fora.push(l);
+                }
+            }
+            linhas = fora;
+        }
+        if linhas != original {
+            let old = self.buf.rope.clone();
+            self.checkpoint();
+            self.buf.delete_lines(a, b);
+            if self.buf.line_count() == 1 && self.buf.line(0).is_empty() && a == 0 && b + 1 >= old.len_lines() {
+                // buffer todo apagado: sobrou uma linha vazia
+                self.buf.delete(Pos::new(0, 0), Pos::new(0, 0));
+                for (k, l) in linhas.iter().enumerate() {
+                    if k == 0 {
+                        self.buf.insert(Pos::new(0, 0), l);
+                    } else {
+                        self.buf.insert_line(k, l);
+                    }
+                }
+            } else {
+                for (k, l) in linhas.iter().enumerate() {
+                    self.buf.insert_line(a + k, l);
+                }
+            }
+            self.adjust_marks(&old);
+        }
+        self.cursor = Pos::new(a.min(self.last_row()), 0);
+        let r = self.cursor.row;
+        self.cursor = Pos::new(r, self.buf.first_nonblank(r));
+        self.fix_cursor();
+        self.curswant = self.want_here();
+    }
+
+    fn ex_listar_registradores(&mut self) {
+        let mut t = String::from("Tipo  Nome  Conteúdo\n");
+        let mostra = |r: &super::Reg| -> String {
+            let tipo = if r.block { "b" } else if r.linewise { "l" } else { "c" };
+            let txt: String = r.text.chars().map(|c| if c == '\n' { '↵' } else { c }).take(60).collect();
+            format!("{tipo}     {{}}     {txt}\n")
+        };
+        let mut nomes: Vec<char> = self.regs.keys().copied().collect();
+        nomes.sort();
+        if let Some(r) = &self.unnamed {
+            t.push_str(&mostra(r).replace("{}", "\""));
+        }
+        for n in nomes {
+            if let Some(r) = self.regs.get(&n) {
+                t.push_str(&mostra(r).replace("{}", &format!("\"{n}")));
+            }
+        }
+        for (n, v) in [('%', self.nome_arquivo.clone()), ('/', self.last_search.as_ref().map(|(p, _)| p.clone())), ('.', (!self.last_insert.is_empty()).then(|| self.last_insert.clone()))] {
+            if let Some(v) = v {
+                t.push_str(&format!("c     \"{n}     {v}\n"));
+            }
+        }
+        self.host_aba = Some(("Registradores".into(), t));
+    }
+
+    fn ex_listar_marcas(&mut self) {
+        let mut t = String::from("marca  linha  col  texto\n");
+        let mut itens: Vec<(char, Pos)> = self.marks.iter().map(|(c, p)| (*c, *p)).collect();
+        if let Some(p) = self.pcmark {
+            itens.push(('\'', p));
+        }
+        if let Some((a, b, _)) = self.vmarks {
+            itens.push(('<', a.min(b)));
+            itens.push(('>', a.max(b)));
+        }
+        for (c, p, ) in [('.', self.last_change), ('^', self.insert_stop), ('[', self.brk_ini), (']', self.brk_fim)].into_iter().filter_map(|(c, p)| p.map(|p| (c, p))).map(|(c, p)| (c, p)) {
+            itens.push((c, p));
+        }
+        itens.sort_by_key(|(c, _)| *c);
+        for (c, p) in itens {
+            let row = p.row.min(self.last_row());
+            let linha: String = self.buf.line(row).trim().chars().take(50).collect();
+            t.push_str(&format!(" {c}     {:>5}  {:>3}  {linha}\n", row + 1, p.col));
+        }
+        self.host_aba = Some(("Marcas".into(), t));
+    }
+
+    /// `:delmarks a b`, `:delmarks a-d`, `:delmarks!` (todas as minúsculas).
+    fn ex_delmarks(&mut self, args: &str) {
+        let a = args.trim();
+        if a == "!" {
+            self.marks.retain(|c, _| !c.is_ascii_lowercase());
+            return;
+        }
+        let cs: Vec<char> = a.chars().filter(|c| !c.is_whitespace()).collect();
+        if cs.is_empty() {
+            self.failed = true;
+            return;
+        }
+        let mut i = 0;
+        while i < cs.len() {
+            if i + 2 < cs.len() && cs[i + 1] == '-' {
+                for c in cs[i]..=cs[i + 2] {
+                    self.marks.remove(&c);
+                }
+                i += 3;
+            } else {
+                match cs[i] {
+                    '<' | '>' => self.vmarks = None,
+                    c => {
+                        self.marks.remove(&c);
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /// `:let @a = "texto"` e `:let @a .= "mais"`.
+    fn ex_let(&mut self, args: &str) {
+        let a = args.trim();
+        let Some(rest) = a.strip_prefix('@') else {
+            self.failed = true;
+            return;
+        };
+        let mut cs = rest.chars();
+        let Some(reg) = cs.next() else {
+            self.failed = true;
+            return;
+        };
+        let resto: String = cs.collect();
+        let resto = resto.trim_start();
+        let (anexar, valor) = match resto.strip_prefix(".=") {
+            Some(v) => (true, v),
+            None => match resto.strip_prefix('=') {
+                Some(v) => (false, v),
+                None => {
+                    self.failed = true;
+                    return;
+                }
+            },
+        };
+        let v = valor.trim();
+        let texto = match (v.chars().next(), v.chars().last()) {
+            (Some(q @ ('"' | '\'')), Some(f)) if q == f && v.len() >= 2 => {
+                let interno = &v[1..v.len() - 1];
+                if q == '"' { interno.replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"").replace("\\\\", "\\") } else { interno.replace("''", "'") }
+            }
+            _ => {
+                self.failed = true;
+                return;
+            }
+        };
+        let linhas = texto.ends_with('\n');
+        let nome = reg.to_ascii_lowercase();
+        let atual = self.regs.get(&nome).cloned();
+        let novo = match (anexar, atual) {
+            (true, Some(r)) => super::Reg { text: format!("{}{}", r.text, texto.trim_end_matches('\n')), linewise: r.linewise || linhas, block: false, bwidth: 0 },
+            _ => super::Reg { text: texto.trim_end_matches('\n').to_string(), linewise: linhas, block: false, bwidth: 0 },
+        };
+        match reg {
+            '"' => self.unnamed = Some(novo),
+            c if c.is_ascii_alphanumeric() => {
+                self.regs.insert(nome, novo);
+            }
+            _ => self.failed = true,
+        }
     }
 
     fn ex_apagar(&mut self, a: usize, b: usize) {
@@ -426,6 +771,22 @@ impl Editor {
     }
 
     /// `:[faixa]s/padrão/substituição/flags`.
+    /// `:&`, `:&&`, `:~` e `:s` sem argumentos. `~` usa o último padrão de busca.
+    fn repetir_substituicao(&mut self, a: usize, b: usize, flags: &str, padrao_de_busca: bool) {
+        let Some((pat, rep, antigas)) = self.last_sub.clone() else {
+            self.failed = true;
+            return;
+        };
+        let pat = if padrao_de_busca { self.last_search.as_ref().map(|(p, _)| p.clone()).unwrap_or(pat) } else { pat };
+        let flags = flags.trim_start();
+        let flags = match flags.strip_prefix('&') {
+            Some(r) => format!("{antigas}{r}"),
+            None => flags.to_string(),
+        };
+        let d = '\u{1f}';
+        self.substituir(a, b, &format!("{d}{pat}{d}{rep}{d}{flags}"));
+    }
+
     fn substituir(&mut self, a: usize, b: usize, resto: &str) {
         let chars: Vec<char> = resto.chars().collect();
         let Some(&delim) = chars.first() else {
@@ -458,6 +819,10 @@ impl Editor {
             self.failed = true;
             return;
         }
+        if delim != '\u{1f}' {
+            self.last_sub = Some((pat.clone(), rep.clone(), flags.trim().to_string()));
+        }
+        let contar = flags.contains('n');
         let (padrao, ic_vim) = search::vim_to_regex(&pat);
         let prefixo = if (ic || ic_vim) && !cs { "(?i)" } else { "" };
         let Ok(re) = regex::Regex::new(&format!("{prefixo}{padrao}")) else {
@@ -490,6 +855,11 @@ impl Editor {
                 row += 1;
                 continue;
             }
+            if contar {
+                ultimo = Some(row);
+                row += 1;
+                continue;
+            }
             novo.push_str(&linha[pos..]);
             if !mudou {
                 self.checkpoint();
@@ -508,6 +878,12 @@ impl Editor {
             row += extra + 1;
         }
         match ultimo {
+            Some(_) if contar => {
+                // só contou: o cursor fica na mesma linha, na coluna 0
+                self.cursor = Pos::new(self.cursor.row, 0);
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             Some(r) => {
                 self.cursor = Pos::new(r, self.buf.first_nonblank(r));
                 self.fix_cursor();

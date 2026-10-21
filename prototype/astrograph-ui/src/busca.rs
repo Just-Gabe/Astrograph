@@ -292,6 +292,30 @@ pub fn pontuar(busca: &[char], texto: &str) -> Option<(i32, Vec<usize>)> {
             break;
         }
     }
+    // trecho contíguo igual à busca (`main` em `main.rs`) vale mais que letras espalhadas
+    let n = busca.len();
+    if t.len() >= n {
+        let casa = |i: usize| (0..n).all(|k| eq(t[i + k], busca[k]));
+        let achou = (nome_ini..=t.len() - n).find(|&i| casa(i)).or_else(|| (0..=t.len() - n).find(|&i| casa(i)));
+        if let Some(i) = achou {
+            let mut nota = 10 * n as i32 + 14 * (n as i32 - 1) + 80;
+            if i == 0 || matches!(t[i - 1], '/' | '_' | '-' | '.' | ' ') {
+                nota += 18;
+            }
+            if i >= nome_ini {
+                nota += 30;
+                // o nome do arquivo (sem extensão) é exatamente a busca
+                let fim = t[nome_ini..].iter().position(|&c| c == '.').map_or(t.len(), |d| nome_ini + d);
+                if i == nome_ini && i + n == fim {
+                    nota += 40;
+                }
+            }
+            nota -= (t.len() as i32 - n as i32) / 8;
+            if melhor.as_ref().is_none_or(|(m, _)| nota > *m) {
+                melhor = Some((nota, (i..i + n).collect()));
+            }
+        }
+    }
     melhor
 }
 
@@ -354,6 +378,44 @@ pub fn buscar_texto(raiz: &Path, padrao: &str, limite: usize, tempo: Duration) -
     out
 }
 
+/// Pasta do estado do usuário (recentes, posição do cursor).
+pub fn pasta_estado() -> Option<PathBuf> {
+    dir_estado()
+}
+
+fn dir_estado() -> Option<PathBuf> {
+    arquivo_recentes().and_then(|f| f.parent().map(Path::to_path_buf))
+}
+
+fn chave_caminho(caminho: &Path) -> String {
+    let abs = std::fs::canonicalize(caminho).unwrap_or_else(|_| caminho.to_path_buf());
+    abs.to_string_lossy().trim_start_matches(r"\\?\").to_string()
+}
+
+/// Guarda onde o cursor estava em `caminho` (os últimos 300 arquivos).
+pub fn guardar_cursor(caminho: &Path, linha: usize, col: usize) {
+    let Some(d) = dir_estado() else { return };
+    let f = d.join("cursores.tsv");
+    let chave = chave_caminho(caminho);
+    let mut v = vec![format!("{chave}\t{linha}\t{col}")];
+    if let Ok(t) = std::fs::read_to_string(&f) {
+        v.extend(t.lines().filter(|l| l.split('\t').next().is_some_and(|c| c != chave)).map(str::to_string));
+    }
+    v.truncate(300);
+    let _ = std::fs::create_dir_all(&d);
+    let _ = std::fs::write(f, v.join("\n"));
+}
+
+/// Onde o cursor estava na última vez que `caminho` foi fechado.
+pub fn cursor_guardado(caminho: &Path) -> Option<(usize, usize)> {
+    let t = std::fs::read_to_string(dir_estado()?.join("cursores.tsv")).ok()?;
+    let chave = chave_caminho(caminho);
+    t.lines().find_map(|l| {
+        let mut p = l.split('\t');
+        (p.next()? == chave).then(|| Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?)))?
+    })
+}
+
 /// Onde a lista de recentes fica: `$ASTROGRAPH_STATE`, `%LOCALAPPDATA%`, `$XDG_STATE_HOME` ou `~/.local/state`.
 fn arquivo_recentes() -> Option<PathBuf> {
     let base = std::env::var_os("ASTROGRAPH_STATE")
@@ -388,6 +450,15 @@ pub fn lembrar(caminho: &Path) {
 
 #[cfg(test)]
 mod testes {
+    #[test]
+    fn trecho_contiguo_ganha_de_letras_espalhadas() {
+        let itens: Vec<String> = ["core/lua/plugins/mason-tool-installer.lua", "src/main.rs", "docs/maintenance.md", "src/domain.rs"].iter().map(|s| s.to_string()).collect();
+        let r = fuzzy("main", &itens, 10);
+        assert_eq!(itens[r[0].item], "src/main.rs", "nome igual à busca vem primeiro");
+        assert_eq!(r[0].pos, vec![4, 5, 6, 7]);
+        assert_eq!(itens[r[1].item], "docs/maintenance.md");
+    }
+
     use super::*;
 
     fn tmp(nome: &str) -> PathBuf {
