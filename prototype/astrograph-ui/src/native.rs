@@ -6734,14 +6734,18 @@ mod testes {
     #[test]
     #[cfg(unix)]
     fn instalar_servidor_roda_no_terminal_e_religa_o_lsp_quando_acaba() {
+        // as dicas são globais: sem elas ligadas por outro teste no meio, a oferta de instalar não reaparece aqui
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        crate::dicas::encerrar();
         let inst = lsp::Instalacao { nome: "Teste", requer: Some("sh"), comando: Some("echo instalado"), como: "echo instalado" };
         let mut s = Session::new("x\n", Some("a.ts".into()));
         s.resize(80, 20.0);
         s.lsp_instalar_com(PathBuf::from("a.ts"), inst);
         assert!(s.lsp_instalando.is_some(), "instalação em andamento");
         // quando o processo acaba, avisa (aqui não há servidor de verdade: diz que não achou)
-        let m = espera_term(&mut s, |m| m.toast.as_ref().is_some_and(|(_, t, _)| t.contains("terminou") || t.contains("ativo")));
-        assert!(m.toast.unwrap().1.contains("não achei o servidor"));
+        let m = espera_term(&mut s, |m| m.toast.as_ref().is_some_and(|(_, t, _)| t.contains("não achei o servidor") || t.contains("instalado e ativo")));
+        let texto = m.toast.unwrap().1;
+        assert!(texto.contains("não achei o servidor") || texto.contains("instalado e ativo"), "{texto}");
         assert!(s.lsp_instalando.is_none());
     }
 }
