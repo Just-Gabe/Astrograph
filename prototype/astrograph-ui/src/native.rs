@@ -784,12 +784,13 @@ impl Session {
                 Key::Char('w') => return self.pick_open(PickKind::Texto),
                 Key::Char('a') => return self.open_agent(),
                 Key::Char('s') => {
-                    // última conversa do Claude Code (no projeto atual, se houver; senão a mais recente)
+                    // última conversa do Claude Code deste projeto
                     let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
-                    let alvo = lista.iter().find(|s| s.pasta == self.root).or_else(|| lista.first()).cloned();
-                    match alvo {
+                    // só retoma sozinho a conversa deste projeto; sem ela, mostra a lista para escolher
+                    // (não abre de surpresa uma conversa de outro projeto)
+                    match lista.iter().find(|s| s.pasta == self.root).cloned() {
                         Some(s) => self.retomar_sessao(&s.id, &s.pasta),
-                        None => self.say("Nenhuma conversa anterior encontrada.".into(), ToastKind::Info),
+                        None => self.agente_sessoes(),
                     }
                     return;
                 }
@@ -1757,6 +1758,7 @@ impl Session {
                 self.term = Some(t);
                 self.term_focus = true;
                 self.term_screen = None;
+                self.say("Ctrl+\\ Ctrl+N volta ao editor · Ctrl+\\ q fecha este terminal".into(), ToastKind::Info);
             }
             Err(e) => self.say(format!("Não consegui abrir o terminal: {e}"), ToastKind::Error),
         }
@@ -2351,7 +2353,7 @@ impl Session {
         }
     }
 
-    /// Teclas com o terminal em foco: vão para o pty; `<C-\><C-n>` devolve o teclado ao editor.
+    /// Teclas com o terminal em foco: vão para o pty; `<C-\><C-n>` devolve o teclado ao editor e `<C-\>q` fecha o terminal.
     fn term_feed(&mut self, keys: &str) {
         // processo terminado: qualquer tecla fecha o painel
         if self.term_screen.as_ref().is_some_and(|s| s.exited) {
@@ -2370,6 +2372,11 @@ impl Session {
         let esc = |k: &str| matches!(k.to_lowercase().as_str(), "<c-bslash>" | "<c-\\>");
         if self.term_esc {
             self.term_esc = false;
+            if keys == "q" || keys == "Q" {
+                // fecha o terminal (e o agente que estiver nele) sem precisar sair e usar o líder
+                self.term_close();
+                return;
+            }
             if keys.eq_ignore_ascii_case("<C-n>") {
                 self.term_focus = false;
                 self.term_zen = false;
@@ -6209,5 +6216,17 @@ mod testes {
         s.resize(80, 20.0);
         s.feed(":%!sort<CR>");
         assert_eq!((s.ed.buf.line(0), s.ed.buf.line(2)), ("x".to_string(), "z".to_string()));
+    }
+
+    #[test]
+    fn ctrl_barra_invertida_q_fecha_o_terminal() {
+        let mut s = Session::new("x\n", None);
+        s.resize(80, 20.0);
+        s.feed(" t");
+        assert!(modelo(&mut s).term.is_some());
+        s.feed("<C-Bslash>");
+        s.feed("q");
+        let m = modelo(&mut s);
+        assert!(m.term.is_none() && m.mode != ModeKind::Terminal);
     }
 }
