@@ -32,6 +32,9 @@ pub enum PickKind {
     Lista,
 }
 
+mod ajustes;
+use ajustes::Ajuste;
+
 /// O que acontece ao escolher um item de uma lista.
 #[derive(Clone, Debug)]
 enum Destino {
@@ -43,6 +46,11 @@ enum Destino {
     Agente(&'static str),
     Modo(&'static str),
     Sessao { id: String, pasta: PathBuf },
+    /// navegar para dentro de uma pasta / abrir a pasta como projeto
+    Pasta(PathBuf),
+    AbrirPasta(PathBuf),
+    /// uma linha da central de configurações
+    Ajuste(Ajuste),
 }
 
 #[derive(Clone, Debug)]
@@ -120,7 +128,12 @@ struct Comp {
 
 const COMP_LINHAS: usize = 8;
 /// quanto esperar depois da líder para mostrar o menu de atalhos
-const LIDER_MENU_MS: u64 = 450;
+
+/// Ações do menu da tela inicial, na ordem em que aparecem (a letra é o atalho).
+pub const DASH_ACOES: [char; 8] = ['n', 'f', 'p', 'o', 'w', 'a', 's', 'c'];
+
+/// O que cada ação faz, para as dicas.
+const DASH_DESC: [&str; 8] = ["novo arquivo", "buscar arquivo pelo nome", "abrir pasta", "arquivos recentes", "buscar palavra no projeto", "abrir o agente de IA", "retomar a conversa", "central de configurações"];
 
 /// Paradas do snippet que acabou de entrar: (início, fim) de cada uma, a atual e se o valor padrão
 /// ainda está selecionado.
@@ -219,6 +232,8 @@ pub struct Session {
     toast_id: u64,
     seq: u64,
     dash: bool,
+    /// ação destacada no menu da tela inicial
+    dash_sel: usize,
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
@@ -233,6 +248,8 @@ pub struct Session {
     proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
     /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
     leader_desde: Option<std::time::Instant>,
+    /// setas apertadas em seguida no modo normal (para ensinar h j k l)
+    setas_seguidas: u32,
     /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
     ia_prompt: Option<(IaTipo, String)>,
     ia_job: Option<IaJob>,
@@ -377,6 +394,7 @@ impl Session {
             lang,
             doc: None,
             dash: false,
+            dash_sel: 0,
             picker: None,
             tree: None,
             tree_focus: false,
@@ -387,6 +405,7 @@ impl Session {
             larga_cache: std::cell::Cell::new((u64::MAX, 0, false)),
             proj: std::cell::RefCell::new(None),
             leader_desde: None,
+            setas_seguidas: 0,
             ia_prompt: None,
             ia_job: None,
             ia_cmd: None,
@@ -538,6 +557,11 @@ impl Session {
         self.ed.buf.rev != self.saved_rev
     }
 
+    /// O nome mostrado na aba.
+    fn nome_curto(&self) -> String {
+        self.nome_fixo.clone().or_else(|| self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())).unwrap_or_else(|| "Sem nome".into())
+    }
+
     /// Este painel ou algum outro da aba tem alterações não salvas.
     fn tem_alteracoes(&self) -> bool {
         self.modified() || self.splits.as_ref().is_some_and(|sp| sp.outros.iter().any(Session::modified))
@@ -641,6 +665,12 @@ impl Session {
             let c = c.min(self.ed.buf.line_len(r));
             self.ed.set_cursor(r, c);
         } else {
+            // muitas setas seguidas: ensina os movimentos do Vim
+            self.setas_seguidas += 1;
+            if self.setas_seguidas >= 8 {
+                self.setas_seguidas = 0;
+                self.dica("setas", "Sem tirar a mão do teclado: h j k l movem · w e b pulam palavras · 0 e $ início e fim da linha · gg e G topo e fim".into(), 2);
+            }
             match n {
                 Nav::Left => self.ed.feed(&[Key::Char('h')]),
                 Nav::Right => self.ed.feed(&[Key::Char('l')]),
@@ -655,6 +685,7 @@ impl Session {
     }
 
     fn key(&mut self, k: Key) {
+        self.setas_seguidas = 0;
         if self.picker.is_some() {
             self.pick_key(k);
             return;
@@ -664,14 +695,8 @@ impl Session {
         let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
         if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
+            // o menu de atalhos é decisão da cena: ela espera um pouco e o anima (sem depender de outra thread)
             self.leader_desde = Some(std::time::Instant::now());
-            // acorda a tela quando chegar a hora de mostrar o menu de atalhos
-            if let Some(n) = self.notify.clone() {
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(LIDER_MENU_MS + 30));
-                    n();
-                });
-            }
             return;
         }
         if !self.leader.is_empty() {
@@ -727,6 +752,8 @@ impl Session {
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
+                [Key::Char('f'), Key::Char('p')] => self.pasta_navegar(self.root.clone()),
+                [Key::Char('f'), Key::Char('c')] => self.configuracoes(0),
                 _ => {
                     // não é atalho: devolve as teclas ao editor
                     let all = std::mem::take(&mut self.leader);
@@ -775,26 +802,17 @@ impl Session {
         }
         if self.dash && livre {
             match k {
-                Key::Char('n') => {
-                    self.dash = false;
-                    self.ed.feed(&[Key::Char('i')]);
+                // j/k, Ctrl+N/P e as setas movem o destaque; Enter faz a ação destacada
+                Key::Char('j') | Key::Ctrl('n') => {
+                    self.dash_sel = (self.dash_sel + 1).min(DASH_ACOES.len() - 1);
                     return;
                 }
-                Key::Char('f') => return self.pick_open(PickKind::Arquivos),
-                Key::Char('o') => return self.pick_open(PickKind::Recentes),
-                Key::Char('w') => return self.pick_open(PickKind::Texto),
-                Key::Char('a') => return self.open_agent(),
-                Key::Char('s') => {
-                    // última conversa do Claude Code deste projeto
-                    let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
-                    // só retoma sozinho a conversa deste projeto; sem ela, mostra a lista para escolher
-                    // (não abre de surpresa uma conversa de outro projeto)
-                    match lista.iter().find(|s| s.pasta == self.root).cloned() {
-                        Some(s) => self.retomar_sessao(&s.id, &s.pasta),
-                        None => self.agente_sessoes(),
-                    }
+                Key::Char('k') | Key::Ctrl('p') => {
+                    self.dash_sel = self.dash_sel.saturating_sub(1);
                     return;
                 }
+                Key::Enter => return self.dash_acao(DASH_ACOES[self.dash_sel.min(DASH_ACOES.len() - 1)]),
+                Key::Char(c) if DASH_ACOES.contains(&c) => return self.dash_acao(c),
                 _ => {}
             }
         }
@@ -802,6 +820,111 @@ impl Session {
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
         }
+    }
+
+    /// Mostra uma dica de atalho (poucas vezes por dica, com intervalo entre elas; some em Configurações).
+    fn dica(&mut self, id: &str, texto: String, max: u32) {
+        if crate::dicas::mostrar(id, max) {
+            self.say(texto, ToastKind::Dica);
+        }
+    }
+
+    fn lider_nome(&self) -> String {
+        tecla_nome(self.leader_key)
+    }
+
+    /// Faz a ação da tela inicial identificada pela letra (a mesma tecla do atalho).
+    fn dash_acao(&mut self, c: char) {
+        if let Some(i) = DASH_ACOES.iter().position(|&a| a == c) {
+            self.dash_sel = i;
+        }
+        match c {
+            'n' => {
+                self.dash = false;
+                self.ed.feed(&[Key::Char('i')]);
+            }
+            'f' => self.pick_open(PickKind::Arquivos),
+            'p' => self.pasta_navegar(self.root.clone()),
+            'c' => self.configuracoes(0),
+            'o' => self.pick_open(PickKind::Recentes),
+            'w' => self.pick_open(PickKind::Texto),
+            'a' => self.open_agent(),
+            's' => {
+                // última conversa do Claude Code deste projeto; sem ela, mostra a lista para escolher
+                // (não abre de surpresa uma conversa de outro projeto)
+                let lista = crate::agentes::pasta_do_claude().map(|b| crate::agentes::sessoes_claude(&b)).unwrap_or_default();
+                match lista.iter().find(|s| s.pasta == self.root).cloned() {
+                    Some(s) => self.retomar_sessao(&s.id, &s.pasta),
+                    None => self.agente_sessoes(),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Clique num item do menu da tela inicial.
+    pub fn dash_click(&mut self, i: usize) {
+        if !self.dash || self.picker.is_some() || i >= DASH_ACOES.len() {
+            return;
+        }
+        let c = DASH_ACOES[i];
+        // quem clica aprende a tecla que faz o mesmo
+        self.dica(&format!("dash-{c}"), format!("Na tela inicial, a tecla {c} faz isso: {}", DASH_DESC[i]), 2);
+        self.dash_acao(c);
+    }
+
+    /// O mouse passou por cima de um item do menu da tela inicial: o destaque vai para ele.
+    pub fn dash_hover(&mut self, i: usize) {
+        if self.dash && self.picker.is_none() && i < DASH_ACOES.len() {
+            self.dash_sel = i;
+        }
+    }
+
+    /// Lista as pastas de `dir` para escolher: a primeira linha abre a própria pasta, `..` sobe, as outras entram.
+    fn pasta_navegar(&mut self, dir: PathBuf) {
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let dir = crate::busca::sem_prefixo_unc(&dir);
+        let mut itens = vec![ListaItem { texto: "Abrir esta pasta".into(), detalhe: crate::busca::encurtar_home(&dir), destino: Destino::AbrirPasta(dir.clone()) }];
+        if let Some(pai) = dir.parent() {
+            itens.push(ListaItem { texto: ".. (pasta acima)".into(), detalhe: crate::busca::encurtar_home(pai), destino: Destino::Pasta(pai.to_path_buf()) });
+        }
+        let mut subs: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                    .filter(|(n, _)| !n.starts_with('.'))
+                    .collect()
+            })
+            .unwrap_or_default();
+        subs.sort_by_key(|(n, _)| n.to_lowercase());
+        itens.extend(subs.into_iter().take(1000).map(|(n, p)| ListaItem { texto: format!("  {n}/"), detalhe: String::new(), destino: Destino::Pasta(p) }));
+        self.pick_lista(&format!("Abrir pasta · {}", crate::busca::encurtar_home(&dir)), itens);
+    }
+
+    /// Abre o Astrograph nesta pasta: ela vira a raiz do projeto (buscas, explorador, git, terminal e agentes).
+    pub fn abrir_pasta(&mut self, dir: PathBuf) {
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let dir = crate::busca::sem_prefixo_unc(&dir);
+        if !dir.is_dir() {
+            self.say(format!("Não é uma pasta: {}", dir.display()), ToastKind::Error);
+            return;
+        }
+        if self.modified() {
+            self.say("Alterações não salvas. Salve com :w antes de trocar de pasta.".into(), ToastKind::Error);
+            return;
+        }
+        let _ = std::env::set_current_dir(&dir);
+        self.root = dir.clone();
+        self.picker = None;
+        // o explorador acompanha a pasta nova; o git é lido de novo
+        if self.tree.is_some() {
+            self.tree = Some(Arvore::nova(&dir));
+            self.tree_git_load();
+        }
+        self.tree_clip = None;
+        self.git_load();
+        self.say(format!("Pasta aberta: {}", crate::busca::encurtar_home(&dir)), ToastKind::Done);
     }
 
     // ------------------------------------------------------------------
@@ -818,6 +941,14 @@ impl Session {
         self.lsp_rev = self.ed.buf.rev;
         self.lsp_diags = std::sync::Arc::new(Vec::new());
         let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
+            // há servidor conhecido para esse tipo de arquivo mas ele não está instalado: diz como instalar (uma vez)
+            if !off && std::env::var_os("ASTROGRAPH_LSP_CMD").is_none() {
+                if let Some((nome, como)) = lsp::dica_de_instalacao(&path) {
+                    if crate::dicas::mostrar(&format!("lsp-{nome}"), 2) {
+                        self.say(format!("Sem servidor de linguagem para {nome}. Instale: {como}"), ToastKind::Info);
+                    }
+                }
+            }
             return;
         };
         let raiz = lsp::raiz_do_projeto(&path, &self.root);
@@ -843,7 +974,12 @@ impl Session {
         if let Some(c) = &cli {
             c.lock().unwrap().abrir(&path, lang, &self.ed.buf.rope.to_string());
         }
+        let subiu = cli.is_some();
         self.lsp = cli;
+        if subiu {
+            let dica = format!("Com o servidor de linguagem: K documentação · gd definição · gr referências · {0}rn renomeia · {0}ca ações de código", self.lider_nome());
+            self.dica("lsp-uso", dica, 2);
+        }
     }
 
     /// Manda o texto novo ao servidor e pega o que ele já respondeu.
@@ -1652,7 +1788,7 @@ impl Session {
 
     /// Menu de atalhos: depois da líder, esperando um tempo, mostra o que cada tecla faz.
     fn menu_lider(&self) -> Vec<(String, String)> {
-        if self.leader.is_empty() || self.leader_desde.is_none_or(|t| t.elapsed().as_millis() < LIDER_MENU_MS as u128) {
+        if self.leader.is_empty() {
             return Vec::new();
         }
         let prefixo: String = self.leader[1..].iter().filter_map(|k| k.as_char()).collect();
@@ -2582,6 +2718,9 @@ impl Session {
         t.sel = i;
         self.term_focus = false;
         let n = t.nos[i].clone();
+        let dica = format!("Explorador pelo teclado: {}e abre e fecha · j k navegam · Enter abre · a cria · r renomeia · d apaga", self.lider_nome());
+        self.dica("explorador", dica, 2);
+        let Some(t) = self.tree.as_mut() else { return };
         if n.pasta {
             t.alternar();
             self.tree_focus = true;
@@ -2870,6 +3009,9 @@ impl Session {
                     Destino::Agente(bin) => self.escolher_agente(bin),
                     Destino::Modo(id) => self.escolher_modo(id),
                     Destino::Sessao { id, pasta } => self.retomar_sessao(&id, &pasta),
+                    Destino::Pasta(d) => self.pasta_navegar(d),
+                    Destino::AbrirPasta(d) => self.abrir_pasta(d),
+                    Destino::Ajuste(a) => self.ajuste_aplicar(a),
                 }
                 return;
             }
@@ -3320,6 +3462,21 @@ impl Session {
                 }
             }
             "wq" | "x" | "xit" | "exit" => self.write_sair(arg, true),
+            "config" | "configuracoes" | "configurações" | "settings" => self.configuracoes(0),
+            "cd" | "chdir" | "lcd" => {
+                // `:cd pasta` abre o Astrograph naquela pasta (`~` é a home; sem argumento, mostra a lista)
+                if arg.is_empty() {
+                    return self.pasta_navegar(self.root.clone());
+                }
+                let alvo = match arg.strip_prefix('~') {
+                    Some(r) => crate::busca::pasta_home().map(|h| h.join(r.trim_start_matches(['/', '\\']))).unwrap_or_else(|| PathBuf::from(arg)),
+                    None => {
+                        let p = PathBuf::from(arg);
+                        if p.is_absolute() { p } else { self.root.join(p) }
+                    }
+                };
+                self.abrir_pasta(alvo);
+            }
             "e" | "edit" => {
                 if arg.is_empty() {
                     return;
@@ -3756,9 +3913,12 @@ impl Session {
             },
             bump: self.bump,
             dash: self.dash,
+            dash_sel: self.dash_sel,
+            dash_pasta: crate::busca::encurtar_home(&self.root),
             diags,
             hover: self.hover_text.clone(),
             whichkey: self.menu_lider(),
+            whichkey_desde: self.leader_desde.filter(|_| !self.leader.is_empty()),
             progress: if self.atualizando.is_some() { Some("Atualizando o Astrograph…".to_string()) } else if self.ia_job.is_some() { Some("IA trabalhando…".to_string()) } else { self.lsp_progresso() },
             numero: self.numero,
             relativo: self.relativo,
@@ -3774,10 +3934,11 @@ impl Session {
             git: self.git_branch.clone().map(|branch| GitView { branch, signs: signs.clone() }),
             term: self.term_screen.as_ref().map(|s| TermView { screen: s.clone(), focus: self.term_focus, zen: self.term_zen, sel: self.term_sel }),
             tree: self.tree.as_ref().map(|t| {
-                let first = t.sel.saturating_sub(100);
+                // todos os nós visíveis (até um teto): a roda do mouse rola o explorador por conta própria
+                let first = 0;
                 TreeView {
                     root: t.raiz.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| t.raiz.display().to_string()),
-                    items: t.nos.iter().skip(first).take(240).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
+                    items: t.nos.iter().skip(first).take(20_000).map(|n| TreeItem { name: n.nome.clone(), level: n.nivel, dir: n.pasta, open: n.aberta, git: self.tree_git.get(&n.caminho).copied().unwrap_or(' ') }).collect(),
                     first,
                     sel: t.sel,
                     total: t.nos.len(),
@@ -3887,6 +4048,8 @@ pub struct Workspace {
     /// tamanho da área de texto (colunas, linhas)
     dims: (usize, f32),
     pub sair: bool,
+    /// a janela pediu para fechar com alterações não salvas: um segundo pedido logo depois descarta
+    fechar_armado: Option<std::time::Instant>,
 }
 
 impl Workspace {
@@ -3901,7 +4064,12 @@ impl Workspace {
         s.set_notify(notify.clone());
         s.modo_abas = true;
         s.lsp_attach();
-        Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false }
+        let mut w = Workspace { abas: vec![s], ativa: 0, pool, notify: Some(notify), leader, formatar: false, clipboard_mais: false, mapas: Vec::new(), mapas_v: 0, dims: (80, 24.0), sair: false, fechar_armado: None };
+        if w.abas[0].dash {
+            let dica = format!("Aperte {} e espere um instante: o menu mostra todos os atalhos", w.abas[0].lider_nome());
+            w.abas[0].dica("inicio", dica, 3);
+        }
+        w
     }
 
     fn atual(&mut self) -> &mut Session {
@@ -4297,6 +4465,19 @@ impl Workspace {
     }
 
     /// Resolve o que a aba ativa pediu (abrir arquivo, comandos de aba, sair).
+    /// O botão de fechar da janela. Sem alterações não salvas sai; com elas avisa quais arquivos e só sai
+    /// no segundo pedido (em até 6 s), como o `confirm qa` do Neovim.
+    pub fn pedido_de_fechar(&mut self) {
+        let sujas: Vec<String> = self.abas.iter().filter(|s| s.tem_alteracoes()).map(|s| s.nome_curto()).collect();
+        if sujas.is_empty() || self.fechar_armado.is_some_and(|t| t.elapsed().as_secs() < 6) {
+            self.sair = true;
+            return;
+        }
+        self.fechar_armado = Some(std::time::Instant::now());
+        let lista = sujas.join(", ");
+        self.atual().say(format!("Alterações não salvas em {lista}. Salve com :w ou feche a janela de novo para descartar."), ToastKind::Error);
+    }
+
     fn depois(&mut self) {
         for _ in 0..8 {
             // as edições do painel focado chegam aos irmãos antes de qualquer pedido (fechar, dividir)
@@ -4404,6 +4585,9 @@ impl Workspace {
     /// Vai para a aba `i` (clique na barra).
     pub fn ir_para(&mut self, i: usize) {
         self.trocar(i);
+        let dica = format!("gt e gT trocam de aba · {}ff abre outro arquivo", self.abas[self.ativa].lider_nome());
+        let a = self.ativa;
+        self.abas[a].dica("abas", dica, 2);
     }
 
     pub fn view_model(&mut self) -> ViewModel {
@@ -4467,6 +4651,9 @@ pub async fn native_task(
             UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
             UiCommand::TreeClick(i) => w.atual().tree_click(i),
+            UiCommand::Close => w.pedido_de_fechar(),
+            UiCommand::DashClick(i) => w.atual().dash_click(i),
+            UiCommand::DashHover(i) => w.atual().dash_hover(i),
             UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
             UiCommand::Paste(t) => w.atual().colar(&t),
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
@@ -5027,8 +5214,9 @@ mod testes {
         let mut s = Session::new("abc\n", None);
         s.resize(80, 20.0);
         s.feed(" ");
-        assert!(modelo(&mut s).whichkey.is_empty(), "logo depois da líder ainda não mostra");
-        s.leader_desde = Some(std::time::Instant::now() - std::time::Duration::from_millis(LIDER_MENU_MS + 10));
+        // a sessão já publica a lista (e quando a líder foi apertada); a cena decide quando mostrar
+        let m = modelo(&mut s);
+        assert!(m.whichkey_desde.is_some());
         let m = modelo(&mut s);
         assert!(m.whichkey.contains(&("e".into(), "Explorador de arquivos".into())));
         assert!(m.whichkey.contains(&("f".into(), "+Buscar".into())));
@@ -5038,7 +5226,8 @@ mod testes {
         assert!(m.whichkey.iter().any(|(k, d)| k == "z" && d == "Modo zen"), "{:?}", m.whichkey);
         // esc fecha
         s.feed("<Esc>");
-        assert!(modelo(&mut s).whichkey.is_empty());
+        let m = modelo(&mut s);
+        assert!(m.whichkey.is_empty() && m.whichkey_desde.is_none());
     }
 
     #[test]
@@ -6282,5 +6471,155 @@ mod testes {
         // o teclado do explorador segue funcionando
         s.feed(" ejk<CR>");
         assert_eq!(modelo(&mut s).name, "beta.rs");
+    }
+
+    #[test]
+    fn tela_inicial_clique_teclado_e_abrir_pasta() {
+        let d = projeto("dash");
+        let outro = projeto("dash-outra");
+        // j/k movem o destaque, Enter faz a ação destacada
+        let mut s = Session::new("", None);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.dash = true;
+        s.feed("jj");
+        assert_eq!(modelo(&mut s).dash_sel, 2, "terceira ação = Abrir pasta");
+        s.feed("k");
+        assert_eq!(modelo(&mut s).dash_sel, 1);
+        // mouse por cima leva o destaque; clicar faz a ação (Abrir pasta abre a lista de pastas)
+        s.dash_hover(2);
+        assert_eq!(modelo(&mut s).dash_sel, 2);
+        s.dash_click(2);
+        let m = modelo(&mut s);
+        let p = m.picker.expect("lista de pastas");
+        assert!(p.title.starts_with("Abrir pasta"), "{}", p.title);
+        assert_eq!(p.items[0].text, "Abrir esta pasta");
+        // digitar filtra; Enter na primeira linha abre a pasta atual como projeto
+        s.feed("<CR>");
+        assert!(modelo(&mut s).picker.is_none());
+        // entrar numa pasta e abri-la
+        let mut s2 = Session::new("", None);
+        s2.root = d.clone();
+        s2.resize(80, 20.0);
+        s2.dash = true;
+        s2.feed("p");
+        let itens: Vec<String> = modelo(&mut s2).picker.unwrap().items.iter().map(|i| i.text.clone()).collect();
+        assert!(itens.iter().any(|t| t.contains("src/")), "{itens:?}");
+        s2.feed("src<CR>");
+        let p = modelo(&mut s2).picker.expect("dentro de src");
+        assert!(p.title.contains("src"), "{}", p.title);
+        s2.feed("<CR>");
+        assert!(s2.root.ends_with("src"), "{:?}", s2.root);
+        // `:cd` troca de pasta direto
+        s2.dash = true;
+        s2.feed(&format!(":cd {}<CR>", outro.display()));
+        assert_eq!(s2.root.canonicalize().unwrap(), outro.canonicalize().unwrap());
+        // com o explorador aberto, ele passa a mostrar a pasta nova
+        s2.feed(" e");
+        let t = modelo(&mut s2).tree.unwrap();
+        assert_eq!(t.root, outro.file_name().unwrap().to_string_lossy());
+        // pasta que não existe: avisa e não muda
+        let antes = s2.root.clone();
+        s2.abrir_pasta(outro.join("nao-existe"));
+        assert_eq!(s2.root, antes);
+        // "Novo arquivo" (primeira ação) por clique entra no modo de inserção
+        let mut s3 = Session::new("", None);
+        s3.resize(80, 20.0);
+        s3.dash = true;
+        s3.dash_click(0);
+        let m = modelo(&mut s3);
+        assert!(!m.dash && m.mode == ModeKind::Insert);
+    }
+
+    #[test]
+    fn fechar_a_janela_sai_ou_avisa_das_alteracoes() {
+        let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(|| {});
+        // sem alterações: sai direto
+        let mut w = Workspace::new(None, ' ', notify.clone());
+        w.pedido_de_fechar();
+        assert!(w.sair);
+        // com alterações: avisa e só sai no segundo pedido
+        let mut w = Workspace::new(None, ' ', notify);
+        w.atual().feed("ixy<Esc>");
+        w.pedido_de_fechar();
+        assert!(!w.sair, "não sai de primeira com alterações não salvas");
+        let vm = w.view_model();
+        assert!(vm.toast.as_ref().is_some_and(|(_, t, _)| t.contains("não salvas")), "{:?}", vm.toast);
+        w.pedido_de_fechar();
+        assert!(w.sair, "o segundo pedido descarta");
+    }
+
+    #[test]
+    fn dicas_ensinam_o_atalho_de_quem_clica_e_das_setas_e_podem_ser_desligadas() {
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        crate::dicas::zerar();
+        // clicar na tela inicial ensina a tecla
+        let mut s = Session::new("", None);
+        s.resize(80, 20.0);
+        s.dash = true;
+        s.dash_click(1);
+        let m = modelo(&mut s);
+        let (_, texto, tipo) = m.toast.expect("dica");
+        assert_eq!(tipo, ToastKind::Dica);
+        assert!(texto.contains("tecla f") && texto.contains("buscar arquivo"), "{texto}");
+        // não vira chuva: outra logo em seguida espera o intervalo
+        crate::dicas::zerar();
+        let mut s2 = Session::new("abc\n", None);
+        s2.resize(80, 20.0);
+        s2.feed("<Right><Right><Right><Right><Right><Right><Right><Right>");
+        let m = modelo(&mut s2);
+        assert!(m.toast.as_ref().is_some_and(|(_, t, k)| *k == ToastKind::Dica && t.contains("h j k l")), "{:?}", m.toast);
+        // desligadas: nada
+        crate::dicas::zerar();
+        crate::dicas::ligar(false);
+        let mut s3 = Session::new("abc\n", None);
+        s3.resize(80, 20.0);
+        s3.feed("<Right><Right><Right><Right><Right><Right><Right><Right>");
+        assert!(modelo(&mut s3).toast.is_none());
+        crate::dicas::encerrar();
+    }
+
+    #[test]
+    fn central_de_configuracoes_troca_grava_e_aplica() {
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        let arq = crate::config::caminho_para_gravar();
+        let _ = std::fs::remove_file(&arq);
+        let mut s = Session::new("", None);
+        s.resize(80, 20.0);
+        s.dash = true;
+        // `c` na tela inicial abre as configurações
+        s.feed("c");
+        let p = modelo(&mut s).picker.expect("configurações");
+        assert!(p.title.starts_with("Configurações"), "{}", p.title);
+        assert_eq!(p.items.len(), 10, "a lista mostra 10 linhas e rola com a seleção");
+        assert_eq!((p.items[1].text.as_str(), p.items[1].detail.as_str()), ("Tamanho da fonte", "22 px"));
+        // trocar a fonte: grava, avisa que vale ao reabrir e a lista volta na mesma linha com o valor novo
+        s.ajuste_aplicar(Ajuste::Fonte);
+        let m = modelo(&mut s);
+        let p = m.picker.as_ref().expect("lista de volta");
+        assert_eq!((p.sel, p.items[1].detail.as_str()), (1, "24 px"));
+        assert!(m.toast.as_ref().is_some_and(|(_, t, _)| t.contains("reabrir")), "{:?}", m.toast);
+        assert_eq!(crate::config::atual().font.size, 24.0);
+        // quebra de linha e formatar ao salvar valem na hora
+        s.ajuste_aplicar(Ajuste::Quebra);
+        assert!(s.wrap);
+        s.ajuste_aplicar(Ajuste::Formatar);
+        assert!(s.formatar_ao_salvar);
+        // dicas ligam/desligam na hora
+        s.ajuste_aplicar(Ajuste::Dicas);
+        assert!(!crate::config::atual().ui.tips && !crate::dicas::ligadas());
+        // líder e animação do cursor avançam na lista
+        s.ajuste_aplicar(Ajuste::Lider);
+        s.ajuste_aplicar(Ajuste::AnimCursor);
+        let c = crate::config::atual();
+        assert_eq!((c.keys.leader.as_str(), c.cursor.animation_ms), (",", 120));
+        // o arquivo guarda só o que mudou
+        let t = std::fs::read_to_string(&arq).unwrap();
+        assert!(t.contains("[font]") && t.contains("[keys]") && !t.contains("[clock]"), "{t}");
+        // abrir o arquivo de configuração abre o próprio arquivo
+        s.ajuste_aplicar(Ajuste::ArquivoConfig);
+        assert_eq!(s.path.as_deref(), Some(arq.as_path()));
+        crate::dicas::encerrar();
+        let _ = std::fs::remove_file(&arq);
     }
 }

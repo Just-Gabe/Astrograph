@@ -379,6 +379,31 @@ pub fn buscar_texto(raiz: &Path, padrao: &str, limite: usize, tempo: Duration) -
 }
 
 /// Pasta do estado do usuário (recentes, posição do cursor).
+/// A pasta do usuário (`HOME` ou `USERPROFILE`).
+pub fn pasta_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).filter(|p| p.is_dir())
+}
+
+/// Tira o prefixo `\\?\` que o Windows põe em caminhos canônicos (o resto do app não o espera).
+pub fn sem_prefixo_unc(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(r) if !r.starts_with("UNC") => PathBuf::from(r),
+        _ => p.to_path_buf(),
+    }
+}
+
+/// O caminho com a home trocada por `~`, para mostrar.
+pub fn encurtar_home(p: &Path) -> String {
+    if let Some(h) = pasta_home() {
+        if let Ok(r) = p.strip_prefix(&h) {
+            let r = r.to_string_lossy();
+            return if r.is_empty() { "~".to_string() } else { format!("~/{}", r.replace('\\', "/")) };
+        }
+    }
+    p.to_string_lossy().into_owned()
+}
+
 pub fn pasta_estado() -> Option<PathBuf> {
     dir_estado()
 }
