@@ -302,6 +302,32 @@ impl Editor {
         self.curswant = self.want_here();
     }
 
+    /// Dobras automáticas (`foldmethod=indent` ou `syntax`): troca todas pelas `faixas` `(ini, fim)`. As que já
+    /// existiam com a mesma faixa mantêm o estado; as novas fecham se estiverem fundo demais para o `foldlevel`.
+    pub fn definir_dobras_auto(&mut self, faixas: &[(usize, usize)]) {
+        let antes: std::collections::HashMap<(usize, usize), bool> = self.folds.iter().map(|f| ((f.ini, f.fim), f.fechada)).collect();
+        let mut novas: Vec<Fold> = faixas.iter().filter(|(a, b)| b > a).map(|&(ini, fim)| Fold { ini, fim, fechada: false }).collect();
+        novas.sort_by_key(|f| (f.ini, std::cmp::Reverse(f.fim)));
+        novas.dedup_by_key(|f| (f.ini, f.fim));
+        self.folds = novas;
+        let prof = self.profundidades();
+        let nivel = self.foldlevel;
+        for (i, f) in self.folds.iter_mut().enumerate() {
+            f.fechada = antes.get(&(f.ini, f.fim)).copied().unwrap_or(prof[i] >= nivel);
+        }
+    }
+
+    /// `:set foldlevel=N`.
+    pub fn set_foldlevel(&mut self, n: usize) {
+        self.foldlevel = n;
+        self.aplicar_nivel();
+    }
+
+    /// As dobras (para o app salvar ou comparar).
+    pub fn dobras(&self) -> &[Fold] {
+        &self.folds
+    }
+
     /// As linhas mudaram: as dobras acompanham (como as marcas).
     pub(super) fn ajustar_folds(&mut self, old: &Rope) {
         if self.folds.is_empty() {

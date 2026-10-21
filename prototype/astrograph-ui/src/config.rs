@@ -39,11 +39,13 @@ impl Default for ThemeCfg {
 pub struct EditorCfg {
     /// `"unnamedplus"`: copiar e colar sem registrador usa o clipboard do sistema (`:set clipboard=unnamedplus`)
     pub clipboard: String,
+    /// `"manual"` (padrão), `"indent"` ou `"syntax"` (tree-sitter): como as dobras (`za`, `zM`...) são achadas
+    pub foldmethod: String,
 }
 
 impl Default for EditorCfg {
     fn default() -> Self {
-        EditorCfg { clipboard: String::new() }
+        EditorCfg { clipboard: String::new(), foldmethod: "manual".into() }
     }
 }
 

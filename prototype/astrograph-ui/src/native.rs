@@ -221,6 +221,9 @@ pub struct Session {
     picker: Option<Picker>,
     tree: Option<Arvore>,
     tree_focus: bool,
+    /// dobras automáticas: o método e a revisão do texto para a qual foram calculadas
+    fold_metodo: crate::dobras::Metodo,
+    fold_rev: u64,
     /// projeção das dobras fechadas (cache por revisão e dobras)
     proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
     /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
@@ -372,6 +375,8 @@ impl Session {
             picker: None,
             tree: None,
             tree_focus: false,
+            fold_metodo: crate::dobras::METODO_INICIAL.get().copied().unwrap_or_default(),
+            fold_rev: u64::MAX,
             proj: std::cell::RefCell::new(None),
             leader_desde: None,
             ia_prompt: None,
@@ -3085,6 +3090,19 @@ impl Session {
                     self.ed.clipboard_unnamedplus = v.contains("unnamedplus");
                 }
                 // opções que o app não implementa mas que não devem incomodar
+                "foldmethod" | "fdm" => match valor.and_then(crate::dobras::Metodo::de) {
+                    Some(m) => {
+                        self.fold_metodo = m;
+                        self.fold_rev = u64::MAX;
+                        // as dobras automáticas começam abertas (como `foldlevel=99`); `zM` fecha tudo
+                        self.ed.set_foldlevel(99);
+                    }
+                    None => self.say(format!("E474: Argumento inválido: {t}"), ToastKind::Error),
+                },
+                "foldlevel" | "fdl" => match valor.and_then(|v| v.parse::<usize>().ok()) {
+                    Some(n) => self.ed.set_foldlevel(n),
+                    None => self.say(format!("E521: número esperado: {t}"), ToastKind::Error),
+                },
                 "background" | "bg" => match valor {
                     Some("light") => crate::design::set_light(true),
                     Some("dark") => crate::design::set_light(false),
@@ -3278,6 +3296,33 @@ impl Session {
     }
 
     /// Mantém o cursor à vista: rola o mínimo (ou centraliza num salto longe).
+    /// Refaz as dobras automáticas (`foldmethod=indent|syntax`) quando o texto mudou.
+    fn fold_auto(&mut self) {
+        let rev = self.ed.buf.rev;
+        if self.fold_metodo == crate::dobras::Metodo::Manual || self.fold_rev == rev {
+            return;
+        }
+        self.fold_rev = rev;
+        let faixas = match self.fold_metodo {
+            crate::dobras::Metodo::Indent => crate::dobras::por_recuo(&self.ed.lines(), self.ed.shiftwidth(), astrograph_core::motion::tabstop()),
+            crate::dobras::Metodo::Syntax => {
+                self.refresh_syntax();
+                let Some((doc, _)) = self.doc.as_ref() else { return };
+                let mut v = Vec::new();
+                for cap in ["@function.outer", "@class.outer", "@loop.outer", "@conditional.outer", "@block.outer"] {
+                    for r in doc.textobject_ranges(cap) {
+                        // fim exclusivo na coluna 0: a dobra acaba na linha de cima
+                        let fim = if r.ecol == 0 && r.erow > r.srow { r.erow - 1 } else { r.erow };
+                        v.push((r.srow, fim));
+                    }
+                }
+                v
+            }
+            crate::dobras::Metodo::Manual => return,
+        };
+        self.ed.definir_dobras_auto(&faixas);
+    }
+
     /// A projeção do texto com as dobras fechadas escondidas (None: não há dobra fechada).
     fn proj_atual(&self) -> Option<std::sync::Arc<crate::dobras::Proj>> {
         let dobras = self.ed.dobras_fechadas();
@@ -3349,6 +3394,7 @@ impl Session {
         self.git_poll();
         self.term_refresh();
         self.lsp_sync();
+        self.fold_auto();
         self.follow_cursor();
         self.refresh_syntax();
         self.seq += 1;
@@ -4680,6 +4726,41 @@ mod testes {
         let m = modelo(&mut s);
         assert!(m.row_map.is_none());
         assert_eq!((m.lines, m.line(2).as_str()), (10, "linha 2"));
+    }
+
+    #[test]
+    fn foldmethod_indent_cria_dobras_abertas_que_zm_fecha() {
+        let texto = "fn a() {\n    if x {\n        y();\n        z();\n    }\n    w();\n}\nfim\n";
+        let mut s = Session::new(texto, None);
+        s.resize(80, 20.0);
+        s.feed(":set shiftwidth=4<CR>");
+        s.feed(":set foldmethod=indent<CR>");
+        assert_eq!(modelo(&mut s).lines, 8, "abertas: nada some");
+        assert!(!s.ed.dobras().is_empty());
+        // zM fecha tudo: só sobram a linha do `fn a`... (a dobra de nível 1 cobre as linhas 1 a 5)
+        s.feed("zM");
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "fn a() {");
+        assert_eq!(m.line(1), "    if x {  ⋯ 5 linhas");
+        assert_eq!(m.lines, 4);
+        // zR abre; o texto editado refaz as dobras
+        s.feed("zR");
+        assert_eq!(modelo(&mut s).lines, 8);
+        s.feed("Gdd");
+        assert_eq!(modelo(&mut s).lines, 7);
+        // sintaxe: funções fecham em uma linha
+        let mut s = Session::open(&{
+            let d = projeto("foldsyn");
+            let f = d.join("src/f.rs");
+            std::fs::write(&f, "fn a() {\n    let x = 1;\n    x\n}\n\nfn b() {\n    2\n}\n").unwrap();
+            f
+        });
+        s.resize(80, 20.0);
+        s.feed(":set foldmethod=syntax<CR>");
+        s.feed("zM");
+        let m = modelo(&mut s);
+        assert_eq!(m.line(0), "fn a() {  ⋯ 4 linhas");
+        assert_eq!(m.lines, 3, "{:?}", m.rope.to_string());
     }
 
     #[test]

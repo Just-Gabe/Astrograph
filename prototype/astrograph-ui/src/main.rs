@@ -1701,6 +1701,7 @@ fn main() {
     let grid = Arc::new(Mutex::new(Grid::new(INITIAL_COLS, INITIAL_ROWS)));
     design::set_light(cfg.theme.mode == "light");
     nscene::set_fontes(cfg.font.regular.clone(), cfg.font.bold.clone(), cfg.font.italic.clone());
+    let _ = dobras::METODO_INICIAL.set(dobras::Metodo::de(&cfg.editor.foldmethod).unwrap_or_default());
     let leader_key = cfg.keys.leader_char();
     let format_on_save = cfg.lsp.format_on_save;
     let mapeamentos = cfg.keys.mapeamentos();

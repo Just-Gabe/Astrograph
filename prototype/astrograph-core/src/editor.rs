@@ -393,6 +393,11 @@ impl Editor {
     }
 
     /// Teclas pendentes para mostrar (`2d`, `"a`...), como o `showcmd` do Vim.
+    /// `shiftwidth` atual.
+    pub fn shiftwidth(&self) -> usize {
+        self.shiftwidth
+    }
+
     pub fn showcmd(&self) -> String {
         let pendentes: String = self
             .pending

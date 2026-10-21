@@ -78,9 +78,108 @@ impl Proj {
     }
 }
 
+/// O método de dobra com que as sessões novas começam (`[editor] foldmethod` do config).
+pub static METODO_INICIAL: std::sync::OnceLock<Metodo> = std::sync::OnceLock::new();
+
+/// Como as dobras automáticas são calculadas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Metodo {
+    #[default]
+    Manual,
+    Indent,
+    Syntax,
+}
+
+impl Metodo {
+    pub fn de(nome: &str) -> Option<Metodo> {
+        match nome.trim().to_lowercase().as_str() {
+            "manual" => Some(Metodo::Manual),
+            "indent" => Some(Metodo::Indent),
+            "syntax" | "expr" | "treesitter" => Some(Metodo::Syntax),
+            _ => None,
+        }
+    }
+}
+
+/// `foldmethod=indent`: o nível de uma linha é o recuo dividido por `shiftwidth`; linhas seguidas do mesmo
+/// nível ou mais fundo formam uma dobra por nível (a linha de cima, menos recuada, fica de fora). Linhas em
+/// branco ficam no nível do menor dos vizinhos.
+pub fn por_recuo(linhas: &[String], shiftwidth: usize, tabstop: usize) -> Vec<(usize, usize)> {
+    let sw = shiftwidth.max(1);
+    let ts = tabstop.max(1);
+    let largura = |l: &str| l.chars().take_while(|c| *c == ' ' || *c == '\t').fold(0usize, |w, c| if c == '\t' { (w / ts + 1) * ts } else { w + 1 });
+    let em_branco = |l: &String| l.trim().is_empty();
+    let n = linhas.len();
+    let mut nivel: Vec<Option<usize>> = linhas.iter().map(|l| if em_branco(l) { None } else { Some(largura(l) / sw) }).collect();
+    // branco: o menor entre o último e o próximo nível conhecidos
+    let mut anterior: Option<usize> = None;
+    let mut proximo: Vec<Option<usize>> = vec![None; n];
+    let mut seguinte: Option<usize> = None;
+    for i in (0..n).rev() {
+        proximo[i] = seguinte;
+        if let Some(v) = nivel[i] {
+            seguinte = Some(v);
+        }
+    }
+    for i in 0..n {
+        match nivel[i] {
+            Some(v) => anterior = Some(v),
+            None => {
+                nivel[i] = Some(match (anterior, proximo[i]) {
+                    (Some(a), Some(b)) => a.min(b),
+                    (Some(_), None) => 0,
+                    _ => 0,
+                });
+            }
+        }
+    }
+    let nivel: Vec<usize> = nivel.into_iter().map(|v| v.unwrap_or(0)).collect();
+    let mut out = Vec::new();
+    let max = nivel.iter().copied().max().unwrap_or(0);
+    for l in 1..=max {
+        let mut ini: Option<usize> = None;
+        for i in 0..=n {
+            let dentro = i < n && nivel[i] >= l;
+            match (ini, dentro) {
+                (None, true) => ini = Some(i),
+                (Some(a), false) => {
+                    // linhas em branco no fim não entram na dobra
+                    let mut fim = i - 1;
+                    while fim > a && em_branco(&linhas[fim]) {
+                        fim -= 1;
+                    }
+                    if fim > a {
+                        out.push((a, fim));
+                    }
+                    ini = None;
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn dobras_por_recuo() {
+        let t = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+        let l = t("fn a() {\n    if x {\n        y();\n        z();\n    }\n    w();\n}\n\nfn b() {\n    q();\n}");
+        let f = por_recuo(&l, 4, 4);
+        // nível 1: as linhas 1 a 5; nível 2: as linhas 2 e 3; e o corpo de b
+        assert!(f.contains(&(1, 5)), "{f:?}");
+        assert!(f.contains(&(2, 3)), "{f:?}");
+        assert!(f.contains(&(9, 9)) == false, "uma linha só não é dobra");
+        assert_eq!(f.len(), 2);
+        // tabs contam pelo tabstop
+        let l = t("a:\n\tb\n\tc\nd");
+        assert_eq!(por_recuo(&l, 4, 4), vec![(1, 2)]);
+        assert_eq!(Metodo::de("INDENT"), Some(Metodo::Indent));
+        assert_eq!(Metodo::de("x"), None);
+    }
 
     #[test]
     fn projeta_as_linhas_visiveis_e_o_aviso_da_dobra() {
