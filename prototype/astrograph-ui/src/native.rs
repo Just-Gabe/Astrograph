@@ -262,6 +262,8 @@ pub struct Session {
     pub jan_pedido: Option<PedidoJanela>,
     /// o terminal aberto é o de um agente (os pedidos prontos vão para ele)
     term_agente: bool,
+    /// outros terminais abertos (o atual fica em `term`): (terminal, é agente)
+    term_fundo: Vec<(Term, bool)>,
     /// pedido pronto esperando o agente terminar de abrir: (desde quando, texto)
     agente_fila: Option<(std::time::Instant, String)>,
     /// só nos testes: pasta do `config.json` e agentes tidos como instalados
@@ -381,6 +383,7 @@ impl Session {
             aba_pedido: None,
             jan_pedido: None,
             term_agente: false,
+            term_fundo: Vec::new(),
             agente_fila: None,
             agentes_pasta: None,
             agentes_tem: None,
@@ -605,6 +608,9 @@ impl Session {
                 [Key::Char('e')] => self.toggle_tree(),
                 [Key::Char('t')] => self.toggle_term(),
                 [Key::Char('T')] => self.term_close(),
+                [Key::Char('N')] => self.term_novo(),
+                [Key::Char(']')] => self.term_ciclar(true),
+                [Key::Char('[')] => self.term_ciclar(false),
                 [Key::Char('A')] => return,
                 [Key::Char('r')] | [Key::Char('c')] | [Key::Char('l')] | [Key::Char('x')] => return,
                 [Key::Char('r'), Key::Char('n')] => {
@@ -1499,6 +1505,39 @@ impl Session {
         }
     }
 
+    /// `<Líder>N`: mais um terminal (o atual vai para o fundo e continua rodando).
+    fn term_novo(&mut self) {
+        if let Some(t) = self.term.take() {
+            self.term_fundo.push((t, self.term_agente));
+        }
+        self.term_screen = None;
+        self.term_sel = None;
+        self.term_spawn(term::shell_padrao());
+        let n = self.term_fundo.len() + 1;
+        self.say(format!("Terminal {n} aberto"), ToastKind::Info);
+    }
+
+    /// `<Líder>]` / `<Líder>[`: próximo e anterior terminal.
+    fn term_ciclar(&mut self, adiante: bool) {
+        if self.term_fundo.is_empty() || self.term.is_none() {
+            return;
+        }
+        let atual = (self.term.take().unwrap(), self.term_agente);
+        let (t, ag) = if adiante { self.term_fundo.remove(0) } else { self.term_fundo.pop().unwrap() };
+        if adiante {
+            self.term_fundo.push(atual);
+        } else {
+            self.term_fundo.insert(0, atual);
+        }
+        self.term = Some(t);
+        self.term_agente = ag;
+        self.term_screen = None;
+        self.term_sel = None;
+        self.term_focus = true;
+        self.term_esc = false;
+        self.say(format!("{} terminais abertos", self.term_fundo.len() + 1), ToastKind::Info);
+    }
+
     /// `<Líder>Al` / `a` na tela inicial: roda o primeiro agente instalado no terminal.
     fn open_agent(&mut self) {
         let root = self.root.clone();
@@ -1741,6 +1780,16 @@ impl Session {
             t.matar();
         }
         self.term_agente = false;
+        // havia outro aberto: ele volta ao primeiro plano
+        if let Some((t, ag)) = self.term_fundo.pop() {
+            self.term = Some(t);
+            self.term_agente = ag;
+            self.term_focus = true;
+            self.term_screen = None;
+            self.term_sel = None;
+            self.term_esc = false;
+            return;
+        }
         self.agente_fila = None;
         self.term_focus = false;
         self.term_zen = false;
@@ -1754,6 +1803,9 @@ impl Session {
     pub fn term_resize(&mut self, rows: u16, cols: u16) {
         self.term_dims = (rows, cols);
         if let Some(t) = self.term.as_mut() {
+            t.resize(rows, cols);
+        }
+        for (t, _) in self.term_fundo.iter_mut() {
             t.resize(rows, cols);
         }
     }
@@ -4191,6 +4243,49 @@ mod testes {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn varios_terminais_novo_alterna_e_fecha() {
+        // as teclas de uma mesma chamada vão juntas para o terminal em foco: `<C-\\><C-n>` sai antes
+        fn sair_do_term(s: &mut Session) {
+            s.feed("<C-Bslash>");
+            s.feed("<C-n>");
+        }
+        std::env::set_var("SHELL", "/bin/sh");
+        let mut s = Session::new("x\n", None);
+        s.root = std::env::temp_dir();
+        s.resize(80, 20.0);
+        s.term_resize(14, 60);
+        // a saída do echo: a linha que termina no texto e não é o comando digitado
+        let tem = |m: &ViewModel, t: &str| linhas_do_terminal(m).iter().any(|l| l.ends_with(t) && !l.contains("echo"));
+        s.feed(" t");
+        s.feed("echo AAAA<CR>");
+        espera_term(&mut s, |m| tem(m, "AAAA"));
+        // <Líder>N: outro terminal, limpo; o primeiro segue vivo no fundo
+        sair_do_term(&mut s);
+        s.feed(" N");
+        s.feed("echo BBBB<CR>");
+        let m = espera_term(&mut s, |m| tem(m, "BBBB"));
+        assert!(!tem(&m, "AAAA"));
+        // <Líder>[ volta ao primeiro; <Líder>] ao segundo
+        sair_do_term(&mut s);
+        s.feed(" [");
+        let m = espera_term(&mut s, |m| tem(m, "AAAA"));
+        assert!(!tem(&m, "BBBB"));
+        sair_do_term(&mut s);
+        s.feed(" ]");
+        let m = espera_term(&mut s, |m| tem(m, "BBBB"));
+        assert!(!tem(&m, "AAAA"));
+        // fechar o atual traz o outro de volta
+        sair_do_term(&mut s);
+        s.feed(" T");
+        let m = espera_term(&mut s, |m| tem(m, "AAAA"));
+        assert!(m.term.is_some() && !tem(&m, "BBBB"));
+        sair_do_term(&mut s);
+        s.feed(" T");
+        assert!(modelo(&mut s).term.is_none());
     }
 
     #[cfg(unix)]
