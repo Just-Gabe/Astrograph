@@ -296,16 +296,30 @@ fn dirs_de_servidores() -> Vec<PathBuf> {
     dirs
 }
 
-/// O servidor que falta para `arquivo`: (linguagem, como instalar). Só para tipos que o app sabe atender.
-pub fn dica_de_instalacao(arquivo: &Path) -> Option<(&'static str, &'static str)> {
+/// O que falta para ter servidor de linguagem num tipo de arquivo e como instalar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Instalacao {
+    /// nome mostrado ("TypeScript/JavaScript")
+    pub nome: &'static str,
+    /// programa que precisa existir para o comando rodar (npm, rustup, go)
+    pub requer: Option<&'static str>,
+    /// comando de shell que instala; `None` quando não dá para automatizar (só o texto)
+    pub comando: Option<&'static str>,
+    /// como instalar, em texto
+    pub como: &'static str,
+}
+
+/// O servidor que falta para `arquivo`. Só para tipos que o app sabe atender.
+pub fn instalacao_para(arquivo: &Path) -> Option<Instalacao> {
     let ext = arquivo.extension()?.to_string_lossy().to_lowercase();
+    let auto = |nome, requer, comando| Instalacao { nome, requer: Some(requer), comando: Some(comando), como: comando };
     Some(match ext.as_str() {
-        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => ("TypeScript/JavaScript", "npm i -g typescript typescript-language-server"),
-        "rs" => ("Rust", "rustup component add rust-analyzer"),
-        "py" | "pyi" => ("Python", "npm i -g pyright"),
-        "go" => ("Go", "go install golang.org/x/tools/gopls@latest"),
-        "lua" => ("Lua", "instale o lua-language-server (ou use o Mason)"),
-        "c" | "h" | "cpp" | "cc" | "hpp" => ("C/C++", "instale o clangd"),
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => auto("TypeScript/JavaScript", "npm", "npm i -g typescript typescript-language-server"),
+        "rs" => auto("Rust", "rustup", "rustup component add rust-analyzer"),
+        "py" | "pyi" => auto("Python", "npm", "npm i -g pyright"),
+        "go" => auto("Go", "go", "go install golang.org/x/tools/gopls@latest"),
+        "lua" => Instalacao { nome: "Lua", requer: None, comando: None, como: "instale o lua-language-server (ou use o Mason)" },
+        "c" | "h" | "cpp" | "cc" | "hpp" => Instalacao { nome: "C/C++", requer: None, comando: None, como: "instale o clangd" },
         _ => return None,
     })
 }
@@ -1316,8 +1330,10 @@ while True:
         assert!(servidor_em(Path::new("a.ts"), &dirs, false).is_some());
         // sem servidor instalado há a dica de como instalar
         assert!(servidor_em(Path::new("a.ts"), &[], false).is_none());
-        assert_eq!(dica_de_instalacao(Path::new("x.tsx")).map(|d| d.0), Some("TypeScript/JavaScript"));
-        assert!(dica_de_instalacao(Path::new("x.txt")).is_none());
+        let ts = instalacao_para(Path::new("x.tsx")).expect("TypeScript");
+        assert_eq!((ts.nome, ts.requer, ts.comando), ("TypeScript/JavaScript", Some("npm"), Some("npm i -g typescript typescript-language-server")));
+        assert!(instalacao_para(Path::new("x.lua")).is_some_and(|i| i.comando.is_none()), "Lua só tem o texto");
+        assert!(instalacao_para(Path::new("x.txt")).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

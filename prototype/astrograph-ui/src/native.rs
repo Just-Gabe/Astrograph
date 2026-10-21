@@ -51,6 +51,11 @@ enum Destino {
     AbrirPasta(PathBuf),
     /// uma linha da central de configurações
     Ajuste(Ajuste),
+    /// oferta de instalar o servidor de linguagem que falta
+    InstalarLsp,
+    SilenciarLsp(&'static str),
+    /// fechar sem fazer nada
+    Nada,
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +258,10 @@ pub struct Session {
     /// pedido à IA sendo digitado e o que está rodando (`<Líder>AE`)
     ia_prompt: Option<(IaTipo, String)>,
     ia_job: Option<IaJob>,
+    /// arquivo para o qual o app ofereceu instalar o servidor de linguagem
+    lsp_oferta: Option<PathBuf>,
+    /// instalação do servidor rodando no terminal: ao acabar, o LSP é ligado de novo neste arquivo
+    lsp_instalando: Option<PathBuf>,
     /// teste: programa e argumentos no lugar do agente (o pedido entra como último argumento)
     ia_cmd: Option<(String, Vec<String>)>,
     /// texto para uma aba nova (resposta da IA) e o nome fixo desta sessão
@@ -408,6 +417,8 @@ impl Session {
             setas_seguidas: 0,
             ia_prompt: None,
             ia_job: None,
+            lsp_oferta: None,
+            lsp_instalando: None,
             ia_cmd: None,
             aba_texto: None,
             atualizando: None,
@@ -943,10 +954,8 @@ impl Session {
         let Some((prog, args, lang)) = (if off { None } else { lsp::servidor_para(&path) }) else {
             // há servidor conhecido para esse tipo de arquivo mas ele não está instalado: diz como instalar (uma vez)
             if !off && std::env::var_os("ASTROGRAPH_LSP_CMD").is_none() {
-                if let Some((nome, como)) = lsp::dica_de_instalacao(&path) {
-                    if crate::dicas::mostrar(&format!("lsp-{nome}"), 2) {
-                        self.say(format!("Sem servidor de linguagem para {nome}. Instale: {como}"), ToastKind::Info);
-                    }
+                if let Some(inst) = lsp::instalacao_para(&path) {
+                    self.lsp_oferecer(&path, inst);
                 }
             }
             return;
@@ -979,6 +988,68 @@ impl Session {
         if subiu {
             let dica = format!("Com o servidor de linguagem: K documentação · gd definição · gr referências · {0}rn renomeia · {0}ca ações de código", self.lider_nome());
             self.dica("lsp-uso", dica, 2);
+        }
+    }
+
+    /// Não há servidor para este arquivo: se dá para instalar, pergunta (instalar agora, agora não, não perguntar
+    /// mais); senão só diz como. Cada linguagem aparece poucas vezes (o contador fica no estado do usuário).
+    fn lsp_oferecer(&mut self, path: &Path, inst: lsp::Instalacao) {
+        if !crate::dicas::mostrar(&format!("lsp-{}", inst.nome), 3) {
+            return;
+        }
+        let Some(comando) = inst.comando else {
+            self.say(format!("Sem servidor de linguagem para {}. Instale: {}", inst.nome, inst.como), ToastKind::Info);
+            return;
+        };
+        self.lsp_oferta = Some(path.to_path_buf());
+        let itens = vec![
+            ListaItem { texto: "Instalar".into(), detalhe: comando.into(), destino: Destino::InstalarLsp },
+            ListaItem { texto: "Agora não".into(), detalhe: String::new(), destino: Destino::Nada },
+            ListaItem { texto: format!("Não perguntar mais sobre {}", inst.nome), detalhe: String::new(), destino: Destino::SilenciarLsp(inst.nome) },
+        ];
+        self.pick_lista(&format!("Sem servidor de linguagem para {}: instalar?", inst.nome), itens);
+    }
+
+    /// "Instalar agora": roda o comando no terminal do app (dá para acompanhar) e, quando ele termina, liga o
+    /// servidor neste arquivo.
+    fn lsp_instalar(&mut self) {
+        let Some(path) = self.lsp_oferta.take() else { return };
+        let Some(inst) = lsp::instalacao_para(&path) else { return };
+        self.lsp_instalar_com(path, inst);
+    }
+
+    fn lsp_instalar_com(&mut self, path: PathBuf, inst: lsp::Instalacao) {
+        let Some(comando) = inst.comando else { return };
+        if let Some(req) = inst.requer {
+            if !term::em_path(req) {
+                self.say(format!("Falta o {req} para instalar o servidor de {}. Instale: {}", inst.nome, inst.como), ToastKind::Error);
+                return;
+            }
+        }
+        self.term_close();
+        self.term_spawn(term::comando_unico(comando));
+        if self.term.is_none() {
+            return;
+        }
+        self.lsp_instalando = Some(path);
+        self.say(format!("Instalando o servidor de {}… o LSP liga sozinho quando terminar", inst.nome), ToastKind::Info);
+    }
+
+    /// A instalação do servidor terminou (o processo acabou ou o terminal foi fechado): liga o LSP neste arquivo.
+    fn lsp_instalacao_terminou(&mut self) {
+        let Some(path) = self.lsp_instalando.clone() else { return };
+        let acabou = self.term.is_none() || self.term_screen.as_ref().is_some_and(|s| s.exited);
+        if !acabou {
+            return;
+        }
+        self.lsp_instalando = None;
+        if self.path.as_deref() == Some(path.as_path()) {
+            self.lsp_attach();
+            if self.lsp.is_some() {
+                self.say("Servidor de linguagem instalado e ativo.".into(), ToastKind::Done);
+            } else {
+                self.say("A instalação terminou, mas não achei o servidor. Veja a saída no terminal; se precisar, reabra o arquivo.".into(), ToastKind::Error);
+            }
         }
     }
 
@@ -3012,6 +3083,12 @@ impl Session {
                     Destino::Pasta(d) => self.pasta_navegar(d),
                     Destino::AbrirPasta(d) => self.abrir_pasta(d),
                     Destino::Ajuste(a) => self.ajuste_aplicar(a),
+                    Destino::InstalarLsp => self.lsp_instalar(),
+                    Destino::SilenciarLsp(nome) => {
+                        crate::dicas::silenciar(&format!("lsp-{nome}"));
+                        self.say(format!("Não aviso mais sobre o servidor de {nome}."), ToastKind::Info);
+                    }
+                    Destino::Nada => {}
                 }
                 return;
             }
@@ -3713,6 +3790,7 @@ impl Session {
     }
 
     pub fn view_model(&mut self) -> ViewModel {
+        self.lsp_instalacao_terminou();
         if let Some(t) = self.ed.clipboard_alterado() {
             self.copiar_clip(t);
         }
@@ -6621,5 +6699,53 @@ mod testes {
         assert_eq!(s.path.as_deref(), Some(arq.as_path()));
         crate::dicas::encerrar();
         let _ = std::fs::remove_file(&arq);
+    }
+
+    #[test]
+    fn sem_servidor_oferece_instalar_agora_nao_ou_nunca_mais() {
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        crate::dicas::zerar();
+        let inst = lsp::Instalacao { nome: "Teste", requer: Some("sh"), comando: Some("echo instalando"), como: "echo instalando" };
+        let mut s = Session::new("x\n", Some("a.ts".into()));
+        s.resize(80, 20.0);
+        s.lsp_oferecer(Path::new("a.ts"), inst);
+        let p = modelo(&mut s).picker.expect("oferta");
+        assert!(p.title.contains("Sem servidor de linguagem para Teste"), "{}", p.title);
+        let textos: Vec<&str> = p.items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(textos, ["Instalar", "Agora não", "Não perguntar mais sobre Teste"]);
+        assert_eq!(p.items[0].detail, "echo instalando");
+        // "Não perguntar mais" silencia a linguagem
+        s.feed("jj<CR>");
+        assert!(modelo(&mut s).picker.is_none());
+        crate::dicas::zerar();
+        crate::dicas::silenciar("lsp-Teste");
+        assert!(!crate::dicas::mostrar("lsp-Teste", 3));
+        crate::dicas::encerrar();
+        // sem o programa exigido: explica em vez de tentar
+        let sem = lsp::Instalacao { nome: "Teste", requer: Some("programa-que-nao-existe-xyz"), comando: Some("x"), como: "instale o xyz" };
+        let mut s2 = Session::new("x\n", Some("a.ts".into()));
+        s2.resize(80, 20.0);
+        s2.lsp_instalar_com(PathBuf::from("a.ts"), sem);
+        let m = modelo(&mut s2);
+        assert!(m.toast.as_ref().is_some_and(|(_, t, k)| *k == ToastKind::Error && t.contains("Falta o programa-que-nao-existe-xyz")), "{:?}", m.toast);
+        assert!(m.term.is_none() && s2.lsp_instalando.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn instalar_servidor_roda_no_terminal_e_religa_o_lsp_quando_acaba() {
+        // as dicas são globais: sem elas ligadas por outro teste no meio, a oferta de instalar não reaparece aqui
+        let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        crate::dicas::encerrar();
+        let inst = lsp::Instalacao { nome: "Teste", requer: Some("sh"), comando: Some("echo instalado"), como: "echo instalado" };
+        let mut s = Session::new("x\n", Some("a.ts".into()));
+        s.resize(80, 20.0);
+        s.lsp_instalar_com(PathBuf::from("a.ts"), inst);
+        assert!(s.lsp_instalando.is_some(), "instalação em andamento");
+        // quando o processo acaba, avisa (aqui não há servidor de verdade: diz que não achou)
+        let m = espera_term(&mut s, |m| m.toast.as_ref().is_some_and(|(_, t, _)| t.contains("não achei o servidor") || t.contains("instalado e ativo")));
+        let texto = m.toast.unwrap().1;
+        assert!(texto.contains("não achei o servidor") || texto.contains("instalado e ativo"), "{texto}");
+        assert!(s.lsp_instalando.is_none());
     }
 }
