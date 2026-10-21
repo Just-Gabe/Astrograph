@@ -972,6 +972,16 @@ impl Editor {
             self.cmdline_open();
             return;
         }
+        // `3:` abre a linha de comando com a faixa `.,.+2`
+        if k == Key::Char(':') && self.mode == Mode::Normal && !self.pending.is_empty() && self.pending.iter().all(|p| matches!(p, Key::Char(c) if c.is_ascii_digit())) {
+            let n: usize = self.pending.iter().filter_map(|p| p.as_char()).collect::<String>().parse().unwrap_or(1);
+            self.pending.clear();
+            self.cmdline_open();
+            if let Some(c) = self.cmdline.as_mut() {
+                *c = if n <= 1 { ".".into() } else { format!(".,.+{}", n - 1) };
+            }
+            return;
+        }
         match self.mode {
             Mode::Insert => self.insert_key(k),
             Mode::Visual => {

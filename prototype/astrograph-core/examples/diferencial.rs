@@ -111,6 +111,7 @@ fn vocabulario_ex() -> Vec<&'static str> {
         ":2<CR>", ":$<CR>", ":1<CR>", ":.+1<CR>", ":'a<CR>",
         ":t.<CR>", ":t0<CR>", ":t$<CR>", ":2,3t0<CR>", ":1t2<CR>", ":m0<CR>", ":m$<CR>", ":1m3<CR>", ":2,3m0<CR>", ":3m1<CR>", ":1,2m$<CR>", ":2,3m.<CR>",
         ":s/o/0/<CR>j:&<CR>", ":s/o/0/g<CR>j:&&<CR>", ":s/o/0/g<CR>j:&<CR>", ":%s/o/0/g<CR>u:%&&<CR>", ":s/e/E/<CR>j&", ":s/e/E/<CR>jj:s<CR>", "/e<CR>:s//X/<CR>", ":s/e/E/<CR>/o<CR>:~<CR>", ":%s/e//n<CR>", ":%s/o/0/gn<CR>x", ":s/o/0/<CR>j@:", ":2d<CR>@:", ":d<CR>@:@@", ":s/a/b/<CR>2@:",
+        "3:d<CR>", "2:s/o/0/<CR>", "9:y<CR>", "2:j<CR>", "1:d<CR>", "3:normal Ax<CR>",
         ":sort<CR>", ":sort!<CR>", ":sort u<CR>", ":sort i<CR>", ":sort n<CR>", ":2,4sort<CR>", ":sort! n<CR>", ":%sort ui<CR>",
         "ma", "mb", "jma", "G", "gg", "j", "w", "$", "0", "p", "P", "u", ".", "yy", "dd", "x", "<C-r>", "3j", "wma",
     ]

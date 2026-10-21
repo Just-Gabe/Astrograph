@@ -966,6 +966,77 @@ impl Session {
         linha[a..=b].iter().collect()
     }
 
+    /// O "pedaço sem espaço" sob o cursor (caminho ou URL), sem pontuação nas pontas.
+    fn token_sob_cursor(&self) -> String {
+        let linha: Vec<char> = self.ed.buf.line(self.ed.cursor.row).chars().collect();
+        if linha.is_empty() {
+            return String::new();
+        }
+        let c = self.ed.cursor.col.min(linha.len() - 1);
+        let sep = |c: char| c.is_whitespace() || "\"'`()[]{}<>,;|".contains(c);
+        if sep(linha[c]) {
+            return String::new();
+        }
+        let (mut a, mut b) = (c, c);
+        while a > 0 && !sep(linha[a - 1]) {
+            a -= 1;
+        }
+        while b + 1 < linha.len() && !sep(linha[b + 1]) {
+            b += 1;
+        }
+        let t: String = linha[a..=b].iter().collect();
+        t.trim_end_matches(['.', ':', '!', '?']).to_string()
+    }
+
+    /// `gf`: abre o arquivo cujo nome está sob o cursor (`caminho`, `caminho:linha` ou `caminho:linha:col`).
+    fn ir_para_arquivo(&mut self) {
+        let t = self.token_sob_cursor();
+        if t.is_empty() {
+            self.say("E446: Nenhum nome de arquivo sob o cursor".into(), ToastKind::Error);
+            return;
+        }
+        // caminho:linha[:col]
+        let mut partes: Vec<&str> = t.split(':').collect();
+        let mut pos: Vec<usize> = Vec::new();
+        while partes.len() > 1 && partes.last().is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) && pos.len() < 2 {
+            pos.insert(0, partes.pop().unwrap().parse().unwrap_or(1));
+        }
+        let nome = partes.join(":");
+        let nome = nome.strip_prefix("file://").unwrap_or(&nome).to_string();
+        let base_arq = self.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf);
+        let cands: Vec<PathBuf> = [base_arq, Some(self.root.clone())]
+            .into_iter()
+            .flatten()
+            .map(|d| if let Some(rest) = nome.strip_prefix("~/") { std::env::var_os("HOME").map(PathBuf::from).unwrap_or(d).join(rest) } else { d.join(&nome) })
+            .collect();
+        let Some(alvo) = cands.into_iter().find(|p| p.is_file()) else {
+            self.say(format!("E447: Arquivo \"{nome}\" não encontrado"), ToastKind::Error);
+            return;
+        };
+        let goto = pos.first().map(|l| (l.saturating_sub(1), pos.get(1).map_or(0, |c| c.saturating_sub(1))));
+        self.open_file(&alvo, goto);
+    }
+
+    /// `gx`: abre a URL (ou arquivo) sob o cursor com o programa padrão do sistema.
+    fn abrir_com_o_sistema(&mut self) {
+        let t = self.token_sob_cursor();
+        if t.is_empty() {
+            self.say("Nada sob o cursor para abrir.".into(), ToastKind::Info);
+            return;
+        }
+        let (prog, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "start".into(), String::new(), t.clone()])
+        } else if cfg!(target_os = "macos") {
+            ("open", vec![t.clone()])
+        } else {
+            ("xdg-open", vec![t.clone()])
+        };
+        match std::process::Command::new(prog).args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            Ok(_) => self.say(format!("Abrindo {t}"), ToastKind::Info),
+            Err(e) => self.say(format!("Não consegui abrir: {e}"), ToastKind::Error),
+        }
+    }
+
     /// Filtra as sugestões pelo que já foi digitado desde o começo da palavra.
     fn comp_filter(&mut self) {
         let Some(c) = self.comp.as_mut() else { return };
@@ -2768,6 +2839,14 @@ impl Session {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_definition();
         }
+        if livre && self.ed.showcmd() == "g" && k == Key::Char('f') {
+            self.ed.feed(&[Key::Esc]);
+            return self.ir_para_arquivo();
+        }
+        if livre && self.ed.showcmd() == "g" && k == Key::Char('x') {
+            self.ed.feed(&[Key::Esc]);
+            return self.abrir_com_o_sistema();
+        }
         if livre && self.ed.showcmd() == "g" && matches!(k, Key::Char('r' | 'y')) && self.lsp.is_some() {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_consulta(if k == Key::Char('r') { PedidoLsp::Referencias } else { PedidoLsp::TipoDaDefinicao });
@@ -4330,6 +4409,30 @@ mod testes {
         // dia: o parâmetro sob o cursor (e a vírgula que o separa)
         s.feed("5Gwwwdia");
         assert!(s.ed.buf.line(5).starts_with("fn b("), "{:?}", s.ed.buf.line(5));
+    }
+
+    #[test]
+    fn gf_abre_o_arquivo_sob_o_cursor_com_linha_e_coluna() {
+        let d = projeto("gf");
+        let arq = d.join("src/alfa.rs");
+        std::fs::write(&arq, "veja beta.rs:2:3 e LEIA.md depois ./nao_existe.txt\n").unwrap();
+        std::fs::write(d.join("src/beta.rs"), "um\ndois\ntres\n").unwrap();
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        // sobre `beta.rs:2:3` (relativo ao arquivo atual): abre na linha 2, coluna 3
+        s.feed("wgf");
+        assert_eq!(s.ed.buf.line(0), "um");
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 2));
+        // sobre um nome que não existe: avisa
+        let mut s = Session::open(&arq);
+        s.root = d.clone();
+        s.resize(80, 20.0);
+        s.feed("$gf");
+        assert!(modelo(&mut s).toast.is_some_and(|t| t.2 == ToastKind::Error && t.1.contains("não encontrado")));
+        // a raiz do projeto também vale
+        s.feed("0fLgf");
+        assert_eq!(s.ed.buf.line(0), "oi");
     }
 
     #[test]

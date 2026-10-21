@@ -707,7 +707,12 @@ impl Editor {
             row += extra + 1;
         }
         match ultimo {
-            Some(_) if contar => {}
+            Some(_) if contar => {
+                // só contou: o cursor fica na mesma linha, na coluna 0
+                self.cursor = Pos::new(self.cursor.row, 0);
+                self.fix_cursor();
+                self.curswant = self.want_here();
+            }
             Some(r) => {
                 self.cursor = Pos::new(r, self.buf.first_nonblank(r));
                 self.fix_cursor();
