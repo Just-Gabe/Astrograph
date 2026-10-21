@@ -8,6 +8,8 @@ use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
+use crate::proc::SemJanela;
+
 pub struct Agente {
     pub bin: &'static str,
     pub label: &'static str,
@@ -30,7 +32,7 @@ pub fn modelo_ollama(pasta: &Path) -> Option<String> {
     if let Some(m) = ler_config(pasta)["ollama_model"].as_str().filter(|m| !m.is_empty()) {
         return Some(m.to_string());
     }
-    let o = std::process::Command::new("ollama").arg("list").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    let o = std::process::Command::new("ollama").arg("list").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).sem_janela().output().ok()?;
     primeiro_modelo(&String::from_utf8_lossy(&o.stdout))
 }
 
@@ -315,6 +317,7 @@ pub fn rodar_direto(prog: &str, args: &[String], pasta: &Path, limite: std::time
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .sem_janela()
         .spawn()
         .map_err(|e| format!("não consegui rodar {prog}: {e}"))?;
     let mut so = filho.stdout.take().unwrap();

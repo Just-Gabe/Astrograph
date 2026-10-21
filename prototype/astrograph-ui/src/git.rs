@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::proc::SemJanela;
+
 use similar::{ChangeTag, TextDiff};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +19,7 @@ pub enum Sign {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git").args(args).current_dir(dir).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let out = Command::new("git").args(args).current_dir(dir).stdin(Stdio::null()).stderr(Stdio::null()).sem_janela().output().ok()?;
     out.status.success().then_some(out.stdout)
 }
 
