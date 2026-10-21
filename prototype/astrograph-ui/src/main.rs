@@ -83,6 +83,8 @@ enum UiCommand {
     TermSize(i64, i64),
     /// clique na barra de abas
     Tab(i64),
+    /// clique numa linha do explorador (índice na lista)
+    TreeClick(usize),
     /// tamanho de cada painel (id, colunas, linhas) das janelas divididas
     Panes(Vec<(u32, i64, i64)>),
     /// clique (pressionar) num painel: foca e posiciona o cursor
@@ -461,7 +463,7 @@ async fn nvim_task(
         let _ = match cmd {
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
-            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
+            UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -1439,6 +1441,9 @@ impl ApplicationHandler<UserEvent> for App {
                         return;
                     }
                     if self.scene.as_ref().is_some_and(|sc| sc.in_side(mx)) {
+                        if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tree_hit(mx, my)) {
+                            let _ = self.tx.send(UiCommand::TreeClick(i));
+                        }
                         return;
                     }
                     if let Some(i) = self.divisor_sob_mouse() {
@@ -1462,7 +1467,13 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
                 if self.scene.as_ref().is_some_and(|sc| sc.in_side(self.mouse_pos.0 as f32)) {
-                    // clique no explorador: ainda sem ação (o teclado navega)
+                    // clique no explorador: abre o arquivo ou a pasta (o teclado também navega)
+                    if button == MouseButton::Left && state == ElementState::Pressed {
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        if let Some(i) = self.scene.as_ref().and_then(|sc| sc.tree_hit(mx, my)) {
+                            let _ = self.tx.send(UiCommand::TreeClick(i));
+                        }
+                    }
                     return;
                 }
                 let pressed = state == ElementState::Pressed;

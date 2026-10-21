@@ -115,6 +115,8 @@ pub struct Scene {
     term_geom: Option<(f32, f32, usize, usize)>,
     term_cache: Option<TermView>,
     tree_cache: Option<TreeView>,
+    /// (topo, altura da linha, fundo) do explorador no último quadro, para o clique
+    tree_geom: Option<(f32, f32, f32)>,
     tree_top: Spring,
     tree_sel: Spring,
     pick: Chase,
@@ -206,6 +208,7 @@ impl Scene {
             term_geom: None,
             term_cache: None,
             tree_cache: None,
+            tree_geom: None,
             tree_top: Spring::new(0.0, 26.0, 1.0),
             tree_sel: Spring::new(0.0, 34.0, 1.0),
             pick: Chase::new(0.0, 18.0),
@@ -344,6 +347,18 @@ impl Scene {
             return None;
         }
         Some(((fy.max(0.0) as usize).min(rows.saturating_sub(1)), (fx.max(0.0) as usize).min(cols.saturating_sub(1))))
+    }
+
+    /// Linha (índice na lista do explorador) sob o ponto, se ele cair numa linha do explorador.
+    pub fn tree_hit(&self, x: f32, y: f32) -> Option<usize> {
+        if !self.in_side(x) {
+            return None;
+        }
+        let (top, row_h, fundo) = self.tree_geom?;
+        if y < top || y >= fundo {
+            return None;
+        }
+        Some(((y - top) / row_h + self.tree_top.x).floor().max(0.0) as usize)
     }
 
     /// O ponto (em pixels) está sobre o explorador?
@@ -1614,6 +1629,7 @@ impl Scene {
     fn paint_side(&mut self, c: &mut Canvas, (w, h, s): (f32, f32, f32)) {
         let sw = self.side.x;
         if sw < 2.0 {
+            self.tree_geom = None;
             if self.side.target < 1.0 {
                 self.tree_cache = None;
             }
@@ -1624,6 +1640,7 @@ impl Scene {
         let top = (d::M.title_h * s).round();
         let row_h = 27.0 * s;
         let area = h - top - d::M.bottom * s;
+        self.tree_geom = Some((top, row_h, top + area));
         let vis = (area / row_h).floor().max(1.0);
         // mantém a seleção dentro da janela visível
         let want = if (tv.sel as f32) < self.tree_top.target {
@@ -2255,6 +2272,12 @@ mod testes {
         let fim = sc.layout(800, 600, 1).text_x;
         assert!(x0 < meio && meio < fim, "o texto é empurrado aos poucos: {x0} {meio} {fim}");
         assert!(sc.in_side(10.0) && !sc.in_side(fim));
+        // o clique cai na linha certa do explorador (27 px por linha, depois da barra de título); fora dele, nada
+        let (top, row_h, _) = sc.tree_geom.expect("o explorador pintou");
+        assert_eq!(sc.tree_hit(20.0, top + row_h * 0.5), Some(0));
+        assert_eq!(sc.tree_hit(20.0, top + row_h * 1.5), Some(1));
+        assert_eq!(sc.tree_hit(20.0, top - 2.0), None, "na barra de título");
+        assert_eq!(sc.tree_hit(fim + 5.0, top + 5.0), None, "no texto");
         s.feed(" e");
         let vm = s.view_model();
         for i in 80..160 {
