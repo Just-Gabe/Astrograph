@@ -1844,7 +1844,7 @@ impl Session {
             }
         }
         let mut partes = linha.split_whitespace();
-        let mut cmd = portable_pty::CommandBuilder::new(partes.next().unwrap_or(a.bin));
+        let mut cmd = term::comando_pty(partes.next().unwrap_or(a.bin));
         for p in partes {
             cmd.arg(p);
         }
@@ -1929,7 +1929,7 @@ impl Session {
             self.say("O Claude Code não está instalado (npm i -g @anthropic-ai/claude-code).".into(), ToastKind::Info);
             return;
         }
-        let mut cmd = portable_pty::CommandBuilder::new("claude");
+        let mut cmd = term::comando_pty("claude");
         let modo = crate::agentes::modo_atual_em(&self.pasta_agentes());
         let (linha, _) = crate::agentes::linha_de_comando(&crate::agentes::AGENTES[0], modo.id);
         for p in linha.split_whitespace().skip(1) {

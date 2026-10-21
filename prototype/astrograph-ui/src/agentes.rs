@@ -309,7 +309,7 @@ pub fn limpar_resposta(t: &str) -> String {
 /// Roda `prog args` em `pasta` e devolve o stdout; para depois de `limite` (mata o processo).
 pub fn rodar_direto(prog: &str, args: &[String], pasta: &Path, limite: std::time::Duration) -> Result<String, String> {
     use std::io::Read;
-    let mut filho = std::process::Command::new(prog)
+    let mut filho = std::process::Command::new(crate::term::programa(prog))
         .args(args)
         .current_dir(pasta)
         .stdin(std::process::Stdio::null())
