@@ -221,16 +221,62 @@ if ($appOpen) {
   # config ficaria misturada (ex.: "module 'polish' not found"). Não fecha à
   # força: pode haver arquivo sem salvar.
   Warn 'O Astrograph está aberto: pulei a atualização. Feche o app e rode o instalador de novo.'
-} elseif (Test-Path (Join-Path $Root '.git')) {
-  Info "Atualizando $Root"
-  # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
-  # alteração o pull falha e a instalação continua velha sem avisar
-  git -C $Root checkout -- template/lazy-lock.json
-  git -C $Root pull --ff-only
-  if ($LASTEXITCODE -ne 0) { Warn "Não consegui atualizar $Root (alterações locais?). Rode: git -C `"$Root`" status" }
 } else {
-  Info "Clonando o Astrograph em $Root"
-  git clone --depth 1 $Repo $Root
+  # Pasta que já tem arquivos mas não é um clone limpo (arquivos modificados, histórico próprio ou nem
+  # é git): pergunta se apaga e substitui (a antiga vai para backup) ou usa o que está lá.
+  $cloneMode = "$env:ASTROGRAPH_CLONE_EXISTENTE".Trim().ToLower()
+  if ($cloneMode -and $cloneMode -notin @('substituir', 'usar')) {
+    Warn "ASTROGRAPH_CLONE_EXISTENTE='$cloneMode' não reconhecido (use substituir ou usar)."
+    $cloneMode = ''
+  }
+  function Choose-Clone($why) {
+    if ($script:cloneMode) { return }
+    if (Test-Interactive) {
+      Write-Host ''
+      Warn $why
+      Write-Host "  [1] Apagar e substituir  a pasta atual vai para backup ($Root.backup-<data>) e o Astrograph é clonado de novo"
+      Write-Host '  [2] Usar os existentes   não mexe nos arquivos (não atualiza; o :Astrograph atualizar pode recusar)'
+      $pick = (Read-Host '  escolha [1]').Trim()
+      $script:cloneMode = if ($pick -eq '2') { 'usar' } else { 'substituir' }
+    } else {
+      Info 'Sem terminal interativo: uso os arquivos existentes (ASTROGRAPH_CLONE_EXISTENTE=substituir apaga e clona de novo).'
+      $script:cloneMode = 'usar'
+    }
+  }
+  function Replace-Clone {
+    $bk = "$Root.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Info "A pasta atual vai para $bk"
+    Move-Item -LiteralPath $Root -Destination $bk
+    Info "Clonando o Astrograph em $Root"
+    git clone --depth 1 $Repo $Root
+  }
+  $hasFiles = (Test-Path $Root) -and (@(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue).Count -gt 0)
+  if ($hasFiles -and -not (Test-Path (Join-Path $Root '.git'))) {
+    Choose-Clone "A pasta $Root já tem arquivos, mas não é um clone do Astrograph."
+    if ($cloneMode -eq 'substituir') { Replace-Clone }
+    elseif (-not (Test-Path (Join-Path $Root 'template'))) { throw "Sem $Root\template não dá para usar essa pasta. Rode de novo e escolha substituir." }
+    else { Info "Usando os arquivos existentes em $Root (sem atualizar)" }
+  } elseif (Test-Path (Join-Path $Root '.git')) {
+    Info "Atualizando $Root"
+    # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
+    # alteração o pull falha e a instalação continua velha sem avisar
+    git -C $Root checkout -- template/lazy-lock.json
+    if (@(git -C $Root status --porcelain --untracked-files=no).Count -gt 0) {
+      Choose-Clone "O clone em $Root tem arquivos modificados."
+    }
+    if ($cloneMode -eq 'substituir') { Replace-Clone }
+    elseif ($cloneMode -eq 'usar') { Info "Usando os arquivos existentes em $Root (sem atualizar)" }
+    else {
+      git -C $Root pull --ff-only
+      if ($LASTEXITCODE -ne 0) {
+        Choose-Clone "Não consegui atualizar $Root (o histórico local diverge da main)."
+        if ($cloneMode -eq 'substituir') { Replace-Clone } else { Info "Usando os arquivos existentes em $Root (sem atualizar)" }
+      }
+    }
+  } else {
+    Info "Clonando o Astrograph em $Root"
+    git clone --depth 1 $Repo $Root
+  }
 }
 # Arquivo da config sumido do clone (pull interrompido, antivírus...): o nvim
 # abriria com "module 'polish' not found". Restaura só o que foi apagado.
@@ -437,6 +483,22 @@ try {
   $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest' `
     -Headers @{ 'User-Agent' = 'astrograph-installer' } -TimeoutSec 15
 } catch { $release = $null }
+if (-not $release) {
+  # sem release com tag v*: usa os executáveis que o CI publica a cada push na main (release móvel main-latest)
+  try {
+    $mainBase = 'https://github.com/Just-Gabe/Astrograph/releases/download/main-latest'
+    $mc = (Invoke-WebRequest -Uri "$mainBase/COMMIT.txt" -UseBasicParsing -TimeoutSec 15).Content
+    if ($mc -is [byte[]]) { $mc = [Text.Encoding]::ASCII.GetString($mc) }
+    $mc = "$mc".Trim()
+    if ($mc -match '^[0-9a-f]{40}$') {
+      $names = @('SHA256SUMS.txt', 'astrograph-windows-x64.exe', 'astrograph-agent-windows-x64.exe', 'astrograph-servicos-windows-x64.exe')
+      $release = [pscustomobject]@{
+        tag_name = "main-$($mc.Substring(0, 7))"
+        assets   = @($names | ForEach-Object { [pscustomobject]@{ name = $_; browser_download_url = "$mainBase/$_" } })
+      }
+    }
+  } catch { }
+}
 $commit = (git -C $Root rev-parse --short HEAD 2>$null)
 
 # Hashes publicados no release (SHA256SUMS.txt): todo executável baixado é

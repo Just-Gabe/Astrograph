@@ -1323,6 +1323,8 @@ impl Editor {
                 if len > 0 && self.cursor.col + 1 == len && ((fim && self.cursor.row == pc_before.row) || self.curswant > self.want_here()) {
                     self.cursor.col = len;
                 }
+                // a inserção que recomeça é outro passo do desfazer
+                self.checkpoint();
                 self.mode = Mode::Insert;
             }
         }
@@ -1943,6 +1945,10 @@ impl Editor {
                         self.begin_insert_state('c', 1, None);
                     }
                     return;
+                }
+                if op == 'c' && kind == Kind::Line && b.row > a.row && self.undo_cursor.is_none() {
+                    // o Vim guarda o cursor depois de descer uma linha (apaga as linhas de baixo antes da primeira)
+                    self.undo_cursor = Some(Pos::new(a.row + 1, self.cursor.col));
                 }
                 self.checkpoint();
                 let (text, linewise) = self.range_text(a, b, kind);
@@ -2970,6 +2976,8 @@ impl Editor {
             self.mode = Mode::Normal;
             if fim {
                 self.cursor.col = len - 1;
+                // a coluna "desejada" é a do ponto de inserção, depois do último caractere
+                self.curswant = motion::vcol_start(&self.buf.line(self.cursor.row), len);
             }
             self.ins_o = Some(fim);
             return;

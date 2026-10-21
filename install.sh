@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-REPO="https://github.com/Just-Gabe/Astrograph.git"
+REPO="${ASTROGRAPH_REPO:-https://github.com/Just-Gabe/Astrograph.git}"
 ROOT="$HOME/Astrograph"
 CONFIG="$HOME/.config/nvim"
 FONT_DIR="$HOME/.local/share/fonts"
@@ -204,12 +204,64 @@ else
 fi
 
 # --- 4. Clonar/atualizar o Astrograph -------------------------------------
-if [ -d "$ROOT/.git" ]; then
+# Pasta do Astrograph que já tem arquivos mas não é um clone limpo (arquivos modificados, histórico
+# próprio, ou nem é git): pergunta se apaga e substitui (a antiga vai para backup) ou usa o que está lá.
+CLONE_MODE="$(printf '%s' "${ASTROGRAPH_CLONE_EXISTENTE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+case "$CLONE_MODE" in
+  substituir | usar | "") ;;
+  *) warn "ASTROGRAPH_CLONE_EXISTENTE='$CLONE_MODE' não reconhecido (use substituir ou usar)."; CLONE_MODE="" ;;
+esac
+escolher_clone() {
+  # $1 = o motivo; define CLONE_MODE (substituir|usar)
+  [ -n "$CLONE_MODE" ] && return 0
+  if [ -n "$TTY" ]; then
+    printf '\n'
+    warn "$1"
+    printf '  [1] Apagar e substituir  a pasta atual vai para backup (%s.backup-<data>) e o Astrograph é clonado de novo\n' "$ROOT"
+    printf '  [2] Usar os existentes   não mexe nos arquivos (não atualiza; o :Astrograph atualizar pode recusar)\n'
+    printf '  escolha [1]: '
+    IFS= read -r -u 3 pick || pick=""
+    case "$pick" in 2) CLONE_MODE="usar" ;; *) CLONE_MODE="substituir" ;; esac
+  else
+    info "Sem terminal interativo: uso os arquivos existentes (ASTROGRAPH_CLONE_EXISTENTE=substituir apaga e clona de novo)."
+    CLONE_MODE="usar"
+  fi
+}
+substituir_clone() {
+  bk="$ROOT.backup-$(date +%Y%m%d-%H%M%S)"
+  info "A pasta atual vai para $bk"
+  mv "$ROOT" "$bk"
+  info "Clonando o Astrograph em $ROOT"
+  git clone --depth 1 "$REPO" "$ROOT"
+}
+if [ -d "$ROOT" ] && [ -n "$(ls -A "$ROOT" 2>/dev/null)" ] && [ ! -d "$ROOT/.git" ]; then
+  escolher_clone "A pasta $ROOT já tem arquivos, mas não é um clone do Astrograph."
+  if [ "$CLONE_MODE" = "substituir" ]; then
+    substituir_clone
+  else
+    [ -d "$ROOT/template" ] || { warn "Sem $ROOT/template não dá para usar essa pasta. Rode de novo e escolha substituir."; exit 1; }
+    info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+  fi
+elif [ -d "$ROOT/.git" ]; then
   info "Atualizando $ROOT"
   # o `:Lazy update` reescreve o lazy-lock.json versionado; sem descartar essa
   # alteração o pull falha e a instalação continua velha sem avisar
   git -C "$ROOT" checkout -- template/lazy-lock.json 2>/dev/null || true
-  git -C "$ROOT" pull --ff-only || warn "Não consegui atualizar $ROOT (alterações locais?). Rode: git -C \"$ROOT\" status"
+  if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    escolher_clone "O clone em $ROOT tem arquivos modificados."
+  fi
+  if [ "$CLONE_MODE" = "substituir" ]; then
+    substituir_clone
+  elif [ "$CLONE_MODE" = "usar" ]; then
+    info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+  elif ! git -C "$ROOT" pull --ff-only; then
+    escolher_clone "Não consegui atualizar $ROOT (o histórico local diverge da main)."
+    if [ "$CLONE_MODE" = "substituir" ]; then
+      substituir_clone
+    else
+      info "Usando os arquivos existentes em $ROOT (sem atualizar)"
+    fi
+  fi
 else
   info "Clonando o Astrograph em $ROOT"
   git clone --depth 1 "$REPO" "$ROOT"
@@ -358,12 +410,22 @@ case "$OS-$ARCH" in
   Darwin-arm64) PLATAFORMA="macos-arm64" ;;
 esac
 RELEASE_TAG=""
+RELEASE_REF=""
 RELEASE_SUMS=""
 if [ -n "$PLATAFORMA" ] && [ "${ASTROGRAPH_SEM_BAIXAR:-}" != "1" ]; then
   RELEASE_TAG="$(curl -fsSL --max-time 15 https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest 2>/dev/null |
     sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  RELEASE_REF="$RELEASE_TAG"
+  if [ -z "$RELEASE_TAG" ]; then
+    # sem release com tag v*: usa os executáveis que o CI publica a cada push na main (release móvel main-latest)
+    main_commit="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/main-latest/COMMIT.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+    if printf '%s' "$main_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+      RELEASE_REF="main-latest"
+      RELEASE_TAG="main-${main_commit:0:7}"
+    fi
+  fi
   if [ -n "$RELEASE_TAG" ]; then
-    RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/SHA256SUMS.txt" 2>/dev/null || true)"
+    RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_REF/SHA256SUMS.txt" 2>/dev/null || true)"
   fi
 fi
 sha256_de() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
@@ -374,7 +436,7 @@ baixar_binario() {
   esperado="$(printf '%s\n' "$RELEASE_SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')"
   if ! printf '%s' "$esperado" | grep -Eq '^[0-9a-fA-F]{64}$'; then return 1; fi
   tmp="$(mktemp)"
-  if curl -fsSL --max-time 300 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/$asset" -o "$tmp" &&
+  if curl -fsSL --max-time 300 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_REF/$asset" -o "$tmp" &&
     [ "$(sha256_de "$tmp" | tr 'A-F' 'a-f')" = "$(printf '%s' "$esperado" | tr 'A-F' 'a-f')" ]; then
     mv -f "$tmp" "$dest" && chmod +x "$dest" && printf '%s\n' "$RELEASE_TAG" >"$stampf"
     return 0

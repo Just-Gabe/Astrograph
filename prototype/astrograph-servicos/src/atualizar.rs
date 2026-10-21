@@ -297,7 +297,16 @@ fn corpo(o: &Opcoes) -> Resultado {
 
     // 4. plugins, app em Rust e conferencia (com a arvore limpa na versao nova)
     sync_plugins(o);
-    let (compilados, falharam) = if o.recompilar { nativo::compilar(raiz, Some((&antes, &depois))) } else { (vec![], vec![]) };
+    let (mut compilados, mut falharam) = if o.recompilar { nativo::compilar(raiz, Some((&antes, &depois))) } else { (vec![], vec![]) };
+    // sem Rust (ou com o build falhando) tenta os executáveis prontos que o CI publica para a main
+    let mut aviso_binarios: Option<String> = None;
+    if !falharam.is_empty() {
+        let base = std::env::var("ASTROGRAPH_BINARIOS_URL").unwrap_or_else(|_| nativo::BINARIOS_PADRAO.to_string());
+        let (ok, ruins, aviso) = nativo::baixar_prontos(raiz, &falharam, &depois, &base);
+        compilados.extend(ok.into_iter().map(|c| format!("{c} (pronto)")));
+        falharam = ruins;
+        aviso_binarios = aviso;
+    }
     if let Err(detalhe) = verificar(o) {
         voltar(&g);
         sync_plugins(o);
@@ -331,7 +340,13 @@ fn corpo(o: &Opcoes) -> Resultado {
         msg.push_str(&format!("\nApp recompilado: {}.", compilados.join(", ")));
     }
     if !falharam.is_empty() {
-        msg.push_str(&format!("\nNao consegui recompilar {}: o app antigo continua valendo.", falharam.join(", ")));
+        msg.push_str(&format!(
+            "\nNao consegui atualizar o app ({}): o antigo continua valendo. Instale o Rust (https://rustup.rs) para compilar aqui.",
+            falharam.join(", ")
+        ));
+        if let Some(a) = &aviso_binarios {
+            msg.push_str(&format!("\n{a}"));
+        }
     }
     // num clone raso o git nao enxerga o pai da versao nova: o ramo e so ponto de
     // restauracao; so avisa quando o historico divergiu de verdade
@@ -344,7 +359,7 @@ fn corpo(o: &Opcoes) -> Resultado {
             raiz.display()
         ));
     }
-    msg.push_str("\nReinicie o Neovim para carregar a versao nova.");
+    msg.push_str("\nReinicie o Astrograph (e o Neovim, se usa o espelho) para carregar a versao nova.");
     Resultado {
         status: Estado::Atualizado,
         mensagem: msg,

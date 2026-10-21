@@ -495,6 +495,10 @@ impl Editor {
             let v: i128 = cs[i..].iter().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
             Some(if neg { -v } else { v })
         };
+        if b <= a {
+            // uma linha só: nada a ordenar, o cursor não sai do lugar
+            return;
+        }
         let chave = |l: &str| -> String { if ic { l.to_lowercase() } else { l.to_string() } };
         let mut linhas: Vec<String> = (a..=b).map(|r| self.buf.line(r)).collect();
         let original = linhas.clone();
@@ -765,6 +769,10 @@ impl Editor {
             }
             k += 1;
         }
+        // o cursor do desfazer é o do primeiro comando que mexeu no texto (o Vim guarda o do primeiro u_save)
+        if u0 >= 1 && self.undo.len() > u0 {
+            self.undo[u0 - 1].cursor = self.undo[u0].cursor;
+        }
         // o comando inteiro é um passo só no desfazer
         self.undo.truncate(u0.max(1));
         let _ = &mut marcadas;
@@ -879,8 +887,9 @@ impl Editor {
         }
         match ultimo {
             Some(_) if contar => {
-                // só contou: o cursor fica na mesma linha, na coluna 0
-                self.cursor = Pos::new(self.cursor.row, 0);
+                // só contou: o cursor fica na mesma linha, no primeiro não branco (`beginline`)
+                let r = self.cursor.row;
+                self.cursor = Pos::new(r, self.buf.first_nonblank(r));
                 self.fix_cursor();
                 self.curswant = self.want_here();
             }

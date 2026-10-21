@@ -135,6 +135,8 @@ pub fn compilar_um(raiz: &Path, alvo: &Alvo) -> bool {
 pub fn compilar(raiz: &Path, mudanca: Option<(&str, &str)>) -> (Vec<String>, Vec<String>) {
     let (mut ok, mut falhou) = (Vec::new(), Vec::new());
     if !rodar("cargo", &["--version"], None, &[], Duration::from_secs(10)).ok() {
+        // sem cargo o app não é recompilado: avisa em vez de ficar calado com o app velho
+        falhou.extend(precisam(raiz, mudanca).iter().map(|a| a.crate_.to_string()));
         return (ok, falhou);
     }
     for a in precisam(raiz, mudanca) {
@@ -145,6 +147,91 @@ pub fn compilar(raiz: &Path, mudanca: Option<(&str, &str)>) -> (Vec<String>, Vec
         }
     }
     (ok, falhou)
+}
+
+/// Onde o CI publica os executáveis da `main` (release móvel `main-latest`, refeito a cada push).
+pub const BINARIOS_PADRAO: &str = "https://github.com/Just-Gabe/Astrograph/releases/download/main-latest";
+
+/// Sufixo dos arquivos publicados: `windows-x64`, `linux-x64` ou `macos-arm64`; e a extensão.
+pub fn plataforma() -> Option<(&'static str, &'static str)> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some(("windows-x64", ".exe"))
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some(("linux-x64", ""))
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some(("macos-arm64", ""))
+    } else {
+        None
+    }
+}
+
+fn baixar_texto(url: &str) -> Result<String, String> {
+    let s = rodar("curl", &["-fsSL", "--max-time", "60", "-H", "User-Agent: astrograph", url], None, &[], Duration::from_secs(90));
+    if s.ok() {
+        Ok(s.stdout)
+    } else {
+        Err(format!("{url}: {}", s.stderr.trim()))
+    }
+}
+
+fn sha256_de(arquivo: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(arquivo).ok()?;
+    Some(Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Baixa os executáveis prontos da `main` (sem precisar de Rust). Só vale se o CI já publicou o commit
+/// `commit` e o hash de cada arquivo confere com o `SHA256SUMS.txt`. Devolve (trocados, falharam, aviso).
+pub fn baixar_prontos(raiz: &Path, crates: &[String], commit: &str, base: &str) -> (Vec<String>, Vec<String>, Option<String>) {
+    let base = base.trim_end_matches('/');
+    let falhou = |aviso: String| (vec![], crates.to_vec(), Some(aviso));
+    let Some((plat, ext)) = plataforma() else {
+        return falhou("Não há executável pronto para este sistema.".into());
+    };
+    let publicado = match baixar_texto(&format!("{base}/COMMIT.txt")) {
+        Ok(t) => t.trim().to_string(),
+        Err(e) => return falhou(format!("Não achei os executáveis prontos da main ({e}).")),
+    };
+    if publicado.is_empty() || !commit.starts_with(&publicado) && !publicado.starts_with(commit) {
+        return falhou(format!(
+            "O app novo ainda está sendo compilado pelo CI (publicado: {}, esperado: {}). Rode :Astrograph atualizar de novo em alguns minutos.",
+            publicado.chars().take(7).collect::<String>(),
+            commit.chars().take(7).collect::<String>()
+        ));
+    }
+    let somas = match baixar_texto(&format!("{base}/SHA256SUMS.txt")) {
+        Ok(t) => t,
+        Err(e) => return falhou(format!("Sem SHA256SUMS.txt, não baixo nada sem conferir ({e}).")),
+    };
+    let (mut ok, mut ruins) = (Vec::new(), Vec::new());
+    for c in crates {
+        let Some(alvo) = ALVOS.iter().find(|a| a.crate_ == c) else { continue };
+        let asset = format!("{}-{plat}{ext}", alvo.bin);
+        let esperado = somas.lines().find_map(|l| {
+            let (h, n) = l.split_once(char::is_whitespace)?;
+            (n.trim().trim_start_matches('*') == asset).then(|| h.to_lowercase())
+        });
+        let dest = destino(raiz, alvo);
+        let novo = PathBuf::from(format!("{}.new", dest.display()));
+        let _ = fs::create_dir_all(dest.parent().unwrap());
+        let baixou = rodar(
+            "curl",
+            &["-fsSL", "--max-time", "600", "-o", &novo.to_string_lossy(), &format!("{base}/{asset}")],
+            None,
+            &[],
+            Duration::from_secs(660),
+        )
+        .ok();
+        let confere = baixou && esperado.is_some() && sha256_de(&novo) == esperado;
+        if confere && trocar_binario(&novo, &dest) {
+            ok.push(c.clone());
+        } else {
+            let _ = fs::remove_file(&novo);
+            ruins.push(c.clone());
+        }
+    }
+    let aviso = (!ruins.is_empty()).then(|| "O download não conferiu com o SHA256 publicado (descartado).".to_string());
+    (ok, ruins, aviso)
 }
 
 #[cfg(test)]
@@ -160,5 +247,40 @@ mod testes {
             assert!(ui.iter().any(|c| c == esperado), "{esperado} em {ui:?}");
         }
         assert_eq!(pastas_do_build(&raiz, "astrograph-agent"), vec!["astrograph-agent".to_string()]);
+    }
+
+    #[test]
+    fn baixa_so_com_commit_e_hash_certos() {
+        use sha2::{Digest, Sha256};
+        let Some((plat, ext)) = plataforma() else { return };
+        let d = std::env::temp_dir().join(format!("astrograph-bin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let (pub_, raiz) = (d.join("pub"), d.join("raiz"));
+        fs::create_dir_all(&pub_).unwrap();
+        fs::create_dir_all(raiz.join("bin")).unwrap();
+        let conteudo = b"binario-novo";
+        let asset = format!("astrograph-{plat}{ext}");
+        fs::write(pub_.join(&asset), conteudo).unwrap();
+        let hash: String = Sha256::digest(conteudo).iter().map(|b| format!("{b:02x}")).collect();
+        fs::write(pub_.join("SHA256SUMS.txt"), format!("{hash}  {asset}\n")).unwrap();
+        fs::write(pub_.join("COMMIT.txt"), "abc1234def\n").unwrap();
+        fs::write(raiz.join("bin").join(exe("astrograph")), b"velho").unwrap();
+        let base = format!("file://{}", pub_.display());
+        let crates = vec!["astrograph-ui".to_string()];
+        // commit ainda não publicado: não troca
+        let (ok, ruins, aviso) = baixar_prontos(&raiz, &crates, "ffffffffff", &base);
+        assert!(ok.is_empty() && ruins == crates && aviso.unwrap().contains("compilado"));
+        assert_eq!(fs::read(raiz.join("bin").join(exe("astrograph"))).unwrap(), b"velho");
+        // hash errado: descarta
+        fs::write(pub_.join("SHA256SUMS.txt"), format!("{}  {asset}\n", "0".repeat(64))).unwrap();
+        let (ok, ruins, _) = baixar_prontos(&raiz, &crates, "abc1234def", &base);
+        assert!(ok.is_empty() && ruins == crates);
+        assert_eq!(fs::read(raiz.join("bin").join(exe("astrograph"))).unwrap(), b"velho");
+        // tudo certo
+        fs::write(pub_.join("SHA256SUMS.txt"), format!("{hash}  {asset}\n")).unwrap();
+        let (ok, ruins, aviso) = baixar_prontos(&raiz, &crates, "abc1234def", &base);
+        assert_eq!((ok, ruins, aviso), (crates, vec![], None));
+        assert_eq!(fs::read(raiz.join("bin").join(exe("astrograph"))).unwrap(), conteudo);
+        let _ = fs::remove_dir_all(&d);
     }
 }
