@@ -607,7 +607,16 @@ impl Session {
             }
             return;
         }
-        if self.ed.cmdline().is_some() || self.ed.has_pending() {
+        if self.ed.cmdline().is_some() {
+            // histórico da linha de comando
+            match n {
+                Nav::Up => self.ed.feed(&[Key::Ctrl('p')]),
+                Nav::Down => self.ed.feed(&[Key::Ctrl('n')]),
+                _ => {}
+            }
+            return;
+        }
+        if self.ed.has_pending() {
             return;
         }
         let (row, col) = (self.ed.cursor.row, self.ed.cursor.col);
@@ -2950,6 +2959,7 @@ impl Session {
             self.ed.feed(&[Key::Esc]);
             return self.lsp_consulta(if k == Key::Char('r') { PedidoLsp::Referencias } else { PedidoLsp::TipoDaDefinicao });
         }
+        self.ed.set_nome_arquivo(self.path.as_ref().map(|p| p.to_string_lossy().into_owned()));
         self.ed.feed(&[k]);
         if tinha_snip {
             self.snip_ajustar(antes_snip);
@@ -2959,6 +2969,9 @@ impl Session {
         // `:s`, `:d`, `:g`... o núcleo resolve; `:w`, `:q`, `:e`... voltam para cá
         if let Some(linha) = self.ed.take_host_cmd() {
             self.exec_ex(&linha);
+        }
+        if let Some(a) = self.ed.take_host_aba() {
+            self.aba_texto = Some(a);
         }
         if self.ed.beeped() && self.ed.mode() == Mode::Normal {
             // o Vim apita; aqui só ignoramos (sem aviso na tela)
@@ -3166,7 +3179,84 @@ impl Session {
         };
     }
 
+    /// Roda `cmd` no shell e devolve a saída (stdout + stderr), com `entrada` no stdin.
+    fn shell_saida(cmd: &str, entrada: &str) -> String {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut c = if cfg!(windows) { Command::new("cmd") } else { Command::new("sh") };
+        c.args(if cfg!(windows) { ["/C", cmd] } else { ["-c", cmd] });
+        let Ok(mut filho) = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() else {
+            return format!("não rodou: {cmd}");
+        };
+        if let Some(mut si) = filho.stdin.take() {
+            let e = entrada.to_string();
+            std::thread::spawn(move || {
+                let _ = si.write_all(e.as_bytes());
+            });
+        }
+        match filho.wait_with_output() {
+            Ok(o) => {
+                let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+                s.push_str(&String::from_utf8_lossy(&o.stderr));
+                s
+            }
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// `:r arq`, `:r !cmd`, `:!cmd` e `:{faixa}!cmd` (o núcleo manda no formato `Nr arg`, `!cmd`, `A,B!cmd`).
+    /// Devolve `true` se tratou.
+    fn ex_shell(&mut self, line: &str) -> bool {
+        let t = line.trim();
+        let ultima = self.ed.buf.line_count() - 1;
+        if let Some(cmd) = t.strip_prefix('!') {
+            let saida = Self::shell_saida(cmd.trim(), "");
+            self.aba_texto = Some((format!("!{}", cmd.trim()), saida));
+            return true;
+        }
+        let dig = t.chars().take_while(|c| c.is_ascii_digit()).count();
+        if dig > 0 && t[dig..].starts_with("r ") {
+            let depois: usize = t[..dig].parse().unwrap_or(0);
+            let arg = t[dig + 2..].trim();
+            let texto = match arg.strip_prefix('!') {
+                Some(c) => Self::shell_saida(c.trim(), ""),
+                None => std::fs::read_to_string(arg).unwrap_or_default(),
+            };
+            if texto.is_empty() {
+                return true;
+            }
+            let row = depois.min(ultima + 1);
+            // entra como linhas novas depois de `row` (0 = antes da primeira)
+            let (pos, txt) = if row == 0 {
+                (Pos::new(0, 0), texto.clone())
+            } else {
+                let r = row - 1;
+                (Pos::new(r, self.ed.buf.line_len(r)), format!("\n{}", texto.trim_end_matches('\n')))
+            };
+            let txt = if row == 0 && !txt.ends_with('\n') { format!("{txt}\n") } else { txt };
+            self.ed.aplicar_edicoes(&[(pos, pos, txt)]);
+            return true;
+        }
+        if let Some((faixa, cmd)) = t.split_once('!') {
+            if let Some((a, b)) = faixa.split_once(',') {
+                if let (Ok(a), Ok(b)) = (a.parse::<usize>(), b.parse::<usize>()) {
+                    let (a, b) = (a.saturating_sub(1).min(ultima), b.saturating_sub(1).min(ultima));
+                    let ini = Pos::new(a, 0);
+                    let fim = Pos::new(b, self.ed.buf.line_len(b));
+                    let entrada: String = (a..=b).map(|r| format!("{}\n", self.ed.buf.line(r))).collect();
+                    let saida = Self::shell_saida(cmd.trim(), &entrada);
+                    self.ed.aplicar_edicoes(&[(ini, fim, saida.trim_end_matches('\n').to_string())]);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn exec_ex(&mut self, line: &str) {
+        if self.ex_shell(line) {
+            return;
+        }
         // o núcleo já aplicou a faixa (`1,3`, `%`, `'<,'>`): aqui só interessa o nome do comando
         let line = line.trim().trim_start_matches(|c: char| c.is_ascii_digit() || ",.$%'<>+-; :".contains(c)).trim();
         let (name, arg) = match line.split_once(char::is_whitespace) {
@@ -6103,5 +6193,21 @@ mod testes {
         assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (0, 2));
         s.click(1, 50);
         assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ex_r_bang_e_filtro_de_faixa_usam_o_shell() {
+        let mut s = Session::new("b\na\nc\n", None);
+        s.resize(80, 20.0);
+        s.feed(":1r !echo novo<CR>");
+        assert_eq!(s.ed.buf.line(1), "novo");
+        s.feed(":1,2!sort<CR>");
+        assert_eq!(s.ed.buf.line(0), "b");
+        assert_eq!(s.ed.buf.line(1), "novo");
+        let mut s = Session::new("z\ny\nx\n", None);
+        s.resize(80, 20.0);
+        s.feed(":%!sort<CR>");
+        assert_eq!((s.ed.buf.line(0), s.ed.buf.line(2)), ("x".to_string(), "z".to_string()));
     }
 }
