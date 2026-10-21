@@ -413,16 +413,17 @@ RELEASE_TAG=""
 RELEASE_REF=""
 RELEASE_SUMS=""
 if [ -n "$PLATAFORMA" ] && [ "${ASTROGRAPH_SEM_BAIXAR:-}" != "1" ]; then
-  RELEASE_TAG="$(curl -fsSL --max-time 15 https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest 2>/dev/null |
-    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
-  RELEASE_REF="$RELEASE_TAG"
-  if [ -z "$RELEASE_TAG" ]; then
-    # sem release com tag v*: usa os executáveis que o CI publica a cada push na main (release móvel main-latest)
-    main_commit="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/main-latest/COMMIT.txt" 2>/dev/null | tr -d '[:space:]' || true)"
-    if printf '%s' "$main_commit" | grep -Eq '^[0-9a-f]{40}$'; then
-      RELEASE_REF="main-latest"
-      RELEASE_TAG="main-${main_commit:0:7}"
-    fi
+  # primeiro os executáveis que o CI publica a cada push na main (release móvel main-latest): são os do
+  # código atual, com o motor nativo; só se não houver, a última release com tag v*
+  RELEASE_REF=""
+  main_commit="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/main-latest/COMMIT.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+  if printf '%s' "$main_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+    RELEASE_REF="main-latest"
+    RELEASE_TAG="main-${main_commit:0:7}"
+  else
+    RELEASE_TAG="$(curl -fsSL --max-time 15 https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest 2>/dev/null |
+      sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+    RELEASE_REF="$RELEASE_TAG"
   fi
   if [ -n "$RELEASE_TAG" ]; then
     RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_REF/SHA256SUMS.txt" 2>/dev/null || true)"
