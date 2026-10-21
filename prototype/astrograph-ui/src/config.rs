@@ -41,11 +41,15 @@ pub struct EditorCfg {
     pub clipboard: String,
     /// `"manual"` (padrão), `"indent"` ou `"syntax"` (tree-sitter): como as dobras (`za`, `zM`...) são achadas
     pub foldmethod: String,
+    /// quebra as linhas longas na largura da tela (`:set wrap`)
+    pub wrap: bool,
+    /// com `wrap`, quebra nos espaços (a palavra inteira desce) em vez de partir no meio
+    pub linebreak: bool,
 }
 
 impl Default for EditorCfg {
     fn default() -> Self {
-        EditorCfg { clipboard: String::new(), foldmethod: "manual".into() }
+        EditorCfg { clipboard: String::new(), foldmethod: "manual".into(), wrap: false, linebreak: false }
     }
 }
 

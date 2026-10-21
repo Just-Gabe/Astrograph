@@ -224,6 +224,10 @@ pub struct Session {
     /// dobras automáticas: o método e a revisão do texto para a qual foram calculadas
     fold_metodo: crate::dobras::Metodo,
     fold_rev: u64,
+    /// quebra de linha (`:set wrap`) e o cache de "há alguma linha mais larga que a tela" (revisão, largura, resposta)
+    wrap: bool,
+    linebreak: bool,
+    larga_cache: std::cell::Cell<(u64, usize, bool)>,
     /// projeção das dobras fechadas (cache por revisão e dobras)
     proj: std::cell::RefCell<Option<std::sync::Arc<crate::dobras::Proj>>>,
     /// quando a líder foi apertada (o menu de atalhos aparece depois de um tempo)
@@ -377,6 +381,9 @@ impl Session {
             tree_focus: false,
             fold_metodo: crate::dobras::METODO_INICIAL.get().copied().unwrap_or_default(),
             fold_rev: u64::MAX,
+            wrap: crate::dobras::WRAP_INICIAL.get().copied().unwrap_or(false),
+            linebreak: crate::dobras::LINEBREAK_INICIAL.get().copied().unwrap_or(false),
+            larga_cache: std::cell::Cell::new((u64::MAX, 0, false)),
             proj: std::cell::RefCell::new(None),
             leader_desde: None,
             ia_prompt: None,
@@ -2966,12 +2973,7 @@ impl Session {
         // clicar no texto tira o teclado do terminal
         self.term_focus = false;
         self.term_zen = false;
-        let r = self.proj_a_real(row).min(self.ed.buf.line_count() - 1);
-        let line = self.ed.buf.line(r);
-        let len = line.chars().count();
-        // na inserção o cursor pode ficar depois do último caractere
-        let max = if self.ed.mode() == Mode::Insert { len } else { len.saturating_sub(1) };
-        let c = if vcol >= vcol_start(&line, len) { max } else { col_for_vcol(&line, vcol) };
+        let (r, c) = self.clique_em(row, vcol, self.ed.mode() == Mode::Insert);
         self.ed.set_cursor(r, c);
     }
 
@@ -3024,11 +3026,31 @@ impl Session {
 
     /// Leva o cursor (e a ponta móvel da seleção) à célula `(row, vcol)`.
     fn mouse_para(&mut self, row: usize, vcol: usize) {
-        let r = self.proj_a_real(row).min(self.ed.buf.line_count() - 1);
-        let line = self.ed.buf.line(r);
-        let len = line.chars().count();
-        let c = if vcol >= vcol_start(&line, len) { len.saturating_sub(1) } else { col_for_vcol(&line, vcol) };
+        let (r, c) = self.clique_em(row, vcol, false);
         self.ed.set_cursor(r, c);
+    }
+
+    /// (linha mostrada, coluna visual) da tela -> (linha, coluna em caracteres) do arquivo, com dobras e
+    /// linhas quebradas. `depois_do_fim`: na inserção o cursor pode ficar depois do último caractere.
+    fn clique_em(&self, row: usize, vcol: usize, depois_do_fim: bool) -> (usize, usize) {
+        let proj = self.proj_atual();
+        let (r, ini, fim) = match &proj {
+            Some(p) => {
+                let pr = row.min(p.linhas() - 1);
+                (p.mapa[pr], p.ini[pr], Some((p.fim[pr], p.mapa.get(pr + 1) == Some(&p.mapa[pr]))))
+            }
+            None => (row.min(self.ed.buf.line_count() - 1), 0, None),
+        };
+        let r = r.min(self.ed.buf.line_count() - 1);
+        let linha: Vec<char> = self.ed.buf.line(r).chars().collect();
+        let fim_seg = fim.map_or(linha.len(), |(f, _)| f.min(linha.len()));
+        let seg: String = linha[ini.min(fim_seg)..fim_seg].iter().collect();
+        let len = seg.chars().count();
+        let mais_trechos = fim.is_some_and(|(_, m)| m);
+        // num trecho que não é o último o cursor para no último caractere dele
+        let max = if depois_do_fim && !mais_trechos { len } else { len.saturating_sub(1) };
+        let c = if vcol >= vcol_start(&seg, len) { max } else { col_for_vcol(&seg, vcol) };
+        (r, ini + c)
     }
 
     /// Rolagem em linhas (pode ser fracionária): `lines > 0` desce.
@@ -3048,7 +3070,7 @@ impl Session {
         }
         // o cursor acompanha para não sair da tela
         let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = a_proj(self.ed.cursor.row) as f32;
+        let row = proj.as_ref().map_or(self.ed.cursor.row, |p| p.pos_a_proj(self.ed.cursor.row, self.ed.cursor.col).0) as f32;
         let (lo, hi) = (novo + so, novo + self.rows - 1.0 - so);
         if row < lo {
             self.ed.set_cursor(a_real(lo.ceil() as usize), self.ed.cursor.col);
@@ -3073,7 +3095,7 @@ impl Session {
                 Some(n) => (n, true),
                 None => (nome, false),
             };
-            let (base, liga) = match nome.strip_prefix("no").filter(|r| matches!(*r, "number" | "nu" | "relativenumber" | "rnu" | "wrap" | "list" | "hlsearch" | "hls" | "incsearch" | "is" | "cursorline" | "cul")) {
+            let (base, liga) = match nome.strip_prefix("no").filter(|r| matches!(*r, "number" | "nu" | "relativenumber" | "rnu" | "wrap" | "linebreak" | "lbr" | "list" | "hlsearch" | "hls" | "incsearch" | "is" | "cursorline" | "cul")) {
                 Some(r) => (r, false),
                 None => (nome, true),
             };
@@ -3081,6 +3103,8 @@ impl Session {
             match base {
                 "number" | "nu" => flip(&mut self.numero),
                 "relativenumber" | "rnu" => flip(&mut self.relativo),
+                "wrap" => flip(&mut self.wrap),
+                "linebreak" | "lbr" => flip(&mut self.linebreak),
                 "scrolloff" | "so" => match valor.and_then(|v| v.parse::<f32>().ok()) {
                     Some(n) if n >= 0.0 => self.scrolloff = n,
                     _ => self.say(format!("E521: número esperado: {t}"), ToastKind::Error),
@@ -3108,7 +3132,7 @@ impl Session {
                     Some("dark") => crate::design::set_light(false),
                     _ => self.say(format!("E474: Argumento inválido: {t}"), ToastKind::Error),
                 },
-                "hlsearch" | "hls" | "incsearch" | "is" | "wrap" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" => {}
+                "hlsearch" | "hls" | "incsearch" | "is" | "list" | "cursorline" | "cul" | "mouse" | "termguicolors" | "tgc" | "hidden" | "hid" | "autoindent" | "ai" | "smartindent" | "si" | "ruler" | "showcmd" | "laststatus" | "ls" => {}
                 _ => self.say(format!("E518: Opção desconhecida: {t}"), ToastKind::Error),
             }
         }
@@ -3323,21 +3347,44 @@ impl Session {
         self.ed.definir_dobras_auto(&faixas);
     }
 
-    /// A projeção do texto com as dobras fechadas escondidas (None: não há dobra fechada).
+    /// Alguma linha é mais larga que `w` colunas? (só importa com `wrap`; guarda a resposta por revisão)
+    fn tem_linha_larga(&self, w: usize) -> bool {
+        let rev = self.ed.buf.rev;
+        let (r0, w0, v0) = self.larga_cache.get();
+        if r0 == rev && w0 == w {
+            return v0;
+        }
+        let buf = &self.ed.buf;
+        let mut larga = false;
+        for i in 0..buf.line_count() {
+            let n = buf.line_len(i);
+            // tab e caracteres largos ocupam mais de uma coluna: só aí vale medir de verdade
+            if n > w || (n * 2 > w && vcol_start(&buf.line(i), n) > w) {
+                larga = true;
+                break;
+            }
+        }
+        self.larga_cache.set((rev, w, larga));
+        larga
+    }
+
+    /// A projeção do texto (dobras fechadas escondidas e linhas quebradas); None quando a tela mostra o texto
+    /// como está.
     fn proj_atual(&self) -> Option<std::sync::Arc<crate::dobras::Proj>> {
         let dobras = self.ed.dobras_fechadas();
-        if dobras.is_empty() {
+        let larg = if self.wrap { Some(self.cols.max(10)) } else { None };
+        if dobras.is_empty() && !larg.is_some_and(|w| self.tem_linha_larga(w)) {
             *self.proj.borrow_mut() = None;
             return None;
         }
         let rev = self.ed.buf.rev;
         if let Some(p) = self.proj.borrow().as_ref() {
-            if p.rev == rev && p.dobras == dobras {
+            if p.rev == rev && p.dobras == dobras && p.larg == larg && p.em_palavra == self.linebreak {
                 return Some(p.clone());
             }
         }
         let buf = &self.ed.buf;
-        let p = std::sync::Arc::new(crate::dobras::Proj::construir(&|r| buf.line(r), buf.line_count(), &dobras, rev));
+        let p = std::sync::Arc::new(crate::dobras::Proj::construir(&|r| buf.line(r), buf.line_count(), &dobras, rev, larg, self.linebreak));
         *self.proj.borrow_mut() = Some(p.clone());
         Some(p)
     }
@@ -3353,7 +3400,8 @@ impl Session {
         let a_proj = |r: usize| proj.as_ref().map_or(r, |p| p.a_proj(r));
         let top_p = a_proj(self.top as usize) as f32 + self.top.fract();
         let so = self.scrolloff.min((self.rows - 1.0) / 2.0);
-        let row = a_proj(self.ed.cursor.row) as f32;
+        // a linha mostrada do cursor (numa linha quebrada, o trecho onde ele está)
+        let row = proj.as_ref().map_or(self.ed.cursor.row, |p| p.pos_a_proj(self.ed.cursor.row, self.ed.cursor.col).0) as f32;
         let mut top = top_p;
         let (lo, hi) = (top + so, top + self.rows - 1.0 - so);
         if row < top - self.rows || row > top + 2.0 * self.rows {
@@ -3372,7 +3420,11 @@ impl Session {
                 None => top,
             };
         }
-        // horizontal (em colunas visuais)
+        // horizontal (em colunas visuais); com `wrap` não há rolagem lateral
+        if self.wrap {
+            self.left = 0;
+            return;
+        }
         let line = self.ed.buf.line(self.ed.cursor.row);
         let v = vcol_cursor(&line, self.ed.cursor.col);
         if v < self.left {
@@ -3410,23 +3462,32 @@ impl Session {
         let hi = (top_v as usize + self.rows.ceil() as usize + SPAN_MARGIN).min(line_count);
         let mut spans: Vec<Vec<Span>> = vec![Vec::new(); hi.saturating_sub(lo)];
         if let Some((doc, _)) = &self.doc {
-            let mut poe = |row_real: usize, prow: usize, sp: &astrograph_syntax::Span| {
+            // `ini..fim`: o trecho da linha que aparece nesta linha mostrada (linhas quebradas)
+            let mut poe = |row_real: usize, prow: usize, ini: usize, fim: usize, sp: &astrograph_syntax::Span| {
                 let Some(cls) = classify(sp.group) else { return };
                 let line = self.ed.buf.line(row_real);
-                let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count() as u32;
-                spans[prow - lo].push(Span { start: to_char(sp.start_col), end: to_char(sp.end_col), cls });
+                let to_char = |byte: usize| line.char_indices().take_while(|(b, _)| *b < byte).count();
+                let (a, b) = (to_char(sp.start_col).max(ini), to_char(sp.end_col).min(fim));
+                if a < b {
+                    spans[prow - lo].push(Span { start: (a - ini) as u32, end: (b - ini) as u32, cls });
+                }
             };
             match &proj {
                 None => {
                     for sp in doc.highlights(lo..hi) {
-                        poe(sp.row, sp.row, &sp);
+                        poe(sp.row, sp.row, 0, usize::MAX, &sp);
                     }
                 }
                 Some(p) => {
+                    let mut ultimo: Option<(usize, Vec<astrograph_syntax::Span>)> = None;
                     for prow in lo..hi {
                         let r = p.mapa[prow];
-                        for sp in doc.highlights(r..r + 1) {
-                            poe(r, prow, &sp);
+                        // as linhas quebradas repetem a mesma linha do arquivo: o realce dela vem uma vez só
+                        if ultimo.as_ref().is_none_or(|(u, _)| *u != r) {
+                            ultimo = Some((r, doc.highlights(r..r + 1)));
+                        }
+                        for sp in &ultimo.as_ref().unwrap().1 {
+                            poe(r, prow, p.ini[prow], p.fim[prow], sp);
                         }
                     }
                 }
@@ -3443,10 +3504,7 @@ impl Session {
         // posições do arquivo -> da tela (uma linha escondida cai no começo da dobra)
         let mapa_pos = |r: usize, c: usize| -> (usize, usize) {
             match &proj {
-                Some(p) => {
-                    let pr = p.a_proj(r);
-                    (pr, if p.mapa[pr] == r { c } else { 0 })
-                }
+                Some(p) => p.pos_a_proj(r, c),
                 None => (r, c),
             }
         };
@@ -3479,13 +3537,18 @@ impl Session {
             if let Some(re) = astrograph_core::search::compile(p) {
                 for prow in lo..hi {
                     let row = proj.as_ref().map_or(prow, |p| p.mapa[prow]);
+                    let (ini, fim) = proj.as_ref().map_or((0, usize::MAX), |p| (p.ini[prow], p.fim[prow]));
                     let line = self.ed.buf.line(row);
                     for m in re.find_iter(&line).take(200) {
                         if m.start() == m.end() {
                             continue;
                         }
                         let a = line[..m.start()].chars().count();
-                        hits.push((prow, a, a + line[m.start()..m.end()].chars().count()));
+                        let b = a + line[m.start()..m.end()].chars().count();
+                        let (a, b) = (a.max(ini), b.min(fim));
+                        if a < b {
+                            hits.push((prow, a - ini, b - ini));
+                        }
                     }
                 }
             }
@@ -3553,6 +3616,8 @@ impl Session {
             left: self.left,
             cursor: mapa_pos(self.ed.cursor.row, self.ed.cursor.col),
             row_map: proj.as_ref().map(|p| p.mapa.clone()),
+            row_cont: proj.as_ref().map(|p| p.cont.clone()),
+            cursor_real: (self.ed.cursor.row, self.ed.cursor.col),
             mode,
             selection: sel,
             sel_eol: self.ed.bloco_ate_o_fim(),
@@ -4797,6 +4862,42 @@ mod testes {
         };
         let dd = medir(&mut s, "dd", 100);
         println!("BENCH {n} linhas: abrir {abrir:?} · 1º quadro {primeiro:?} · j {j:?} · 20j {pagina:?} · G+gg {g:?} · digitar {digitar:?} · u {desfazer:?} · /busca {busca:?} · :%s {troca:?} · dd {dd:?}");
+    }
+
+    #[test]
+    fn quebra_de_linha_mostra_trechos_e_leva_o_cursor_e_o_clique_ao_lugar_certo() {
+        let mut s = Session::new("curta\nabcdefghijklmnopqrstuvwxyz0123456789\nfim\n", None);
+        s.resize(20, 20.0);
+        // sem wrap: as três linhas
+        assert_eq!(modelo(&mut s).lines, 3);
+        s.feed(":set wrap<CR>");
+        let m = modelo(&mut s);
+        // a linha de 36 caracteres vira dois trechos de 20 e 16
+        assert_eq!(m.lines, 4);
+        assert_eq!(m.line(1), "abcdefghijklmnopqrst");
+        assert_eq!(m.line(2), "uvwxyz0123456789");
+        assert_eq!(m.row_cont.as_ref().map(|c| c.to_vec()), Some(vec![false, false, true, false]));
+        assert_eq!(m.row_map.as_ref().map(|c| c.to_vec()), Some(vec![0, 1, 1, 2]));
+        // o cursor no fim da linha longa cai no segundo trecho
+        s.feed("j$");
+        let m = modelo(&mut s);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 35));
+        assert_eq!(m.cursor, (2, 15));
+        assert_eq!(m.cursor_real, (1, 35));
+        // clicar no segundo trecho leva ao caractere certo do arquivo
+        s.click(2, 3);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 23));
+        // clicar depois do fim do primeiro trecho para no último caractere dele
+        s.click(1, 50);
+        assert_eq!((s.ed.cursor.row, s.ed.cursor.col), (1, 19));
+        // realce de busca e seleção também vão para os trechos
+        s.feed("/xyz0<CR>");
+        let m = modelo(&mut s);
+        assert_eq!(m.hits.iter().map(|h| (h.0, h.1, h.2)).collect::<Vec<_>>(), vec![(2, 3, 7)]);
+        // nowrap volta ao normal
+        s.feed(":set nowrap<CR>");
+        let m = modelo(&mut s);
+        assert_eq!((m.lines, m.row_map.is_none()), (3, true));
     }
 
     #[test]

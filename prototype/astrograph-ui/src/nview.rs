@@ -157,6 +157,10 @@ pub struct ViewModel {
     pub whichkey: Vec<(String, String)>,
     /// com dobras fechadas: o número da linha do arquivo de cada linha mostrada (a margem usa isto)
     pub row_map: Option<std::sync::Arc<Vec<usize>>>,
+    /// com linhas quebradas: quais linhas mostradas são continuação da anterior (sem número na margem)
+    pub row_cont: Option<std::sync::Arc<Vec<bool>>>,
+    /// o cursor na linha e coluna do arquivo (a pílula mostra estas, com dobras ou quebra de linha)
+    pub cursor_real: (usize, usize),
     /// `:set number` / `relativenumber`
     pub numero: bool,
     pub relativo: bool,
@@ -225,6 +229,8 @@ impl ViewModel {
             progress: None,
             whichkey: Vec::new(),
             row_map: None,
+            row_cont: None,
+            cursor_real: (0, 0),
             numero: true,
             relativo: false,
             sig: None,

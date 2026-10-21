@@ -574,7 +574,7 @@ impl Scene {
         self.hit_fade.target = if vm.hits_id != 0 { 1.0 } else { 0.0 };
         // pílula: largura-alvo
         let label_w = self.ui_semi.measure(&self.mode_label, 12.5 * s);
-        let pos = format!("{}:{}", vm.row_map.as_ref().and_then(|m| m.get(vm.cursor.0).copied()).unwrap_or(vm.cursor.0) + 1, vm.cursor.1 + 1);
+        let pos = if vm.row_map.is_some() { format!("{}:{}", vm.cursor_real.0 + 1, vm.cursor_real.1 + 1) } else { format!("{}:{}", vm.cursor.0 + 1, vm.cursor.1 + 1) };
         let pos_w = self.ui.measure(&pos, 12.0 * s);
         let show_w = if vm.showcmd.is_empty() { 0.0 } else { self.ui.measure(&vm.showcmd, 12.0 * s) + 14.0 * s };
         let (nerr, nwarn) = (vm.diags.iter().filter(|g| g.severity == 1).count(), vm.diags.iter().filter(|g| g.severity == 2).count());
@@ -764,13 +764,20 @@ impl Scene {
             // número da linha
             // `number` mostra o número da linha; `relativenumber` a distância até a linha do cursor (a do cursor
             // mostra o número se `number` está ligado, senão 0)
-            let num = match (vm.numero, vm.relativo) {
-                (false, false) => String::new(),
-                // com dobras fechadas, `row` é a linha mostrada e o número vem do arquivo
-                (_, false) => (vm.row_map.as_ref().map_or(row, |m| m.get(row).copied().unwrap_or(row)) + 1).to_string(),
-                (true, true) if row == cur_row => (vm.row_map.as_ref().map_or(row, |m| m.get(row).copied().unwrap_or(row)) + 1).to_string(),
-                (false, true) if row == cur_row => "0".to_string(),
-                (_, true) => row.abs_diff(cur_row).to_string(),
+            // com dobras ou quebra de linha, `row` é a linha mostrada: o número vem do arquivo e a continuação de
+            // uma linha quebrada não leva número
+            let real = |r: usize| vm.row_map.as_ref().map_or(r, |m| m.get(r).copied().unwrap_or(r));
+            let continua = vm.row_cont.as_ref().is_some_and(|c| c.get(row).copied().unwrap_or(false));
+            let num = if continua {
+                String::new()
+            } else {
+                match (vm.numero, vm.relativo) {
+                    (false, false) => String::new(),
+                    (_, false) => (real(row) + 1).to_string(),
+                    (true, true) if row == cur_row => (real(row) + 1).to_string(),
+                    (false, true) if row == cur_row => "0".to_string(),
+                    (_, true) => real(row).abs_diff(real(cur_row)).to_string(),
+                }
             };
             let ncol = if row == cur_row { d::dim() } else { d::faint() };
             if !num.is_empty() {
