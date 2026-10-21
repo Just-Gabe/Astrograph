@@ -1946,6 +1946,10 @@ impl Editor {
                     }
                     return;
                 }
+                if op == 'c' && kind == Kind::Line && b.row > a.row && self.undo_cursor.is_none() {
+                    // o Vim guarda o cursor depois de descer uma linha (apaga as linhas de baixo antes da primeira)
+                    self.undo_cursor = Some(Pos::new(a.row + 1, self.cursor.col));
+                }
                 self.checkpoint();
                 let (text, linewise) = self.range_text(a, b, kind);
                 self.store(reg, text, linewise, true);

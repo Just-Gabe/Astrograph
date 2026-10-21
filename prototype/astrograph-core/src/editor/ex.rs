@@ -769,6 +769,10 @@ impl Editor {
             }
             k += 1;
         }
+        // o cursor do desfazer é o do primeiro comando que mexeu no texto (o Vim guarda o do primeiro u_save)
+        if u0 >= 1 && self.undo.len() > u0 {
+            self.undo[u0 - 1].cursor = self.undo[u0].cursor;
+        }
         // o comando inteiro é um passo só no desfazer
         self.undo.truncate(u0.max(1));
         let _ = &mut marcadas;

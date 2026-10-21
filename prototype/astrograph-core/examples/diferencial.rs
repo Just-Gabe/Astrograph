@@ -372,6 +372,15 @@ async fn main() {
     let seed: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
     let voc = vocabulario(args.get(2).map(String::as_str).unwrap_or("tudo"));
     let cmp_reg = std::env::var("SEM_REG").is_err();
+    // CASO='linha1|linha2' TECLAS='>>dGu': roda só esse caso
+    if let (Ok(c), Ok(t)) = (std::env::var("CASO"), std::env::var("TECLAS")) {
+        let ls: Vec<&str> = c.split('|').collect();
+        match diverge(&ls, &[t.as_str()], cmp_reg).await {
+            None => println!("iguais"),
+            Some(w) => println!("{w}"),
+        }
+        return;
+    }
     let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let (mut ok, mut ruins) = (0usize, 0usize);
     // OURO=arquivo: grava os casos em que o nvim e o Rust concordam (regressão sem nvim)
