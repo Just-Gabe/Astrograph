@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+
+use crate::proc::SemJanela;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -357,7 +359,7 @@ pub fn col_chars(linha: &str, u16col: usize) -> usize {
 impl Cliente {
     /// Abre o servidor e começa o `initialize`; `notify` roda (em outra thread) quando há novidade.
     pub fn iniciar(prog: &str, args: &[String], raiz: &Path, notify: Arc<dyn Fn() + Send + Sync>) -> Result<Cliente, String> {
-        let mut child = Command::new(prog).args(args).current_dir(raiz).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| e.to_string())?;
+        let mut child = Command::new(prog).args(args).current_dir(raiz).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).sem_janela().spawn().map_err(|e| e.to_string())?;
         let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("sem stdin")?));
         let stdout = child.stdout.take().ok_or("sem stdout")?;
         let estado = Arc::new(Mutex::new(Estado::default()));

@@ -19,6 +19,7 @@ use crate::busca;
 use crate::git;
 use crate::janelas::{Dir, Lado, Layout, PaneId};
 use crate::lsp::{self, Cliente};
+use crate::proc::SemJanela;
 use crate::nview::{SigView, CompItem, CompView, GitView, PickItem, PickerView, Shared, Span, TermView, ToastKind, TreeItem, TreeView, ViewModel};
 use crate::term::{self, Term, TermScreen};
 
@@ -1059,7 +1060,7 @@ impl Session {
         } else {
             ("xdg-open", vec![t.clone()])
         };
-        match std::process::Command::new(prog).args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+        match std::process::Command::new(prog).args(&args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).sem_janela().spawn() {
             Ok(_) => self.say(format!("Abrindo {t}"), ToastKind::Info),
             Err(e) => self.say(format!("Não consegui abrir: {e}"), ToastKind::Error),
         }
@@ -2067,6 +2068,7 @@ impl Session {
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
+                    .sem_janela()
                     .spawn();
                 self.say("Abrindo a documentação no navegador".into(), ToastKind::Info);
             }
@@ -3192,7 +3194,7 @@ impl Session {
         use std::process::{Command, Stdio};
         let mut c = if cfg!(windows) { Command::new("cmd") } else { Command::new("sh") };
         c.args(if cfg!(windows) { ["/C", cmd] } else { ["-c", cmd] });
-        let Ok(mut filho) = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() else {
+        let Ok(mut filho) = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).sem_janela().spawn() else {
             return format!("não rodou: {cmd}");
         };
         if let Some(mut si) = filho.stdin.take() {
