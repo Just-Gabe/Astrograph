@@ -483,6 +483,22 @@ try {
   $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest' `
     -Headers @{ 'User-Agent' = 'astrograph-installer' } -TimeoutSec 15
 } catch { $release = $null }
+if (-not $release) {
+  # sem release com tag v*: usa os executáveis que o CI publica a cada push na main (release móvel main-latest)
+  try {
+    $mainBase = 'https://github.com/Just-Gabe/Astrograph/releases/download/main-latest'
+    $mc = (Invoke-WebRequest -Uri "$mainBase/COMMIT.txt" -UseBasicParsing -TimeoutSec 15).Content
+    if ($mc -is [byte[]]) { $mc = [Text.Encoding]::ASCII.GetString($mc) }
+    $mc = "$mc".Trim()
+    if ($mc -match '^[0-9a-f]{40}$') {
+      $names = @('SHA256SUMS.txt', 'astrograph-windows-x64.exe', 'astrograph-agent-windows-x64.exe', 'astrograph-servicos-windows-x64.exe')
+      $release = [pscustomobject]@{
+        tag_name = "main-$($mc.Substring(0, 7))"
+        assets   = @($names | ForEach-Object { [pscustomobject]@{ name = $_; browser_download_url = "$mainBase/$_" } })
+      }
+    }
+  } catch { }
+}
 $commit = (git -C $Root rev-parse --short HEAD 2>$null)
 
 # Hashes publicados no release (SHA256SUMS.txt): todo executável baixado é

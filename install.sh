@@ -410,12 +410,22 @@ case "$OS-$ARCH" in
   Darwin-arm64) PLATAFORMA="macos-arm64" ;;
 esac
 RELEASE_TAG=""
+RELEASE_REF=""
 RELEASE_SUMS=""
 if [ -n "$PLATAFORMA" ] && [ "${ASTROGRAPH_SEM_BAIXAR:-}" != "1" ]; then
   RELEASE_TAG="$(curl -fsSL --max-time 15 https://api.github.com/repos/Just-Gabe/Astrograph/releases/latest 2>/dev/null |
     sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
+  RELEASE_REF="$RELEASE_TAG"
+  if [ -z "$RELEASE_TAG" ]; then
+    # sem release com tag v*: usa os executáveis que o CI publica a cada push na main (release móvel main-latest)
+    main_commit="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/main-latest/COMMIT.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+    if printf '%s' "$main_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+      RELEASE_REF="main-latest"
+      RELEASE_TAG="main-${main_commit:0:7}"
+    fi
+  fi
   if [ -n "$RELEASE_TAG" ]; then
-    RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/SHA256SUMS.txt" 2>/dev/null || true)"
+    RELEASE_SUMS="$(curl -fsSL --max-time 15 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_REF/SHA256SUMS.txt" 2>/dev/null || true)"
   fi
 fi
 sha256_de() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
@@ -426,7 +436,7 @@ baixar_binario() {
   esperado="$(printf '%s\n' "$RELEASE_SUMS" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')"
   if ! printf '%s' "$esperado" | grep -Eq '^[0-9a-fA-F]{64}$'; then return 1; fi
   tmp="$(mktemp)"
-  if curl -fsSL --max-time 300 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_TAG/$asset" -o "$tmp" &&
+  if curl -fsSL --max-time 300 "https://github.com/Just-Gabe/Astrograph/releases/download/$RELEASE_REF/$asset" -o "$tmp" &&
     [ "$(sha256_de "$tmp" | tr 'A-F' 'a-f')" = "$(printf '%s' "$esperado" | tr 'A-F' 'a-f')" ]; then
     mv -f "$tmp" "$dest" && chmod +x "$dest" && printf '%s\n' "$RELEASE_TAG" >"$stampf"
     return 0

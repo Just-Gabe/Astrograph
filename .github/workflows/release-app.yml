@@ -5,10 +5,15 @@
 #
 # Publicar: crie uma tag `v*` (ex.: git tag v0.1.0 && git push origin v0.1.0)
 # ou rode o workflow manualmente informando a tag.
+#
+# A cada push na `main` o mesmo workflow refaz o release móvel `main-latest` (pré-lançamento) com os
+# executáveis desse commit + COMMIT.txt. É de lá que o `:Astrograph atualizar` baixa o app novo quando a
+# máquina não tem Rust (conferindo o SHA256); o `releases/latest` dos instaladores não enxerga pré-lançamentos.
 name: Release do app
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -18,6 +23,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-app-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 jobs:
   compilar:
@@ -48,7 +57,12 @@ jobs:
         shell: bash
         run: |
           for crate in astrograph-ui astrograph-agent astrograph-servicos; do
-            (cd prototype/$crate && cargo test --release && cargo build --release)
+            # na main os testes já rodam no tests.yml: aqui só compila; nas tags roda tudo de novo
+            if [ "${{ github.ref_type }}" = "tag" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              (cd prototype/$crate && cargo test --release && cargo build --release)
+            else
+              (cd prototype/$crate && cargo build --release)
+            fi
           done
       - name: Preparar os executáveis
         shell: bash
@@ -76,7 +90,19 @@ jobs:
       - name: SHA256SUMS.txt
         # o install.ps1 e o install.sh conferem cada download contra este arquivo
         run: cd saida && sha256sum astrograph-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Release móvel da main
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "${{ github.sha }}" > saida/COMMIT.txt
+          # refaz o release e a tag no commit novo
+          gh release delete main-latest --cleanup-tag --yes --repo "${{ github.repository }}" || true
+          gh release create main-latest saida/* --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --prerelease --title "Astrograph main (${GITHUB_SHA::7})" \
+            --notes "Executáveis da main no commit ${{ github.sha }}. Usado pelo :Astrograph atualizar; para instalar, use as releases com tag v*."
       - name: Publicar
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
