@@ -2569,6 +2569,28 @@ impl Session {
         }
     }
 
+    /// Clique numa linha do explorador: pasta abre/fecha (e o teclado fica com o explorador); arquivo abre
+    /// e o foco volta ao texto, como `<CR>`.
+    pub fn tree_click(&mut self, i: usize) {
+        if self.tree_prompt.is_some() || self.picker.is_some() {
+            return;
+        }
+        let Some(t) = self.tree.as_mut() else { return };
+        if i >= t.nos.len() {
+            return;
+        }
+        t.sel = i;
+        self.term_focus = false;
+        let n = t.nos[i].clone();
+        if n.pasta {
+            t.alternar();
+            self.tree_focus = true;
+        } else {
+            self.open_file(&n.caminho, None);
+            self.tree_focus = false;
+        }
+    }
+
     fn tree_key(&mut self, k: Key) {
         if self.tree_prompt.is_some() {
             return self.tree_prompt_key(k);
@@ -4444,6 +4466,7 @@ pub async fn native_task(
             UiCommand::TermOut => {}
             UiCommand::TermSize(r, c) => w.term_resize(r.max(2) as u16, c.max(10) as u16),
             UiCommand::Tab(i) => w.ir_para(i.max(0) as usize),
+            UiCommand::TreeClick(i) => w.atual().tree_click(i),
             UiCommand::TermMouse { acao, botao, row, col, shift } => w.atual().term_mouse(acao, botao, row.max(0) as usize, col.max(0) as usize, shift),
             UiCommand::Paste(t) => w.atual().colar(&t),
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
@@ -6230,5 +6253,34 @@ mod testes {
         s.feed("q");
         let m = modelo(&mut s);
         assert!(m.term.is_none() && m.mode != ModeKind::Terminal);
+    }
+
+    #[test]
+    fn clique_no_explorador_abre_pasta_e_arquivo() {
+        let d = projeto("tree-click");
+        let mut s = Session::new("x\n", None);
+        s.root = d;
+        s.resize(80, 20.0);
+        s.feed(" e");
+        // linha 0 = src (pasta): abre e o teclado continua no explorador
+        s.tree_click(0);
+        let t = modelo(&mut s).tree.unwrap();
+        assert_eq!(t.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()[..3], ["src", "alfa.rs", "beta.rs"]);
+        assert!(t.focus);
+        // clicar de novo na pasta fecha
+        s.tree_click(0);
+        assert_eq!(modelo(&mut s).tree.unwrap().items.len(), 2);
+        // arquivo: abre e devolve o foco ao texto; vim continua valendo depois
+        s.tree_click(0);
+        s.tree_click(2);
+        let m = modelo(&mut s);
+        assert_eq!(m.name, "beta.rs");
+        assert!(!m.tree.as_ref().unwrap().focus);
+        // linha que não existe: nada acontece
+        s.tree_click(99);
+        assert_eq!(modelo(&mut s).name, "beta.rs");
+        // o teclado do explorador segue funcionando
+        s.feed(" ejk<CR>");
+        assert_eq!(modelo(&mut s).name, "beta.rs");
     }
 }
