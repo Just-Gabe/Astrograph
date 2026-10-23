@@ -4879,6 +4879,18 @@ impl Workspace {
         self.sincronizar_mapas(false);
     }
 
+    /// Teclas para o EDITOR mesmo com o terminal em foco (`:cd`, `:w`, comando `:` ou líder vindos de um
+    /// agente): pelo `feed` elas iriam para o shell, ou para o próprio agente que roda no terminal. Com
+    /// `devolver_foco`, o terminal volta a ter o foco depois, para não roubar o que o dono digita nele.
+    pub fn feed_editor(&mut self, teclas: &str, devolver_foco: bool) {
+        let aba = self.ativa;
+        let foco = std::mem::take(&mut self.atual().term_focus);
+        self.feed(teclas);
+        if let Some(s) = self.abas.get_mut(aba).filter(|s| foco && devolver_foco && s.term.is_some()) {
+            s.term_focus = true;
+        }
+    }
+
     pub fn resize(&mut self, cols: usize, rows: f32) {
         self.dims = (cols, rows);
         // com painéis, o tamanho de cada um vem de `tamanhos_paineis`
