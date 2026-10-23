@@ -620,6 +620,8 @@ mod testes {
 
     #[test]
     fn recentes_guardam_sem_repetir() {
+        // ASTROGRAPH_STATE é global: outros testes que gravam nela não podem rodar no meio
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = tmp("rec");
         std::env::set_var("ASTROGRAPH_STATE", d.join("estado"));
         let (a, b) = (d.join("a.txt"), d.join("b.txt"));

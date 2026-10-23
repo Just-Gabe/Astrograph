@@ -5226,6 +5226,18 @@ mod testes {
         s.view_model()
     }
 
+    /// Devolve a variável de ambiente ao valor de antes no fim do teste (mesmo se ele falhar no meio).
+    struct Restaura(&'static str, Option<std::ffi::OsString>);
+
+    impl Drop for Restaura {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
     fn projeto(nome: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("astrograph-nat-{}-{nome}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -5353,7 +5365,12 @@ mod testes {
 
     #[test]
     fn reabrir_um_arquivo_volta_para_onde_o_cursor_estava() {
+        // o cursor é gravado na pasta de estado (global): pasta própria e a trava contra testes que a trocam
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto("cursor");
+        let antes = std::env::var_os("ASTROGRAPH_STATE");
+        std::env::set_var("ASTROGRAPH_STATE", d.join("estado"));
+        let _volta = Restaura("ASTROGRAPH_STATE", antes);
         let arq = d.join("src/volta.rs");
         std::fs::write(&arq, "um\ndois\ntres\nquatro\n").unwrap();
         let mut s = Session::open(&arq);
