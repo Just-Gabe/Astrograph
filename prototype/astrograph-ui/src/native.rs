@@ -224,12 +224,20 @@ impl TreeOp {
     }
 }
 
+/// Número único de cada gravação da referência de "salvo" (`Session::saved_gen`).
+fn nova_geracao() -> u64 {
+    static GERACAO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    GERACAO.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
     saved_rev: u64,
     /// texto gravado (o `Rope` divide os pedaços: guardar é barato)
     saved_rope: ropey::Rope,
+    /// identifica a gravação de `saved_rope` (painéis irmãos só copiam quando muda)
+    saved_gen: u64,
     /// (revisão, modificado) da última comparação com `saved_rope`
     mod_cache: std::cell::Cell<(u64, bool)>,
     /// linha de cima desejada (a cena suaviza)
@@ -406,6 +414,7 @@ impl Session {
             path,
             saved_rev,
             saved_rope,
+            saved_gen: nova_geracao(),
             mod_cache: std::cell::Cell::new((u64::MAX, false)),
             top: 0.0,
             left: 0,
@@ -597,7 +606,23 @@ impl Session {
     fn marcar_salvo(&mut self) {
         self.saved_rev = self.ed.buf.rev;
         self.saved_rope = self.ed.buf.rope.clone();
+        self.saved_gen = nova_geracao();
         self.mod_cache.set((u64::MAX, false));
+    }
+
+    /// Mesma referência de "salvo" de outro painel do mesmo arquivo (`salvo` da gravação `geracao`);
+    /// a revisão fica diferente para o texto decidir. Só troca (e zera o cache) quando a referência
+    /// mudou: a sincronização dos irmãos roda a cada tecla.
+    fn herdar_salvo(&mut self, salvo: &ropey::Rope, geracao: u64) {
+        if self.saved_rev == self.ed.buf.rev {
+            self.saved_rev = self.ed.buf.rev.wrapping_sub(1);
+            self.mod_cache.set((u64::MAX, false));
+        }
+        if self.saved_gen != geracao {
+            self.saved_rope = salvo.clone();
+            self.saved_gen = geracao;
+            self.mod_cache.set((u64::MAX, false));
+        }
     }
 
     /// O nome mostrado na aba.
@@ -4569,6 +4594,9 @@ impl Workspace {
                         n.ed.sincronizar(&origem.ed.buf.rope);
                         if !origem.modified() {
                             n.marcar_salvo();
+                        } else {
+                            // a referência é a da origem, não o disco relido agora (pode ter mudado)
+                            n.herdar_salvo(&origem.saved_rope, origem.saved_gen);
                         }
                         n.ed.set_cursor(origem.ed.cursor.row, origem.ed.cursor.col);
                         n.top = origem.top;
@@ -4739,7 +4767,7 @@ impl Workspace {
         let meu = foco.path.as_deref().map(canon);
         let rope = foco.ed.buf.rope.clone();
         let modificado = foco.modified();
-        let salvo = foco.saved_rope.clone();
+        let (salvo, geracao) = (foco.saved_rope.clone(), foco.saved_gen);
         let sp = foco.splits.as_mut().unwrap();
         let mut algum = false;
         for o in sp.outros.iter_mut() {
@@ -4754,11 +4782,7 @@ impl Workspace {
             }
             if modificado {
                 // o painel irmão mostra o mesmo "modificado" do foco: mesmo texto salvo de referência
-                if o.saved_rev == o.ed.buf.rev {
-                    o.saved_rev = o.ed.buf.rev.wrapping_sub(1);
-                }
-                o.saved_rope = salvo.clone();
-                o.mod_cache.set((u64::MAX, false));
+                o.herdar_salvo(&salvo, geracao);
             } else {
                 o.marcar_salvo();
             }
@@ -6767,6 +6791,12 @@ mod testes {
         let vm = w.view_model();
         assert_eq!(texto(&vm).lines().count(), 2);
         assert_eq!(texto(&vm.panes[0].vm).lines().count(), 2);
+        assert!(vm.modified && vm.panes[0].vm.modified, "desfazer para antes do :w difere do disco");
+        // refazer até o texto gravado apaga o ponto nos dois painéis
+        w.feed("<C-r>");
+        let vm = w.view_model();
+        assert!(!vm.modified && !vm.panes[0].vm.modified, "de volta ao salvo nos dois");
+        w.feed("u");
         // <C-w>s divide o focado em baixo da esquerda: três painéis; <C-w>w percorre em ordem
         w.feed("<C-w>s");
         let vm = w.view_model();
