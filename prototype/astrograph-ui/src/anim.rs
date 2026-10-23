@@ -66,23 +66,24 @@ impl Spring {
 
     pub fn step(&mut self, dt: f32) {
         let mut left = dt.clamp(0.0, 0.25);
-        let mut parada = false;
+        let inicio = self.x;
         while left > 0.0 {
             let h = left.min(0.004);
             let a = self.omega * self.omega * (self.target - self.x) - 2.0 * self.zeta * self.omega * self.v;
             self.v += a * h;
-            let antes = self.x;
             self.x += self.v * h;
-            parada = self.x == antes;
             left -= h;
         }
+        // não andou nada no quadro inteiro (não só no último sub-passo, que pode ser minúsculo)
+        let parada = dt > 0.0 && self.x == inicio;
         // perto o bastante: encaixa no alvo. Sem isso a cena declara "parou" a uma fração do alvo e o próximo quadro
         // dá um tranco. Longe da origem (rolagem num arquivo grande, em pixels) o f32 não anda menos que um passo:
         // a posição para a alguns passos do alvo com velocidade residual e a cena repintaria para sempre; se ela
         // parou de andar e está perto (relativo ao valor), também encaixa
         let d = (self.target - self.x).abs();
         let perto = d < 0.01 && self.v.abs() < 0.1;
-        let presa = parada && d < (self.target.abs() * 1e-4).max(0.01);
+        // presa: a velocidade residual não move a posição (menos de meio passo do f32 por sub-passo)
+        let presa = parada && d < (self.target.abs() * 1e-5).max(0.01);
         if perto || presa {
             self.x = self.target;
             self.v = 0.0;
@@ -163,6 +164,19 @@ mod testes {
                 s.step(1.0 / 120.0);
             }
             assert!(s.settled() && s.x == alvo, "alvo {alvo}: parou em {} (v {})", s.x, s.v);
+        }
+        // e longe da origem um movimento pequeno ainda anima (não encaixa no primeiro quadro)
+        for (alvo, passo) in [(6_600_000.0f32, 20.0f32), (400_000.0, 20.0), (6_600_000.0, 300.0)] {
+            let mut s = Spring::new(alvo - passo, 22.0, 1.0);
+            s.target = alvo;
+            s.step(1.0 / 120.0);
+            assert!(s.x < alvo && s.x > alvo - passo, "alvo {alvo}, passo {passo}: anda sem pular ({})", s.x);
+            let mut quadros = 1;
+            while !s.settled() && quadros < 600 {
+                s.step(1.0 / 120.0);
+                quadros += 1;
+            }
+            assert!(s.settled() && quadros > 5, "alvo {alvo}, passo {passo}: assentou em {quadros} quadros");
         }
         assert!(max <= 100.5, "sem quicar: {max}");
         // mesmo resultado com passos diferentes

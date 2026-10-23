@@ -5113,6 +5113,11 @@ pub async fn native_task(
                 if resp.is_closed() {
                     continue;
                 }
+                // desligado enquanto o pedido esperava na fila: não executa ("git_recarregar" é do próprio app)
+                if !crate::controle::ligado() && linha != "git_recarregar" {
+                    let _ = resp.send(Err("os agentes foram desligados deste editor".into()));
+                    continue;
+                }
                 crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha, resp);
             }
             UiCommand::Panes(t) => {

@@ -117,7 +117,7 @@ impl Drop for Encerrar {
 }
 
 /// Chamado pela task dona do editor (dentro do runtime tokio): guarda para onde mandar os pedidos e sobe o
-/// servidor se o controle estiver ligado. `ASTROGRAPH_CONTROLE=0` no ambiente desliga de vez nesta sessão.
+/// servidor se o controle estiver ligado. `ASTROGRAPH_CONTROLE=0` no ambiente começa desligado (o atalho religa).
 pub fn preparar(enviar: impl Fn(Pedido) -> bool + Send + Sync + 'static, ligado_na_config: bool) -> Encerrar {
     let desligado_no_ambiente = std::env::var("ASTROGRAPH_CONTROLE").is_ok_and(|v| v == "0");
     *DESTINO.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::new(enviar), tokio::runtime::Handle::current()));
@@ -620,10 +620,17 @@ mod testes {
             assert_eq!(r["abas_nao_salvas"].as_array().unwrap().len(), 1, "{r}");
             c.pedir("salvar").unwrap();
             c.pedir("git_commit --tudo -- agente: o resto").unwrap();
+            // mensagem com " -- " e sem opções
+            c.pedir("teclas Gox<Esc>").unwrap();
+            c.pedir("salvar").unwrap();
+            assert!(c.pedir("git_commit -- fix: a -- b").is_err(), "sem --tudo e sem stage: falha do git, não de opção");
+            let e = c.pedir("git_commit -- fix: a -- b").unwrap_err();
+            assert!(!e.contains("opção desconhecida"), "{e}");
+            c.pedir("git_commit --tudo -- agente: o resto -- de verdade").unwrap();
             // mensagem que começa com --tudo é mensagem, não opção
             assert!(c.pedir("git_commit --tudo e mais nada").is_err(), "sem nada no stage o commit falha, sem add -A");
             let log = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&proj).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "agente: o resto");
+            assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "agente: o resto -- de verdade");
             assert!(c.pedir("git_status").unwrap()["status"].as_str().unwrap().lines().count() == 1, "árvore limpa depois do commit");
         }
 
@@ -659,7 +666,10 @@ mod testes {
         // o arquivo de controle existe e aponta para este processo
         let info: Value = serde_json::from_str(&std::fs::read_to_string(arquivo_atual()).unwrap()).unwrap();
         assert_eq!(info["pid"], json!(std::process::id()));
-        ligar(false);
+        // solta o estado global (servidor e destino): a task do teste termina e outro teste não sobe servidor
+        // nenhum (nem grava controle.json na pasta de estado real)
+        descer();
+        *DESTINO.lock().unwrap_or_else(|e| e.into_inner()) = None;
         std::env::remove_var("ASTROGRAPH_LSP");
         match estado_antes {
             Some(v) => std::env::set_var("ASTROGRAPH_STATE", v),

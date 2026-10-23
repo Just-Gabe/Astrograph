@@ -264,21 +264,27 @@ pub fn preparar_git(w: &mut native::Workspace, linha: &str) -> Option<Result<Tra
             TrabalhoGit { raiz: w.raiz(), passos: vec![a], chave: "diff", extra: Value::Null, commit: false }
         }
         "git_commit" => {
-            let (opcoes, msg) = match resto.split_once(" -- ").or_else(|| resto.strip_prefix("-- ").map(|m| ("", m))) {
-                Some((o, m)) => (o.trim(), m.trim()),
-                None => ("", resto),
+            // `-- msg`: sem opções; `opções -- msg`: o primeiro " -- " separa (a mensagem pode ter outros)
+            let (opcoes, msg) = match resto.strip_prefix("-- ") {
+                Some(m) => ("", m.trim()),
+                None => match resto.split_once(" -- ") {
+                    Some((o, m)) => (o.trim(), m.trim()),
+                    None => ("", resto),
+                },
             };
             let mut tudo = false;
             let mut raiz = w.raiz();
-            let mut it = opcoes.split_whitespace();
-            while let Some(o) = it.next() {
-                match o {
-                    "--tudo" => tudo = true,
-                    "--em" => match it.next() {
-                        Some(p) => raiz = resolver(&w.raiz(), p),
-                        None => return Some(Err("git_commit: --em pede a pasta".into())),
-                    },
-                    outro => return Some(Err(format!("git_commit: opção desconhecida {outro} (use [--tudo] [--em pasta] -- mensagem)"))),
+            let mut resto_op = opcoes;
+            while !resto_op.is_empty() {
+                if let Some(r) = resto_op.strip_prefix("--tudo") {
+                    tudo = true;
+                    resto_op = r.trim_start();
+                } else if let Some(p) = resto_op.strip_prefix("--em ") {
+                    // `--em` vai por último e leva o resto (a pasta pode ter espaços)
+                    raiz = resolver(&w.raiz(), p.trim());
+                    resto_op = "";
+                } else {
+                    return Some(Err(format!("git_commit: opção desconhecida {resto_op} (use [--tudo] [--em pasta] -- mensagem)")));
                 }
             }
             if msg.is_empty() {
@@ -611,7 +617,7 @@ impl Harness {
 
 /// Comandos que mudam algo: aparecem como aviso na tela do dono e vão para o registro.
 fn muda_algo(cmd: &str) -> bool {
-    matches!(cmd, "teclas" | "keys" | "texto" | "text" | "comando" | "ex" | "abrir" | "open" | "pasta" | "folder" | "salvar" | "save" | "acao" | "action" | "terminal" | "git_commit" | "clique" | "click")
+    matches!(cmd, "teclas" | "keys" | "texto" | "text" | "comando" | "ex" | "abrir" | "open" | "pasta" | "folder" | "salvar" | "save" | "acao" | "action" | "terminal" | "git_commit" | "clique" | "click" | "rolar" | "scroll")
 }
 
 /// Registro das ações dos agentes (`agentes.log` na pasta de estado; passa de 1 MB, vira `.1`).
@@ -651,12 +657,13 @@ pub fn executar_ao_vivo(w: &mut native::Workspace, pintor: &mut Option<Pintor>, 
                 let commit = t.commit;
                 tokio::task::spawn_blocking(move || {
                     let r = rodar_git(t);
+                    let ok = r.is_ok();
+                    let _ = resp.send(r);
                     if commit {
-                        registrar(&linha, r.is_ok());
-                        // a margem e a branch do editor acompanham o commit
+                        registrar(&linha, ok);
+                        // a margem e a branch do editor acompanham o commit (depois da resposta)
                         crate::controle::pedido_interno("git_recarregar");
                     }
-                    let _ = resp.send(r);
                 });
             }
         }
