@@ -611,7 +611,42 @@ mod testes {
             }
         }
         assert!(viu, "a saída do echo apareceu no terminal: {:?}", c.pedir("terminal_tela"));
+        // com o terminal em foco, `pasta`/`comando` vão para o EDITOR (antes o `:cd …<CR>` era digitado no
+        // shell, ou no agente que roda ali, e a resposta dizia ok com a pasta velha); o foco do terminal fica
+        let outra = base.join("outra pasta ç");
+        std::fs::create_dir_all(&outra).unwrap();
+        let mesma = |a: &str, b: &std::path::Path| std::path::Path::new(a).canonicalize().ok() == b.canonicalize().ok();
+        let r = c.pedir(&format!("pasta {}", outra.display())).unwrap();
+        assert!(mesma(r["pasta"].as_str().unwrap(), &outra), "{r}");
+        let e = c.pedir("estado").unwrap();
+        assert!(mesma(e["pasta"].as_str().unwrap(), &outra) && e["terminal"]["foco"] == true, "{e}");
+        c.pedir(&format!("comando cd {}", proj.display())).unwrap();
+        let e = c.pedir("estado").unwrap();
+        assert!(mesma(e["pasta"].as_str().unwrap(), &proj) && e["terminal"]["foco"] == true, "{e}");
+        std::thread::sleep(Duration::from_millis(300));
+        let t = c.pedir("terminal_tela").unwrap();
+        assert!(!t["linhas"].as_array().unwrap().iter().any(|l| l.as_str().unwrap_or("").contains(":cd")), "nada digitado no shell: {t}");
         c.pedir("teclas <C-\\><C-n>").unwrap();
+        // aba sem salvar: o `:cd` recusa e a resposta é erro, não ok com a pasta velha
+        c.pedir("teclas ggA?<Esc>").unwrap();
+        assert!(c.pedir(&format!("pasta {}", outra.display())).unwrap_err().contains("não trocou"));
+        c.pedir("teclas u").unwrap();
+        c.pedir("salvar").unwrap();
+        // editor em inserção por baixo do terminal (o dono digitava, clicou no terminal): `pasta`, `comando` e
+        // `salvar` recusam em vez de digitar `:cd …` dentro do arquivo; o buffer fica intacto
+        let antes = c.pedir("buffer").unwrap()["texto"].clone();
+        c.pedir("teclas i").unwrap();
+        c.pedir("terminal echo em-insercao").unwrap();
+        assert_eq!(c.pedir("estado").unwrap()["terminal"]["foco"], true);
+        for pedido in [format!("pasta {}", outra.display()), format!("comando cd {}", outra.display()), "salvar".to_string()] {
+            let e = c.pedir(&pedido).unwrap_err();
+            assert!(e.contains("ocupado"), "{pedido}: {e}");
+        }
+        assert_eq!(c.pedir("buffer").unwrap()["texto"], antes, "nada digitado no arquivo");
+        assert!(mesma(c.pedir("estado").unwrap()["pasta"].as_str().unwrap(), &proj));
+        // quebra de linha num `comando` não vira dois comandos `:`
+        assert!(c.pedir("comando echo a\nq!").is_err());
+        c.pedir("teclas <C-\\><C-n><Esc>").unwrap();
         // commit
         if tem_git {
             c.pedir("teclas ggA!<Esc>").unwrap();

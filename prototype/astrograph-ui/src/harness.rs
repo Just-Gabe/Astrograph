@@ -138,6 +138,16 @@ pub fn pasta_estado() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// Não derruba o que o dono está fazendo no editor (inserção, buscador, linha de comando, tecla pendente),
+/// nem quando o terminal esconde esse modo: os comandos que digitam `:`/líder no editor recusam e explicam.
+fn ocupado(w: &mut native::Workspace, cmd: &str) -> Option<String> {
+    if w.livre_para_atalho() {
+        return None;
+    }
+    let sair = if estado(w)["terminal"]["foco"] == json!(true) { "<C-\\><C-n><Esc>" } else { "<Esc>" };
+    Some(format!("{cmd}: o editor está ocupado (inserção, menu ou comando pela metade); mande `teclas {sair}` antes se for o caso"))
+}
+
 /// Caminho do pedido: relativo vale a partir de `base`.
 fn resolver(base: &Path, p: &str) -> PathBuf {
     let p = PathBuf::from(p.trim().trim_matches('"'));
@@ -376,7 +386,15 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
             if !p.is_dir() {
                 return Some(Err(format!("pasta: não existe: {}", p.display())));
             }
-            w.feed(&format!(":cd {}<CR>", p.to_string_lossy().replace('<', "<lt>")));
+            if let Some(e) = ocupado(w, "pasta") {
+                return Some(Err(e));
+            }
+            w.feed_editor(&format!(":cd {}<CR>", p.to_string_lossy().replace('<', "<lt>")), true);
+            // o `:cd` recusa (aba sem salvar…) só com um aviso na tela: a resposta não pode dizer ok
+            let alvo = p.canonicalize().map(|c| crate::busca::sem_prefixo_unc(&c)).unwrap_or(p);
+            if w.raiz() != alvo {
+                return Some(Err(format!("pasta: não trocou ({})", estado(w)["aviso"]["texto"].as_str().unwrap_or("sem aviso"))));
+            }
             Ok(json!({ "ok": true, "pasta": w.raiz().to_string_lossy() }))
         }
         "salvar" | "save" => {
@@ -384,7 +402,10 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
                 let (gravadas, sem_nome) = w.salvar_todas();
                 Ok(json!({ "gravadas": gravadas, "abas_sem_nome": sem_nome }))
             } else {
-                w.feed(":w<CR>");
+                if let Some(e) = ocupado(w, "salvar") {
+                    return Some(Err(e));
+                }
+                w.feed_editor(":w<CR>", true);
                 let e = estado(w);
                 if e["modificado"] == json!(true) {
                     Err(format!("salvar: não gravou ({})", e["aviso"]["texto"].as_str().unwrap_or("sem nome? use `comando w arquivo`")))
@@ -395,7 +416,14 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
         }
         "comando" | "ex" => {
             let c = resto.trim_start_matches(':');
-            w.feed(&format!(":{}<CR>", c.replace('<', "<lt>")));
+            // uma linha só: a quebra viraria um `<CR>` no meio e rodaria um segundo comando
+            if c.contains(['\n', '\r']) {
+                return Some(Err("comando: um comando por vez (sem quebra de linha)".into()));
+            }
+            if let Some(e) = ocupado(w, "comando") {
+                return Some(Err(e));
+            }
+            w.feed_editor(&format!(":{}<CR>", c.replace('<', "<lt>")), true);
             Ok(json!({ "ok": true, "aviso": estado(w)["aviso"] }))
         }
         "buffer" => {
@@ -413,13 +441,13 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
             if !crate::atalhos::LIDER.iter().any(|(t, _)| *t == resto) {
                 return Some(Err(format!("acao: `{resto}` não está no menu (veja `atalhos`)")));
             }
-            // não derruba o que o dono está fazendo (inserção, buscador, linha de comando): recusa e explica
-            if !w.livre_para_atalho() {
-                return Some(Err(format!("acao: o editor está ocupado ({}); mande `teclas <Esc>` antes se for o caso", estado(w)["modo"].as_str().unwrap_or("?"))));
+            if let Some(e) = ocupado(w, "acao") {
+                return Some(Err(e));
             }
             let l = w.lider();
             let lider = if l == ' ' { "<Space>".to_string() } else { l.to_string() };
-            w.feed(&format!("{lider}{resto}"));
+            // a ação decide para onde vai o foco (explorador, buscador…): o terminal não o recebe de volta
+            w.feed_editor(&format!("{lider}{resto}"), false);
             ok()
         }
         "terminal" => {
