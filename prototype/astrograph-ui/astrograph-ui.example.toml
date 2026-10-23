@@ -70,3 +70,8 @@ leader = "space"
 [editor]
 # "unnamedplus": copiar e colar sem registrador usa o clipboard do sistema
 clipboard = ""
+
+[agentes]
+# os agentes de IA podem ver a tela e operar o editor (MCP `astrograph --mcp`, `astrograph --ctl`);
+# <Leader>AM liga e desliga
+controle = true

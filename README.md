@@ -62,6 +62,9 @@ rodar `nvim`.
 - **Tema próprio**: `astrograph` (escuro) e `astrograph-light`, com contraste
   verificado.
 - **Arquivos editados pelo agente recarregam sozinhos** no editor.
+- **O agente opera o editor** (app em Rust): o Claude Code aberto pelo painel já recebe as
+  ferramentas `astrograph_*` (MCP) para ver a tela, abrir arquivos, usar os menus, rodar no
+  terminal, salvar e fazer commit; outros agentes usam `astrograph --ctl`. [Detalhes →](https://just-gabe.github.io/Astrograph/harness)
 - **Sessões de todos os projetos** (`<Leader>AS`): as conversas do agente com a
   tag do modelo que as fez; retomar volta para a pasta e o agente da conversa.
 - **Plugins só desta máquina**: specs do lazy em

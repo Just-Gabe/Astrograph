@@ -30,6 +30,8 @@ toml = "0.8"
 arboard = "3"
 rustybuzz = "0.20.1"
 toml_edit = "0.22"
+png = "0.17"
+getrandom = "0.3"
 
 [build-dependencies]
 embed-resource = "2.5"

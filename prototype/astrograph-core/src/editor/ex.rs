@@ -71,6 +71,9 @@ impl Editor {
             }
             Key::Char(c) => cl.push(c),
             Key::Tab => cl.push('\t'),
+            // <C-w> apaga a palavra antes do cursor, <C-u> a linha toda (a linha de comando continua aberta)
+            Key::Ctrl('w') => crate::keys::apagar_palavra(cl),
+            Key::Ctrl('u') => cl.clear(),
             _ => {}
         }
         true
