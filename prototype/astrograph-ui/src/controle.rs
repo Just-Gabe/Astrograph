@@ -632,6 +632,21 @@ mod testes {
         assert!(c.pedir(&format!("pasta {}", outra.display())).unwrap_err().contains("não trocou"));
         c.pedir("teclas u").unwrap();
         c.pedir("salvar").unwrap();
+        // editor em inserção por baixo do terminal (o dono digitava, clicou no terminal): `pasta`, `comando` e
+        // `salvar` recusam em vez de digitar `:cd …` dentro do arquivo; o buffer fica intacto
+        let antes = c.pedir("buffer").unwrap()["texto"].clone();
+        c.pedir("teclas i").unwrap();
+        c.pedir("terminal echo em-insercao").unwrap();
+        assert_eq!(c.pedir("estado").unwrap()["terminal"]["foco"], true);
+        for pedido in [format!("pasta {}", outra.display()), format!("comando cd {}", outra.display()), "salvar".to_string()] {
+            let e = c.pedir(&pedido).unwrap_err();
+            assert!(e.contains("ocupado"), "{pedido}: {e}");
+        }
+        assert_eq!(c.pedir("buffer").unwrap()["texto"], antes, "nada digitado no arquivo");
+        assert!(mesma(c.pedir("estado").unwrap()["pasta"].as_str().unwrap(), &proj));
+        // quebra de linha num `comando` não vira dois comandos `:`
+        assert!(c.pedir("comando echo a\nq!").is_err());
+        c.pedir("teclas <C-\\><C-n><Esc>").unwrap();
         // commit
         if tem_git {
             c.pedir("teclas ggA!<Esc>").unwrap();

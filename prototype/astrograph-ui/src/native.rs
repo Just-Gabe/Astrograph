@@ -228,6 +228,10 @@ pub struct Session {
     pub ed: Editor,
     pub path: Option<PathBuf>,
     saved_rev: u64,
+    /// texto gravado (o `Rope` divide os pedaços: guardar é barato)
+    saved_rope: ropey::Rope,
+    /// (revisão, modificado) da última comparação com `saved_rope`
+    mod_cache: std::cell::Cell<(u64, bool)>,
     /// linha de cima desejada (a cena suaviza)
     top: f32,
     left: usize,
@@ -396,10 +400,13 @@ impl Session {
         let ed = Editor::new(&lines);
         let lang = path.as_ref().and_then(|p| detect(&p.to_string_lossy(), lines.first().map(String::as_str).unwrap_or(""))).and_then(lang);
         let saved_rev = ed.buf.rev;
+        let saved_rope = ed.buf.rope.clone();
         Session {
             ed,
             path,
             saved_rev,
+            saved_rope,
+            mod_cache: std::cell::Cell::new((u64::MAX, false)),
             top: 0.0,
             left: 0,
             cols: 80,
@@ -569,8 +576,28 @@ impl Session {
         self.rows = rows.max(3.0);
     }
 
+    /// Alterado em relação ao que está gravado. A revisão só cresce (desfazer também conta), então
+    /// com revisão diferente compara o texto: desfazer até o estado salvo apaga o ponto da aba,
+    /// como no Vim. A comparação roda uma vez por revisão (cache).
     pub fn modified(&self) -> bool {
-        self.ed.buf.rev != self.saved_rev
+        let rev = self.ed.buf.rev;
+        if rev == self.saved_rev {
+            return false;
+        }
+        let (r, m) = self.mod_cache.get();
+        if r == rev {
+            return m;
+        }
+        let m = self.ed.buf.rope.len_bytes() != self.saved_rope.len_bytes() || self.ed.buf.rope != self.saved_rope;
+        self.mod_cache.set((rev, m));
+        m
+    }
+
+    /// O texto atual passa a ser o gravado (salvou, abriu, recarregou do disco).
+    fn marcar_salvo(&mut self) {
+        self.saved_rev = self.ed.buf.rev;
+        self.saved_rope = self.ed.buf.rope.clone();
+        self.mod_cache.set((u64::MAX, false));
     }
 
     /// O nome mostrado na aba.
@@ -2709,7 +2736,7 @@ impl Session {
                 let rope = ropey::Rope::from_str(texto.strip_suffix('\n').unwrap_or(&texto));
                 if rope != self.ed.buf.rope {
                     self.ed.sincronizar(&rope);
-                    self.saved_rev = self.ed.buf.rev;
+                    self.marcar_salvo();
                     self.git_load();
                     self.say("Arquivo recarregado (mudou no disco)".into(), ToastKind::Info);
                 }
@@ -3771,7 +3798,7 @@ impl Session {
                 if self.modified() && !bang {
                     self.say("Alterações não salvas. Use :e! para descartar.".into(), ToastKind::Error);
                 } else {
-                    self.saved_rev = self.ed.buf.rev;
+                    self.marcar_salvo();
                     self.open_file_aqui(Path::new(arg), None);
                 }
             }
@@ -3867,7 +3894,7 @@ impl Session {
                 if self.path.is_none() {
                     self.path = Some(p);
                 }
-                self.saved_rev = self.ed.buf.rev;
+                self.marcar_salvo();
                 self.tree_git_load();
             }
             Err(e) => self.say(format!("Não consegui salvar: {e}"), ToastKind::Error),
@@ -4541,7 +4568,7 @@ impl Workspace {
                         let mut n = self.nova_sessao(origem.path.as_deref());
                         n.ed.sincronizar(&origem.ed.buf.rope);
                         if !origem.modified() {
-                            n.saved_rev = n.ed.buf.rev;
+                            n.marcar_salvo();
                         }
                         n.ed.set_cursor(origem.ed.cursor.row, origem.ed.cursor.col);
                         n.top = origem.top;
@@ -4712,6 +4739,7 @@ impl Workspace {
         let meu = foco.path.as_deref().map(canon);
         let rope = foco.ed.buf.rope.clone();
         let modificado = foco.modified();
+        let salvo = foco.saved_rope.clone();
         let sp = foco.splits.as_mut().unwrap();
         let mut algum = false;
         for o in sp.outros.iter_mut() {
@@ -4725,11 +4753,14 @@ impl Workspace {
                 o.ed.sincronizar(&rope);
             }
             if modificado {
+                // o painel irmão mostra o mesmo "modificado" do foco: mesmo texto salvo de referência
                 if o.saved_rev == o.ed.buf.rev {
                     o.saved_rev = o.ed.buf.rev.wrapping_sub(1);
                 }
+                o.saved_rope = salvo.clone();
+                o.mod_cache.set((u64::MAX, false));
             } else {
-                o.saved_rev = o.ed.buf.rev;
+                o.marcar_salvo();
             }
         }
         foco.irmao = algum;
@@ -4799,7 +4830,7 @@ impl Workspace {
                     PedidoAba::NovaComTexto(titulo, t) => {
                         let mut nova = self.nova_sessao(None);
                         nova.ed.sincronizar(&ropey::Rope::from_str(&t));
-                        nova.saved_rev = nova.ed.buf.rev;
+                        nova.marcar_salvo();
                         nova.nome_fixo = Some(titulo);
                         let ativa = self.ativa;
                         mover_paineis(&mut self.abas[ativa], &mut nova);
@@ -5259,6 +5290,37 @@ mod testes {
         std::fs::write(d.join("src/beta.rs"), "fn beta() {}\n").unwrap();
         std::fs::write(d.join("LEIA.md"), "oi\n").unwrap();
         d
+    }
+
+    #[test]
+    fn desfazer_ate_o_estado_salvo_apaga_o_ponto_da_aba() {
+        let d = projeto("ponto-aba");
+        let arq = d.join("LEIA.md");
+        let mut s = Session::open(&arq);
+        s.resize(80, 20.0);
+        assert!(!s.modified());
+        // mudou e desfez: volta a "salvo", e o refazer marca de novo
+        s.feed("ggAabc<Esc>");
+        assert!(s.modified());
+        s.feed("u");
+        assert!(!s.modified(), "desfazer até o texto gravado tira o ponto");
+        s.feed("<C-r>");
+        assert!(s.modified());
+        // mesmo tamanho e texto diferente continua modificado (troca de uma letra)
+        s.feed("u0rZ");
+        assert!(s.modified());
+        // editar à mão de volta ao texto gravado também conta
+        s.feed("u");
+        assert!(!s.modified());
+        // depois de gravar, o estado de referência é o novo texto
+        s.feed("ggAx<Esc>:w<CR>");
+        assert!(!s.modified());
+        s.feed("Ay<Esc>");
+        assert!(s.modified());
+        s.feed("u");
+        assert!(!s.modified());
+        s.feed("u");
+        assert!(s.modified(), "desfazer para antes do :w é diferente do que está no disco");
     }
 
     #[test]

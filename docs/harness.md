@@ -40,7 +40,10 @@ Ao abrir o Claude Code pelo painel do agente (`<Espaço>Al`), o Astrograph passa
 
 `comando`, `abrir_pasta`, `salvar` e `acao` vão sempre para o editor, mesmo com o terminal em foco
 (o terminal recebe o foco de volta, menos depois de `acao`); `teclas` e `texto` vão para onde o foco
-estiver. `abrir_pasta` responde erro quando a pasta não troca (aba sem salvar, por exemplo).
+estiver. `abrir_pasta` responde erro quando a pasta não troca (aba sem salvar, por exemplo). Com o
+editor ocupado (inserção, buscador, linha de comando, tecla pendente — inclusive escondido atrás do
+terminal), `comando`, `abrir_pasta`, `salvar` e `acao` recusam em vez de digitar no arquivo; `comando`
+aceita uma linha só.
 
 As ações que mudam a tela devolvem o estado logo depois, para o agente conferir o efeito. Cada uma
 aparece como aviso na sua tela ("Agente: ...") e vai para o registro `agentes.log` na pasta de
