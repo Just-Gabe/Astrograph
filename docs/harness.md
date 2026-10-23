@@ -38,6 +38,10 @@ Ao abrir o Claude Code pelo painel do agente (`<Espaço>Al`), o Astrograph passa
 | `astrograph_git_status` / `astrograph_git_diff` / `astrograph_git_commit` | git do projeto aberto; o commit leva o que está no disco (não grava abas) e avisa as que estão sem salvar; `tudo` faz `git add -A` (respeita o `.gitignore`) |
 | `astrograph_esperar` | espera (buscas, servidor de linguagem) e devolve o estado |
 
+`comando`, `abrir_pasta`, `salvar` e `acao` vão sempre para o editor, mesmo com o terminal em foco
+(o terminal recebe o foco de volta, menos depois de `acao`); `teclas` e `texto` vão para onde o foco
+estiver. `abrir_pasta` responde erro quando a pasta não troca (aba sem salvar, por exemplo).
+
 As ações que mudam a tela devolvem o estado logo depois, para o agente conferir o efeito. Cada uma
 aparece como aviso na sua tela ("Agente: ...") e vai para o registro `agentes.log` na pasta de
 estado. Ferramenta MCP não passa pelas permissões de Bash do Claude Code: aprovar
