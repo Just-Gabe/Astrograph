@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::proc::SemJanela;
-use crate::{native, nscene, nview, paint};
+use crate::{native, nscene, paint};
 
 /// Um quadro a cada 16 ms, como o app com animação em curso.
 const QUADRO: Duration = Duration::from_millis(16);
@@ -191,14 +191,127 @@ pub fn estado(w: &mut native::Workspace) -> Value {
     })
 }
 
-fn git(raiz: &Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git").args(args).current_dir(raiz).sem_janela().output().map_err(|e| format!("git: {e}"))?;
-    let texto = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    if out.status.success() {
+/// Quanto um comando git pode demorar (hook, rede) antes de ser encerrado.
+const GIT_LIMITE: Duration = Duration::from_secs(30);
+
+/// Roda o git sem entrada (nunca para esperando senha ou credencial) e com tempo-limite.
+fn git(raiz: &Path, args: &[String]) -> Result<String, String> {
+    use std::io::Read;
+    let mut filho = std::process::Command::new("git")
+        .args(args)
+        .current_dir(raiz)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .sem_janela()
+        .spawn()
+        .map_err(|e| format!("git: {e}"))?;
+    let ler = |r: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut b);
+            }
+            b
+        })
+    };
+    let (o, e) = (ler(filho.stdout.take().map(|x| Box::new(x) as _)), ler(filho.stderr.take().map(|x| Box::new(x) as _)));
+    let fim = Instant::now() + GIT_LIMITE;
+    let status = loop {
+        match filho.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) if Instant::now() < fim => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = filho.kill();
+                let _ = filho.wait();
+                return Err(format!("git {}: passou de {} s e foi encerrado (hook ou pedido de senha?)", args.join(" "), GIT_LIMITE.as_secs()));
+            }
+        }
+    };
+    let texto = format!("{}{}", String::from_utf8_lossy(&o.join().unwrap_or_default()), String::from_utf8_lossy(&e.join().unwrap_or_default()));
+    if status.success() {
         Ok(texto)
     } else {
         Err(format!("git {}: {}", args.join(" "), texto.trim()))
     }
+}
+
+/// Um pedido de git pronto para rodar fora da task do editor.
+pub struct TrabalhoGit {
+    raiz: PathBuf,
+    passos: Vec<Vec<String>>,
+    chave: &'static str,
+    /// avisos que vão junto da resposta (abas não salvas)
+    extra: Value,
+    commit: bool,
+}
+
+/// `git_status`, `git_diff [arquivo]`, `git_commit [--tudo] [--em pasta] -- mensagem`. As opções só valem antes
+/// do `--`; sem ele, tudo é a mensagem (uma mensagem que começa com "--tudo" não vira opção).
+pub fn preparar_git(w: &mut native::Workspace, linha: &str) -> Option<Result<TrabalhoGit, String>> {
+    let linha = linha.trim();
+    let (cmd, resto) = linha.split_once(char::is_whitespace).map(|(a, b)| (a, b.trim())).unwrap_or((linha, ""));
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    Some(Ok(match cmd {
+        "git_status" => TrabalhoGit { raiz: w.raiz(), passos: vec![s(&["status", "--short", "--branch"])], chave: "status", extra: Value::Null, commit: false },
+        "git_diff" => {
+            let mut a = s(&["diff", "--stat", "--patch", "--no-color"]);
+            if !resto.is_empty() {
+                a.extend(s(&["--", resto]));
+            }
+            TrabalhoGit { raiz: w.raiz(), passos: vec![a], chave: "diff", extra: Value::Null, commit: false }
+        }
+        "git_commit" => {
+            let (opcoes, msg) = match resto.split_once(" -- ").or_else(|| resto.strip_prefix("-- ").map(|m| ("", m))) {
+                Some((o, m)) => (o.trim(), m.trim()),
+                None => ("", resto),
+            };
+            let mut tudo = false;
+            let mut raiz = w.raiz();
+            let mut it = opcoes.split_whitespace();
+            while let Some(o) = it.next() {
+                match o {
+                    "--tudo" => tudo = true,
+                    "--em" => match it.next() {
+                        Some(p) => raiz = resolver(&w.raiz(), p),
+                        None => return Some(Err("git_commit: --em pede a pasta".into())),
+                    },
+                    outro => return Some(Err(format!("git_commit: opção desconhecida {outro} (use [--tudo] [--em pasta] -- mensagem)"))),
+                }
+            }
+            if msg.is_empty() {
+                return Some(Err("git_commit: falta a mensagem (git_commit [--tudo] [--em pasta] -- mensagem)".into()));
+            }
+            // não grava abas por conta própria: o commit leva o que está no disco, e a resposta avisa o que não está
+            let nao_salvas = w.nao_salvas_em(&raiz);
+            let mut passos = Vec::new();
+            if tudo {
+                passos.push(s(&["add", "-A"]));
+            }
+            passos.push(vec!["commit".into(), "-m".into(), msg.to_string()]);
+            TrabalhoGit { raiz, passos, chave: "saida", extra: json!({ "abas_nao_salvas": nao_salvas }), commit: true }
+        }
+        _ => return None,
+    }))
+}
+
+/// Roda os passos do pedido (fora da task do editor ao vivo).
+pub fn rodar_git(t: TrabalhoGit) -> Result<Value, String> {
+    let mut saida = String::new();
+    for passo in &t.passos {
+        saida.push_str(&git(&t.raiz, passo)?);
+    }
+    let mut r = json!({ "pasta": t.raiz.to_string_lossy(), t.chave: saida });
+    if t.commit {
+        r["ok"] = json!(true);
+        r["staged_com_tudo"] = json!(t.passos.len() > 1);
+    }
+    if let (Some(o), Some(e)) = (r.as_object_mut(), t.extra.as_object()) {
+        o.extend(e.clone());
+    }
+    Ok(r)
 }
 
 /// Ao vivo ou no roteiro: onde gravar os prints e se a sessão segue o tamanho do pintor.
@@ -229,9 +342,11 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
             } else {
                 pintor.pintar(w, Instant::now(), true);
             }
-            let nome = if resto.is_empty() { format!("print-{}", chrono::Local::now().format("%Y%m%d-%H%M%S%.3f")) } else { resto.to_string() };
+            // só o nome do arquivo: o print fica sempre na pasta de prints (nada de caminho absoluto ou `..`)
+            let nome = Path::new(resto).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty() && n != "..");
+            let nome = nome.unwrap_or_else(|| format!("print-{}", chrono::Local::now().format("%Y%m%d-%H%M%S%.3f")));
             let nome = if nome.ends_with(".png") { nome } else { format!("{nome}.png") };
-            let p = if Path::new(&nome).is_absolute() { PathBuf::from(&nome) } else { ctx.saida.join(&nome) };
+            let p = ctx.saida.join(&nome);
             pintor.png(&p).map(|_| json!({ "png": p.to_string_lossy(), "largura": pintor.largura, "altura": pintor.altura }))
         }
         "abrir" | "open" => {
@@ -292,9 +407,13 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
             if !crate::atalhos::LIDER.iter().any(|(t, _)| *t == resto) {
                 return Some(Err(format!("acao: `{resto}` não está no menu (veja `atalhos`)")));
             }
+            // não derruba o que o dono está fazendo (inserção, buscador, linha de comando): recusa e explica
+            if !w.livre_para_atalho() {
+                return Some(Err(format!("acao: o editor está ocupado ({}); mande `teclas <Esc>` antes se for o caso", estado(w)["modo"].as_str().unwrap_or("?"))));
+            }
             let l = w.lider();
             let lider = if l == ' ' { "<Space>".to_string() } else { l.to_string() };
-            w.feed(&format!("<Esc>{lider}{resto}"));
+            w.feed(&format!("{lider}{resto}"));
             ok()
         }
         "terminal" => {
@@ -308,33 +427,6 @@ pub fn executar(w: &mut native::Workspace, pintor: &mut Pintor, ctx: &Contexto, 
             Some((linhas, terminou)) => Ok(json!({ "linhas": linhas, "terminou": terminou })),
             None => Err("terminal_tela: nenhum terminal aberto".into()),
         },
-        "git_status" => git(&raiz, &["status", "--short", "--branch"]).map(|t| json!({ "status": t })),
-        "git_diff" => {
-            let mut args = vec!["diff", "--stat", "--patch", "--no-color"];
-            if !resto.is_empty() {
-                args.extend(["--", resto]);
-            }
-            git(&raiz, &args).map(|t| json!({ "diff": t }))
-        }
-        "git_commit" => {
-            let (tudo, msg) = match resto.strip_prefix("--tudo") {
-                Some(m) => (true, m.trim()),
-                None => (false, resto),
-            };
-            if msg.is_empty() {
-                return Some(Err("git_commit: falta a mensagem".into()));
-            }
-            // grava antes o que está aberto e modificado, para o commit levar o que se vê no editor
-            let (gravadas, _) = w.salvar_todas();
-            if tudo {
-                if let Err(e) = git(&raiz, &["add", "-A"]) {
-                    return Some(Err(e));
-                }
-            }
-            let r = git(&raiz, &["commit", "-m", msg]);
-            w.git_recarregar();
-            r.map(|t| json!({ "ok": true, "gravadas_antes": gravadas, "saida": t }))
-        }
         "clique" | "click" => {
             let v: Vec<usize> = resto.split_whitespace().filter_map(|x| x.parse().ok()).collect();
             let [l, c] = v[..] else { return Some(Err("clique: use `clique <linha> <coluna>`".into())) };
@@ -502,6 +594,11 @@ impl Harness {
                 Ok(json!({ "ok": true }))
             }
             "" => Ok(Value::Null),
+            _ if preparar_git(&mut self.w, linha).is_some() => {
+                let r = preparar_git(&mut self.w, linha).unwrap().and_then(rodar_git);
+                self.w.git_recarregar();
+                r
+            }
             _ => match executar(&mut self.w, &mut self.pintor, &self.ctx, linha) {
                 Some(r) => r,
                 None => Err(format!("comando desconhecido: {cmd}")),
@@ -512,22 +609,95 @@ impl Harness {
     }
 }
 
-/// Ao vivo: o pintor nasce no primeiro pedido que precisa dele, do tamanho da janela.
-pub fn executar_ao_vivo(w: &mut native::Workspace, pintor: &mut Option<Pintor>, linha: &str) -> Result<Value, String> {
-    let janela = JANELA.load(Ordering::Relaxed);
-    let tamanho = ((janela >> 32) as u32, janela as u32);
-    let fonte = f32::from_bits(FONTE_PX.load(Ordering::Relaxed));
-    let fonte = if fonte > 4.0 { fonte } else { crate::config::atual().font.size };
-    if pintor.as_ref().is_none_or(|p| (p.largura, p.altura) != tamanho || p.font_px != fonte) {
-        *pintor = Pintor::new(fonte, tamanho);
+/// Comandos que mudam algo: aparecem como aviso na tela do dono e vão para o registro.
+fn muda_algo(cmd: &str) -> bool {
+    matches!(cmd, "teclas" | "keys" | "texto" | "text" | "comando" | "ex" | "abrir" | "open" | "pasta" | "folder" | "salvar" | "save" | "acao" | "action" | "terminal" | "git_commit" | "clique" | "click")
+}
+
+/// Registro das ações dos agentes (`agentes.log` na pasta de estado; passa de 1 MB, vira `.1`).
+fn registrar(linha: &str, ok: bool) {
+    let arq = pasta_estado().join("agentes.log");
+    if std::fs::metadata(&arq).is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = std::fs::rename(&arq, arq.with_extension("log.1"));
     }
-    let Some(p) = pintor.as_mut() else { return Err("sem fonte para desenhar".into()) };
-    let ctx = Contexto { saida: pasta_estado().join("prints"), ao_vivo: true };
-    let cmd = linha.split_whitespace().next().unwrap_or("");
-    if matches!(cmd, "espera" | "wait" | "quadros" | "frames" | "congelou" | "stall" | "tamanho" | "size") {
-        return Err(format!("{cmd}: só no roteiro (ao vivo, espere no cliente: `astrograph --ctl espera 500`)"));
+    let resumo: String = linha.chars().take(300).collect();
+    let l = format!("{}\t{}\t{}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), if ok { "ok" } else { "erro" }, resumo.replace('\n', " "));
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&arq) {
+        let _ = std::io::Write::write_all(&mut f, l.as_bytes());
     }
-    executar(w, p, &ctx, linha).unwrap_or_else(|| Err(format!("comando desconhecido: {cmd}")))
+}
+
+/// Ao vivo: o pintor nasce no primeiro pedido que precisa dele, do tamanho da janela. A resposta vai pelo
+/// canal; o git roda fora da task do editor (um hook lento não congela a tela).
+pub fn executar_ao_vivo(w: &mut native::Workspace, pintor: &mut Option<Pintor>, linha: &str, resp: tokio::sync::oneshot::Sender<Result<Value, String>>) {
+    let cmd = linha.split_whitespace().next().unwrap_or("").to_string();
+    let resumo: String = linha.chars().take(80).collect();
+    if muda_algo(&cmd) {
+        w.aviso_agente(format!("Agente: {resumo}"));
+    }
+    if cmd == "git_recarregar" {
+        w.git_recarregar();
+        let _ = resp.send(Ok(json!({ "ok": true })));
+        return;
+    }
+    if let Some(trabalho) = preparar_git(w, linha) {
+        let linha = linha.to_string();
+        match trabalho {
+            Err(e) => {
+                registrar(&linha, false);
+                let _ = resp.send(Err(e));
+            }
+            Ok(t) => {
+                let commit = t.commit;
+                tokio::task::spawn_blocking(move || {
+                    let r = rodar_git(t);
+                    if commit {
+                        registrar(&linha, r.is_ok());
+                        // a margem e a branch do editor acompanham o commit
+                        crate::controle::pedido_interno("git_recarregar");
+                    }
+                    let _ = resp.send(r);
+                });
+            }
+        }
+        return;
+    }
+    let r = (|| {
+        let janela = JANELA.load(Ordering::Relaxed);
+        let tamanho = ((janela >> 32) as u32, janela as u32);
+        let fonte = f32::from_bits(FONTE_PX.load(Ordering::Relaxed));
+        let fonte = if fonte > 4.0 { fonte } else { crate::config::atual().font.size };
+        if pintor.as_ref().is_none_or(|p| (p.largura, p.altura) != tamanho || p.font_px != fonte) {
+            *pintor = Pintor::new(fonte, tamanho);
+        }
+        let Some(p) = pintor.as_mut() else { return Err("sem fonte para desenhar".into()) };
+        let ctx = Contexto { saida: pasta_estado().join("prints"), ao_vivo: true };
+        if matches!(cmd.as_str(), "espera" | "wait" | "quadros" | "frames" | "congelou" | "stall" | "tamanho" | "size") {
+            return Err(format!("{cmd}: só no roteiro (ao vivo, espere no cliente: `astrograph --ctl espera 500`)"));
+        }
+        let r = executar(w, p, &ctx, linha).unwrap_or_else(|| Err(format!("comando desconhecido: {cmd}")));
+        if cmd == "print" || cmd == "screenshot" {
+            limpar_prints(&ctx.saida);
+        }
+        r
+    })();
+    if muda_algo(&cmd) {
+        registrar(linha, r.is_ok());
+    }
+    let _ = resp.send(r);
+}
+
+/// Mantém só os 50 prints mais novos.
+fn limpar_prints(pasta: &Path) {
+    let Ok(rd) = std::fs::read_dir(pasta) else { return };
+    let mut v: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "png")).filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
+    if v.len() <= 50 {
+        return;
+    }
+    v.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, p) in v.into_iter().skip(50) {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 /// `--roteiro`: lê os comandos do arquivo (ou `-` para a entrada padrão) e imprime uma linha

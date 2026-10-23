@@ -2148,7 +2148,9 @@ impl Session {
         self.term_spawn_em(cmd, &pasta);
     }
 
-    fn term_spawn_em(&mut self, cmd: portable_pty::CommandBuilder, pasta: &Path) {
+    fn term_spawn_em(&mut self, mut cmd: portable_pty::CommandBuilder, pasta: &Path) {
+        // o terminal (e o agente que roda nele) acha este app pelo ambiente, quando o controle está ligado
+        crate::controle::aplicar_ambiente(&mut cmd);
         let (rows, cols) = self.term_dims;
         let notify = self.notify.clone().unwrap_or_else(|| std::sync::Arc::new(|| {}));
         self.term_agente = false;
@@ -2248,7 +2250,7 @@ impl Session {
             cmd.arg(p);
         }
         // o Claude Code ganha as ferramentas do Astrograph (MCP): ver a tela, abrir, salvar, commit...
-        if a.bin == "claude" && crate::controle::ligado() && std::env::var("ASTROGRAPH_CONTROLE").is_ok_and(|v| v != "0") {
+        if a.bin == "claude" && crate::controle::endereco().is_some() {
             if let Some(cfg) = crate::controle::arquivo_mcp() {
                 cmd.arg("--mcp-config");
                 cmd.arg(cfg);
@@ -4959,20 +4961,32 @@ impl Workspace {
     /// Grava as abas com alterações que têm arquivo; devolve os nomes gravados e os que ficaram sem nome.
     pub fn salvar_todas(&mut self) -> (Vec<String>, Vec<usize>) {
         let (mut gravadas, mut sem_nome) = (Vec::new(), Vec::new());
-        for (i, s) in self.abas.iter_mut().enumerate() {
+        let mut gravar = |s: &mut Session, aba: usize, gravadas: &mut Vec<String>| {
             if !s.modified() {
-                continue;
+                return;
             }
             match s.path.clone() {
                 Some(p) => {
                     s.write("");
-                    if !s.modified() {
-                        gravadas.push(p.to_string_lossy().into_owned());
+                    let nome = p.to_string_lossy().into_owned();
+                    if !s.modified() && !gravadas.contains(&nome) {
+                        gravadas.push(nome);
                     }
                 }
-                None => sem_nome.push(i + 1),
+                None => sem_nome.push(aba),
+            }
+        };
+        for (i, aba) in self.abas.iter_mut().enumerate() {
+            gravar(aba, i + 1, &mut gravadas);
+            // os painéis divididos da aba são sessões com o próprio estado de modificado
+            if let Some(sp) = aba.splits.as_mut() {
+                for o in sp.outros.iter_mut() {
+                    gravar(o, i + 1, &mut gravadas);
+                }
             }
         }
+        sem_nome.dedup();
+        self.sincronizar_irmaos();
         self.depois();
         (gravadas, sem_nome)
     }
@@ -5013,6 +5027,39 @@ impl Workspace {
         self.depois();
     }
 
+    /// Aviso na tela de uma ação feita por um agente (o dono vê o que mudou na tela dele).
+    pub fn aviso_agente(&mut self, texto: String) {
+        self.atual().say(texto, ToastKind::Info);
+    }
+
+    /// Modo do editor da aba ativa (para recusar atalhos da líder no meio de uma inserção do dono).
+    pub fn livre_para_atalho(&mut self) -> bool {
+        let s = self.atual();
+        s.picker.is_none() && s.ia_prompt.is_none() && s.tree_prompt.is_none() && s.ed.cmdline().is_none() && !s.ed.has_pending() && s.ed.mode() == Mode::Normal
+    }
+
+    /// Abas com alterações não salvas dentro de `raiz` (o commit avisa em vez de gravar por conta própria).
+    pub fn nao_salvas_em(&self, raiz: &Path) -> Vec<String> {
+        let mut v = Vec::new();
+        for s in &self.abas {
+            let mut sessoes: Vec<&Session> = vec![s];
+            if let Some(sp) = s.splits.as_ref() {
+                sessoes.extend(sp.outros.iter());
+            }
+            for x in sessoes {
+                if x.modified() {
+                    if let Some(p) = x.path.as_ref().filter(|p| p.starts_with(raiz)) {
+                        let n = p.to_string_lossy().into_owned();
+                        if !v.contains(&n) {
+                            v.push(n);
+                        }
+                    }
+                }
+            }
+        }
+        v
+    }
+
     /// Relê o git (branch e sinais da margem) depois de um commit feito por fora.
     pub fn git_recarregar(&mut self) {
         self.atual().git_load();
@@ -5033,9 +5080,8 @@ pub async fn native_task(
 ) {
     use crate::UiCommand;
     // controle por agentes: antes de abrir o editor, para os processos filhos herdarem o endereço
-    crate::controle::ligar(crate::config::atual().agentes.controle);
     let tx_controle = tx.clone();
-    let _controle = crate::controle::iniciar(move |p| tx_controle.send(crate::UiCommand::Controle(p)).is_ok());
+    let _controle = crate::controle::preparar(move |p| tx_controle.send(crate::UiCommand::Controle(p)).is_ok(), crate::config::atual().agentes.controle);
     let mut pintor: Option<crate::harness::Pintor> = None;
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
         let _ = tx.send(crate::UiCommand::TermOut);
@@ -5063,8 +5109,11 @@ pub async fn native_task(
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
             UiCommand::TermCopy => w.atual().term_copiar(),
             UiCommand::Controle((linha, resp)) => {
-                let r = crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha);
-                let _ = resp.send(r);
+                // o servidor desistiu de esperar (tempo-limite): não executa depois, sem ninguém para ver
+                if resp.is_closed() {
+                    continue;
+                }
+                crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha, resp);
             }
             UiCommand::Panes(t) => {
                 let t: Vec<(PaneId, usize, f32)> = t.into_iter().map(|(id, c, r)| (id, c.max(1) as usize, r.max(1) as f32)).collect();
@@ -7149,6 +7198,9 @@ mod testes {
     fn espaco_nos_prompts_e_texto_e_nao_a_tecla_lider() {
         let mut s = Session::new("fn main() {}\n", None);
         s.resize(80, 20.0);
+        // a pergunta à IA só abre com um agente: o teste não depende do que a máquina tem instalado
+        s.agentes_pasta = Some(std::env::temp_dir().join(format!("astrograph-agentes-espaco-{}", std::process::id())));
+        s.agentes_tem = Some(vec!["claude"]);
         s.feed(" AE");
         assert!(s.ia_prompt.is_some(), "<Espaço>AE sem seleção abre a pergunta");
         s.feed("explique esta funcao");

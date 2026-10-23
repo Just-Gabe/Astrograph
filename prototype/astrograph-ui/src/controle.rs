@@ -7,27 +7,35 @@
 //!
 //! Segurança: só aceita conexões locais e com o token da sessão (256 bits, comparado em tempo
 //! constante). O token vai para o arquivo `controle.json` na pasta de estado do usuário e para o
-//! ambiente dos processos que o app abre (terminal e agentes: `ASTROGRAPH_CONTROLE` e
-//! `ASTROGRAPH_TOKEN`). Quem tem o token já roda programas como este usuário; o controle não dá a ele
-//! nada além disso. Pedido em HTTP (um navegador tentando a porta) fecha a conexão sem resposta.
+//! ambiente dos terminais que o app abre (e do agente que roda neles): `ASTROGRAPH_CONTROLE` e
+//! `ASTROGRAPH_TOKEN`. Pedido em HTTP (um navegador tentando a porta) fecha a conexão sem resposta.
+//! Desligado (`[agentes] controle = false`, Configurações ou `<Leader>AM`), não há servidor, token,
+//! arquivo nem variável: religar sobe tudo de novo, com outro token.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-/// Ligado na configuração (`[agentes] controle`), na Central de configurações ou no `<Leader>AM`. Desligado,
-/// o servidor segue de pé (religar não muda o endereço dos agentes abertos) mas recusa todo pedido.
-static LIGADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static LIGADO: AtomicBool = AtomicBool::new(true);
+/// Sobe a cada servidor novo: conexões de uma subida anterior (com o token velho) não executam mais nada.
+static GERACAO: AtomicU64 = AtomicU64::new(0);
 
 pub fn ligado() -> bool {
-    LIGADO.load(std::sync::atomic::Ordering::SeqCst)
+    LIGADO.load(Ordering::SeqCst)
 }
 
+/// Liga ou desliga na hora: desligar derruba o servidor e apaga o endereço e o token; ligar sobe outro.
 pub fn ligar(sim: bool) {
-    LIGADO.store(sim, std::sync::atomic::Ordering::SeqCst);
+    LIGADO.store(sim, Ordering::SeqCst);
+    if sim {
+        subir();
+    } else {
+        descer();
+    }
 }
 
 /// Maior pedido aceito (uma linha).
@@ -74,68 +82,131 @@ fn gravar_privado(caminho: &std::path::Path, texto: &str) -> std::io::Result<()>
     o.open(caminho)?.write_all(texto.as_bytes())
 }
 
-/// Enquanto viver, o servidor anuncia o endereço; ao sair, apaga os arquivos.
-pub struct Guarda {
-    arquivos: Vec<PathBuf>,
-}
-
-impl Drop for Guarda {
-    fn drop(&mut self) {
-        for a in &self.arquivos {
-            // só apaga o `controle.json` se ele ainda for deste processo
-            let meu = std::fs::read_to_string(a).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).is_some_and(|v| v["pid"] == json!(std::process::id()));
-            if meu {
-                let _ = std::fs::remove_file(a);
-            }
+/// Apaga os arquivos de endereço se ainda forem deste processo.
+fn apagar_arquivos() {
+    for a in [arquivo_do_processo(), arquivo_atual()] {
+        let meu = std::fs::read_to_string(&a).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).is_some_and(|v| v["pid"] == json!(std::process::id()));
+        if meu {
+            let _ = std::fs::remove_file(&a);
         }
     }
 }
 
 /// Um pedido que chegou: a linha de comando e para onde vai a resposta.
 pub type Pedido = (String, tokio::sync::oneshot::Sender<Result<Value, String>>);
+type Enviar = Arc<dyn Fn(Pedido) -> bool + Send + Sync>;
 
-/// Sobe o servidor (dentro do runtime tokio da sessão). `enviar` leva o pedido à task que é dona do
-/// editor. `ASTROGRAPH_CONTROLE=0` desliga.
-pub fn iniciar(enviar: impl Fn(Pedido) -> bool + Send + Sync + 'static) -> Option<Guarda> {
-    if std::env::var("ASTROGRAPH_CONTROLE").is_ok_and(|v| v == "0") {
-        return None;
+struct Servidor {
+    porta: u16,
+    token: String,
+    tarefa: tokio::task::AbortHandle,
+}
+
+/// Para onde os pedidos vão (a task dona do editor) e o runtime onde o servidor roda.
+static DESTINO: Mutex<Option<(Enviar, tokio::runtime::Handle)>> = Mutex::new(None);
+static SERVIDOR: Mutex<Option<Servidor>> = Mutex::new(None);
+
+/// Ao sair do editor: derruba o servidor e apaga os arquivos.
+pub struct Encerrar;
+
+impl Drop for Encerrar {
+    fn drop(&mut self) {
+        descer();
+        *DESTINO.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
-    let token = token_novo()?;
-    let std_l = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
-    std_l.set_nonblocking(true).ok()?;
-    let porta = std_l.local_addr().ok()?.port();
-    let listener = tokio::net::TcpListener::from_std(std_l).ok()?;
-    // os processos que o app abre (terminal, agentes) acham este app sem ler arquivo
-    std::env::set_var("ASTROGRAPH_CONTROLE", format!("127.0.0.1:{porta}"));
-    std::env::set_var("ASTROGRAPH_TOKEN", &token);
-    let info = json!({ "porta": porta, "token": token, "pid": std::process::id() }).to_string();
-    let (atual, proc_) = (arquivo_atual(), arquivo_do_processo());
-    let _ = gravar_privado(&proc_, &info);
-    let _ = gravar_privado(&atual, &info);
-    let enviar = Arc::new(enviar);
+}
+
+/// Chamado pela task dona do editor (dentro do runtime tokio): guarda para onde mandar os pedidos e sobe o
+/// servidor se o controle estiver ligado. `ASTROGRAPH_CONTROLE=0` no ambiente desliga de vez nesta sessão.
+pub fn preparar(enviar: impl Fn(Pedido) -> bool + Send + Sync + 'static, ligado_na_config: bool) -> Encerrar {
+    let desligado_no_ambiente = std::env::var("ASTROGRAPH_CONTROLE").is_ok_and(|v| v == "0");
+    *DESTINO.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::new(enviar), tokio::runtime::Handle::current()));
+    ligar(ligado_na_config && !desligado_no_ambiente);
+    Encerrar
+}
+
+fn subir() -> bool {
+    let mut srv = SERVIDOR.lock().unwrap_or_else(|e| e.into_inner());
+    if srv.is_some() {
+        return true;
+    }
+    let Some((enviar, rt)) = DESTINO.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return false };
+    let Some(token) = token_novo() else { return false };
+    let Ok(std_l) = std::net::TcpListener::bind(("127.0.0.1", 0)) else { return false };
+    let Some(porta) = std_l.set_nonblocking(true).ok().and_then(|_| std_l.local_addr().ok()).map(|a| a.port()) else { return false };
+    let geracao = GERACAO.fetch_add(1, Ordering::SeqCst) + 1;
     let vagas = Arc::new(tokio::sync::Semaphore::new(MAX_CONEXOES));
-    tokio::spawn(async move {
+    let tok = token.clone();
+    let tarefa = rt.spawn(async move {
+        let Ok(listener) = tokio::net::TcpListener::from_std(std_l) else { return };
         loop {
-            let Ok((sock, origem)) = listener.accept().await else { continue };
+            let (sock, origem) = match listener.accept().await {
+                Ok(c) => c,
+                // sem descritores, por exemplo: espera em vez de girar a CPU
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
             if !origem.ip().is_loopback() {
                 continue;
             }
             let Ok(vaga) = vagas.clone().try_acquire_owned() else { continue };
-            let (token, enviar) = (token.clone(), enviar.clone());
+            let (token, enviar) = (tok.clone(), enviar.clone());
             tokio::spawn(async move {
-                atender(sock, &token, enviar.as_ref()).await;
+                atender(sock, &token, geracao, enviar.as_ref()).await;
                 drop(vaga);
             });
         }
     });
-    Some(Guarda { arquivos: vec![proc_, atual] })
+    let info = json!({ "porta": porta, "token": token, "pid": std::process::id() }).to_string();
+    let _ = gravar_privado(&arquivo_do_processo(), &info);
+    let _ = gravar_privado(&arquivo_atual(), &info);
+    *srv = Some(Servidor { porta, token, tarefa: tarefa.abort_handle() });
+    true
+}
+
+fn descer() {
+    if let Some(s) = SERVIDOR.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        s.tarefa.abort();
+        GERACAO.fetch_add(1, Ordering::SeqCst);
+        apagar_arquivos();
+    }
+}
+
+/// O próprio app pede um comando à task do editor (ex.: recarregar o git depois de um commit), esperando a vez.
+pub fn pedido_interno(linha: &str) {
+    let Some((enviar, _)) = DESTINO.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if enviar((linha.to_string(), tx)) {
+        let _ = rx.blocking_recv();
+    }
+}
+
+/// Endereço e token do servidor no ar (para os terminais e agentes que o app abre).
+pub fn endereco() -> Option<(String, String)> {
+    SERVIDOR.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| (format!("127.0.0.1:{}", s.porta), s.token.clone()))
+}
+
+/// Põe (ou tira, com o controle desligado) o endereço e o token no ambiente de um processo que o app abre.
+pub fn aplicar_ambiente(cmd: &mut portable_pty::CommandBuilder) {
+    match endereco() {
+        Some((e, t)) => {
+            cmd.env("ASTROGRAPH_CONTROLE", e);
+            cmd.env("ASTROGRAPH_TOKEN", t);
+        }
+        None => {
+            cmd.env_remove("ASTROGRAPH_CONTROLE");
+            cmd.env_remove("ASTROGRAPH_TOKEN");
+        }
+    }
 }
 
 fn parece_http(l: &str) -> bool {
     ["GET ", "POST ", "PUT ", "HEAD ", "OPTIONS ", "DELETE ", "PATCH ", "CONNECT ", "TRACE "].iter().any(|m| l.starts_with(m))
 }
 
-async fn atender(sock: tokio::net::TcpStream, token: &str, enviar: &(dyn Fn(Pedido) -> bool + Send + Sync)) {
+async fn atender(sock: tokio::net::TcpStream, token: &str, geracao: u64, enviar: &(dyn Fn(Pedido) -> bool + Send + Sync)) {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
     let (r, mut wr) = sock.into_split();
     let mut leitor = tokio::io::BufReader::new(r);
@@ -162,7 +233,11 @@ async fn atender(sock: tokio::net::TcpStream, token: &str, enviar: &(dyn Fn(Pedi
                 let _ = wr.write_all(b"{\"ok\":false,\"erro\":\"token inv\xc3\xa1lido\"}\n").await;
                 return;
             }
-            Ok(_) if !ligado() => json!({ "ok": false, "erro": "os agentes estão desligados do editor no Astrograph (ligue com <Espaço>AM ou em Configurações)" }),
+            // desligado, ou religado com outro token depois que esta conexão abriu
+            Ok(_) if !ligado() || GERACAO.load(Ordering::SeqCst) != geracao => {
+                let _ = wr.write_all("{\"ok\":false,\"erro\":\"os agentes estão desligados deste editor (ligue em Configurações ou com o atalho <Líder>AM)\"}\n".as_bytes()).await;
+                return;
+            }
             Ok(v) => {
                 let comando = v["comando"].as_str().unwrap_or("").to_string();
                 let (tx, rx) = tokio::sync::oneshot::channel();
@@ -201,7 +276,7 @@ impl Cliente {
         let (endereco, token) = match (std::env::var("ASTROGRAPH_CONTROLE"), std::env::var("ASTROGRAPH_TOKEN")) {
             (Ok(e), Ok(t)) if e != "0" => (e, t),
             _ => {
-                let txt = std::fs::read_to_string(arquivo_atual()).map_err(|_| "o Astrograph não está aberto (sem controle.json)".to_string())?;
+                let txt = std::fs::read_to_string(arquivo_atual()).map_err(|_| "nenhum Astrograph aberto com os agentes ligados (só o motor nativo tem o controle; ligue em Configurações ou com <Líder>AM)".to_string())?;
                 let v: Value = serde_json::from_str(&txt).map_err(|_| "controle.json inválido".to_string())?;
                 (format!("127.0.0.1:{}", v["porta"]), v["token"].as_str().unwrap_or("").to_string())
             }
@@ -292,7 +367,7 @@ fn ferramentas() -> Vec<Value> {
     vec![
         ferramenta("astrograph_estado", "Estado da tela do Astrograph: pasta, arquivo, modo, cursor, trecho em volta do cursor, abas, buscador/menu aberto, explorador, terminal, avisos e diagnósticos.", json!({}), &[]),
         ferramenta("astrograph_print", "Print da janela do Astrograph (PNG). Use para ver menus, popups e o layout.", json!({}), &[]),
-        ferramenta("astrograph_teclas", "Manda teclas ao editor na notação do Vim: `:w<CR>`, `<Esc>`, `<C-d>`, `<Space>ff`, `dd`, `ihello<Esc>`. A tecla líder é o espaço. Devolve o estado depois.", json!({ "teclas": s("teclas em notação do Vim") }), &["teclas"]),
+        ferramenta("astrograph_teclas", "Manda teclas ao editor na notação do Vim: `:w<CR>`, `<Esc>`, `<C-d>`, `dd`, `ihello<Esc>`. Para os menus, prefira astrograph_acao (a tecla líder é configurável). Devolve o estado depois.", json!({ "teclas": s("teclas em notação do Vim") }), &["teclas"]),
         ferramenta("astrograph_texto", "Digita um texto literal (no modo de inserção, num buscador ou num prompt). Devolve o estado depois.", json!({ "texto": s("texto a digitar") }), &["texto"]),
         ferramenta("astrograph_comando", "Roda um comando `:` do editor (sem os dois-pontos): `w`, `tabnew`, `vsplit`, `%s/a/b/g`, `config`, `Rename novo`, `Format`.", json!({ "comando": s("comando sem o :") }), &["comando"]),
         ferramenta("astrograph_abrir", "Abre um arquivo numa aba (caminho relativo à pasta do projeto ou absoluto), opcionalmente numa linha.", json!({ "caminho": s("arquivo"), "linha": { "type": "integer", "minimum": 1 } }), &["caminho"]),
@@ -300,11 +375,11 @@ fn ferramentas() -> Vec<Value> {
         ferramenta("astrograph_salvar", "Grava o arquivo da aba ativa, ou todas as abas modificadas com `todos`.", json!({ "todos": { "type": "boolean" } }), &[]),
         ferramenta("astrograph_buffer", "Texto de um arquivo aberto como está no editor (inclui o que ainda não foi salvo). Sem caminho: a aba ativa.", json!({ "caminho": s("arquivo aberto (opcional)") }), &[]),
         ferramenta("astrograph_atalhos", "Lista os atalhos do menu da tecla líder (o que cada sequência faz).", json!({}), &[]),
-        ferramenta("astrograph_acao", "Executa um atalho do menu da líder pela sequência (ex.: `ff` buscar arquivo, `e` explorador, `fc` configurações, `Ag` escolher agente). Devolve o estado depois.", json!({ "teclas": s("sequência depois da líder") }), &["teclas"]),
+        ferramenta("astrograph_acao", "Executa um atalho do menu da líder pela sequência (ex.: `ff` buscar arquivo, `e` explorador, `fc` configurações, `Ag` escolher agente), qualquer que seja a tecla líder. Recusa se o editor estiver no meio de uma inserção ou de um menu. Devolve o estado depois.", json!({ "teclas": s("sequência depois da líder") }), &["teclas"]),
         ferramenta("astrograph_terminal", "Roda um comando de shell num terminal do Astrograph (nunca no do agente), espera e devolve as linhas da tela do terminal.", json!({ "comando": s("comando de shell"), "esperar_ms": { "type": "integer", "minimum": 0, "maximum": 60000 } }), &["comando"]),
         ferramenta("astrograph_git_status", "git status do projeto aberto.", json!({}), &[]),
         ferramenta("astrograph_git_diff", "git diff do projeto aberto (ou de um arquivo).", json!({ "caminho": s("arquivo (opcional)") }), &[]),
-        ferramenta("astrograph_git_commit", "Grava os arquivos abertos modificados e faz o commit com a mensagem. Com `tudo`, inclui todas as alterações (git add -A); sem ele, só o que já está no stage.", json!({ "mensagem": s("mensagem do commit"), "tudo": { "type": "boolean" } }), &["mensagem"]),
+        ferramenta("astrograph_git_commit", "Faz o commit do que está no disco (não grava as abas: a resposta lista as que estão sem salvar). Com `tudo`, inclui todas as alterações não ignoradas (git add -A); sem ele, só o que já está no stage. `pasta` escolhe o repositório (padrão: a pasta do projeto aberto).", json!({ "mensagem": s("mensagem do commit"), "tudo": { "type": "boolean" }, "pasta": s("repositório (opcional)") }), &["mensagem"]),
         ferramenta("astrograph_esperar", "Espera alguns milissegundos (resultados de busca, servidor de linguagem, animações) e devolve o estado.", json!({ "ms": { "type": "integer", "minimum": 0, "maximum": 30000 } }), &["ms"]),
     ]
 }
@@ -312,7 +387,8 @@ fn ferramentas() -> Vec<Value> {
 /// Traduz a chamada de ferramenta em comandos do harness e monta o conteúdo da resposta MCP.
 fn chamar(cli: &mut Cliente, nome: &str, a: &Value) -> Result<Vec<Value>, String> {
     let s = |k: &str| a[k].as_str().unwrap_or("").to_string();
-    let texto = |v: Value| json!({ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() });
+    // JSON compacto: cada ação devolve o estado, e o agente paga tokens por ele
+    let texto = |v: Value| json!({ "type": "text", "text": v.to_string() });
     let pausa = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
     // ações que mudam a tela: devolve o estado depois de um instante (buscas e animações chegam)
     let mut acao_e_estado = |cli: &mut Cliente, cmd: String| -> Result<Vec<Value>, String> {
@@ -350,8 +426,14 @@ fn chamar(cli: &mut Cliente, nome: &str, a: &Value) -> Result<Vec<Value>, String
         "astrograph_git_status" => Ok(vec![texto(cli.pedir("git_status")?)]),
         "astrograph_git_diff" => Ok(vec![texto(cli.pedir(&format!("git_diff {}", s("caminho")))?)]),
         "astrograph_git_commit" => {
-            let tudo = if a["tudo"] == json!(true) { "--tudo " } else { "" };
-            Ok(vec![texto(cli.pedir(&format!("git_commit {tudo}{}", s("mensagem")))?)])
+            let mut opcoes = String::new();
+            if a["tudo"] == json!(true) {
+                opcoes.push_str(" --tudo");
+            }
+            if !s("pasta").is_empty() {
+                opcoes.push_str(&format!(" --em {}", s("pasta")));
+            }
+            Ok(vec![texto(cli.pedir(&format!("git_commit{opcoes} -- {}", s("mensagem")))?)])
         }
         "astrograph_esperar" => {
             pausa(a["ms"].as_u64().unwrap_or(500).min(30_000));
@@ -381,12 +463,14 @@ pub fn mcp_responder(cli: &mut Option<Cliente>, msg: &Value) -> Option<Value> {
                 *cli = Cliente::conectar().ok();
             }
             let r = match cli.as_mut() {
-                None => Err("o Astrograph não está aberto (abra o app; o agente lançado por ele já sabe como achá-lo)".to_string()),
+                None => Err("o Astrograph não está aberto com os agentes ligados (motor nativo; Configurações ou <Líder>AM liga). O agente lançado pelo app já sabe como achá-lo".to_string()),
                 Some(c) => chamar(c, nome, &args),
             };
-            // conexão caiu (app reiniciado): tenta de novo uma vez com uma nova
+            // conexão caiu (app reiniciado): tenta de novo uma vez, só nas ferramentas que não mudam nada (terminal,
+            // commit, teclas... poderiam rodar duas vezes)
+            let so_le = matches!(nome, "astrograph_estado" | "astrograph_print" | "astrograph_buffer" | "astrograph_atalhos" | "astrograph_git_status" | "astrograph_git_diff" | "astrograph_esperar");
             let r = match r {
-                Err(e) if e.starts_with("enviar:") || e.starts_with("ler:") => {
+                Err(e) if so_le && (e.starts_with("enviar:") || e.starts_with("ler:")) => {
                     *cli = Cliente::conectar().ok();
                     match cli.as_mut() {
                         Some(c) => chamar(c, nome, &args),
@@ -471,19 +555,21 @@ mod testes {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
             rt.block_on(async move {
-                let _g = iniciar(move |p| tx.send(p).is_ok());
+                let _g = preparar(move |p| tx.send(p).is_ok(), true);
                 let mut w = crate::native::Workspace::new(None, ' ', Arc::new(|| {}));
                 w.resize(100, 30.0);
                 w.feed(&format!(":cd {}<CR>", raiz.display()));
                 let mut pintor = None;
                 pronto_tx.send(()).unwrap();
                 while let Some((linha, resp)) = rx.recv().await {
-                    let _ = resp.send(crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha));
+                    crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha, resp);
                 }
             });
         });
         pronto_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        let mut c = Cliente::conectar().expect("conecta pelo ambiente");
+        // o app não mexe mais no próprio ambiente (só no dos terminais que abre): o cliente acha pelo controle.json
+        assert!(std::env::var("ASTROGRAPH_TOKEN").is_err());
+        let mut c = Cliente::conectar().expect("conecta pelo controle.json");
 
         let e = c.pedir("estado").unwrap();
         assert_eq!(e["tela_inicial"], true);
@@ -529,15 +615,20 @@ mod testes {
         // commit
         if tem_git {
             c.pedir("teclas ggA!<Esc>").unwrap();
-            let r = c.pedir("git_commit --tudo agente: comentário").unwrap();
-            assert!(r["gravadas_antes"].as_array().unwrap().len() == 1, "{r}");
+            // não grava a aba por conta própria: avisa; com a aba salva, o commit leva tudo
+            let r = c.pedir("git_commit --tudo -- agente: comentário").unwrap();
+            assert_eq!(r["abas_nao_salvas"].as_array().unwrap().len(), 1, "{r}");
+            c.pedir("salvar").unwrap();
+            c.pedir("git_commit --tudo -- agente: o resto").unwrap();
+            // mensagem que começa com --tudo é mensagem, não opção
+            assert!(c.pedir("git_commit --tudo e mais nada").is_err(), "sem nada no stage o commit falha, sem add -A");
             let log = std::process::Command::new("git").args(["log", "-1", "--format=%s"]).current_dir(&proj).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "agente: comentário");
+            assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "agente: o resto");
             assert!(c.pedir("git_status").unwrap()["status"].as_str().unwrap().lines().count() == 1, "árvore limpa depois do commit");
         }
 
         // CONTROLES de segurança: token errado e pedido HTTP não executam nada
-        let endereco = std::env::var("ASTROGRAPH_CONTROLE").unwrap();
+        let (endereco, _) = super::endereco().unwrap();
         let mut s = std::net::TcpStream::connect(&endereco).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         s.write_all(b"{\"token\":\"errado\",\"comando\":\"teclas ggdG\"}\n").unwrap();
@@ -551,17 +642,24 @@ mod testes {
         let _ = BufReader::new(&h).read_line(&mut r);
         assert!(r.is_empty(), "HTTP fecha sem resposta: {r:?}");
         assert!(c.pedir("buffer").unwrap()["texto"].as_str().unwrap().contains("fn a()"), "nada foi apagado");
-        // desligado (atalho ou configuração): recusa com o motivo; religado, volta a atender
+        // print só na pasta de prints: caminho absoluto ou `..` viram só o nome
+        let p = c.pedir(&format!("print {}", base.join("fora.png").display())).unwrap();
+        assert!(!base.join("fora.png").exists() && p["png"].as_str().unwrap().contains("prints"), "{p}");
+        // desligado (atalho ou configuração): servidor cai, arquivos e endereço somem; a conexão aberta é recusada
         ligar(false);
+        assert!(super::endereco().is_none() && !arquivo_atual().exists());
         assert!(c.pedir("estado").unwrap_err().contains("desligados"));
+        assert!(std::net::TcpStream::connect(&endereco).is_err(), "a porta fechou");
+        // religado: outro token; a conexão velha continua recusada, uma nova funciona
         ligar(true);
-        assert!(c.pedir("estado").is_ok());
+        assert!(Cliente::conectar().unwrap().pedir("estado").is_ok());
+        // o registro guardou as ações
+        let log = std::fs::read_to_string(base.join("estado").join("agentes.log")).unwrap();
+        assert!(log.contains("abrir src/a.rs 1") && log.contains("git_commit"), "{log}");
         // o arquivo de controle existe e aponta para este processo
         let info: Value = serde_json::from_str(&std::fs::read_to_string(arquivo_atual()).unwrap()).unwrap();
         assert_eq!(info["pid"], json!(std::process::id()));
-
-        std::env::remove_var("ASTROGRAPH_CONTROLE");
-        std::env::remove_var("ASTROGRAPH_TOKEN");
+        ligar(false);
         std::env::remove_var("ASTROGRAPH_LSP");
         match estado_antes {
             Some(v) => std::env::set_var("ASTROGRAPH_STATE", v),
