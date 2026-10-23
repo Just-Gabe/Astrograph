@@ -1133,7 +1133,7 @@ while True:
 
     #[test]
     fn servidor_falso_diagnostica_hover_e_definicao() {
-        let Some(py) = ["python3", "python"].into_iter().find(|p| Command::new(p).arg("--version").output().is_ok()) else { return };
+        let Some(py) = ["python3", "python"].into_iter().find(|p| Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())) else { return };
         let dir = std::env::temp_dir().join(format!("astrograph-lsp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("falso.py");
@@ -1174,7 +1174,7 @@ while True:
     }
 
     fn cliente_falso() -> (Cliente, PathBuf, PathBuf) {
-        let py = ["python3", "python"].into_iter().find(|p| Command::new(p).arg("--version").output().is_ok()).expect("python");
+        let py = ["python3", "python"].into_iter().find(|p| Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())).expect("python");
         let dir = std::env::temp_dir().join(format!("astrograph-lsp2-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("falso.py");
@@ -1191,7 +1191,7 @@ while True:
 
     #[test]
     fn progresso_e_simbolos_do_projeto() {
-        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().map_or(true, |o| !o.status.success())) {
             return;
         }
         let (mut c, _d, _arq) = cliente_falso();
@@ -1211,7 +1211,7 @@ while True:
 
     #[test]
     fn renomear_devolve_edicoes_em_dois_arquivos() {
-        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().map_or(true, |o| !o.status.success())) {
             return;
         }
         let (mut c, _d, arq) = cliente_falso();
@@ -1227,7 +1227,7 @@ while True:
 
     #[test]
     fn acoes_de_codigo_edicao_e_comando_com_applyedit_do_servidor() {
-        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().map_or(true, |o| !o.status.success())) {
             return;
         }
         let (mut c, _d, arq) = cliente_falso();
@@ -1253,7 +1253,7 @@ while True:
 
     #[test]
     fn formatar_assinatura_referencias_e_simbolos() {
-        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().is_err()) {
+        if ["python3", "python"].into_iter().all(|p| Command::new(p).arg("--version").output().map_or(true, |o| !o.status.success())) {
             return;
         }
         let (mut c, _d, arq) = cliente_falso();

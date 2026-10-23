@@ -18,6 +18,21 @@ pub struct Config {
     pub editor: EditorCfg,
     pub theme: ThemeCfg,
     pub ui: UiCfg,
+    pub agentes: AgentesCfg,
+}
+
+/// Agentes de IA operando o editor (MCP `astrograph --mcp`, CLI `astrograph --ctl`).
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct AgentesCfg {
+    /// os agentes podem ver a tela e operar o editor (padrão: sim; `<Leader>AM` liga e desliga)
+    pub controle: bool,
+}
+
+impl Default for AgentesCfg {
+    fn default() -> Self {
+        AgentesCfg { controle: true }
+    }
 }
 
 /// Preferências gerais da interface.
@@ -200,6 +215,7 @@ impl Default for Config {
             editor: EditorCfg::default(),
             theme: ThemeCfg::default(),
             ui: UiCfg::default(),
+            agentes: AgentesCfg::default(),
         }
     }
 }

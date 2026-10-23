@@ -25,6 +25,8 @@ mod design;
 mod dobras;
 mod editorconfig;
 mod native;
+mod harness;
+mod controle;
 mod lsp;
 mod agentes;
 mod janelas;
@@ -110,6 +112,8 @@ enum UiCommand {
     Focus(bool),
     /// o texto que está no clipboard do sistema (para `"+p` e `clipboard=unnamedplus`)
     ClipSync(String),
+    /// pedido de um agente pelo servidor de controle (`controle.rs`): comando do harness e a resposta
+    Controle(controle::Pedido),
     Mouse {
         button: &'static str,
         action: &'static str,
@@ -474,6 +478,10 @@ async fn nvim_task(
             UiCommand::Keys(keys) => nvim.input(&keys).await.map(|_| ()),
             UiCommand::Resize(cols, rows) => nvim.ui_try_resize(cols, rows).await,
             UiCommand::Scroll(_) | UiCommand::TermOut | UiCommand::TermSize(..) | UiCommand::Tab(_) | UiCommand::TreeClick(_) | UiCommand::DashClick(_) | UiCommand::DashHover(_) | UiCommand::TermClose | UiCommand::Close | UiCommand::Panes(_) | UiCommand::PaneClick { .. } | UiCommand::PaneScroll(..) | UiCommand::Divisor { .. } | UiCommand::TermMouse { .. } | UiCommand::Paste(_) | UiCommand::TermCopy | UiCommand::ClipSync(_) => Ok(()),
+            UiCommand::Controle((_, resp)) => {
+                let _ = resp.send(Err("o controle por agentes só existe no motor nativo".into()));
+                Ok(())
+            }
             UiCommand::Focus(gained) => nvim.ui_set_focus(gained).await,
             UiCommand::Mouse { button, action, modifier, row, col } => {
                 nvim.input_mouse(button, action, &modifier, 0, row, col).await
@@ -859,6 +867,7 @@ impl App {
         let clock = self.cfg.clock.enabled.then(|| relogio::agora(self.cfg.clock.hour12));
         let scale = window.scale_factor() as f32;
         let font_px = self.zoom_px.unwrap_or(self.base_font * scale);
+        harness::anotar_janela(w, h, font_px);
         let Some(scene) = self.scene.as_mut() else { return };
         scene.set_clock(clock);
         let mut buffer = surface.buffer_mut().expect("buffer_mut");
@@ -1799,6 +1808,15 @@ fn make_icon() -> Icon {
 }
 
 fn main() {
+    // `--ctl` e `--mcp` falam com o app aberto e saem: antes de tudo (o MCP usa a saída padrão só para o
+    // protocolo, sem o "CONFIG:" de abaixo)
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(i) = argv.iter().position(|a| a == "--ctl") {
+        std::process::exit(controle::ctl(&argv[i + 1..]));
+    }
+    if argv.iter().any(|a| a == "--mcp") {
+        std::process::exit(controle::mcp());
+    }
     nview::T0.get_or_init(Instant::now);
     let cfg = {
         let (cfg, path) = Config::load();
@@ -1824,6 +1842,17 @@ fn main() {
     let format_on_save = cfg.lsp.format_on_save;
     let mapeamentos = cfg.keys.mapeamentos();
     let clipboard_mais = cfg.editor.clipboard.contains("unnamedplus");
+    // `--roteiro arquivo.txt`: dirige o editor sem janela (prints, estado em JSON) e sai
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(i) = args.iter().position(|a| a == "--roteiro") {
+        let valor = |nome: &str| args.iter().position(|a| a == nome).and_then(|j| args.get(j + 1)).cloned();
+        let roteiro = args.get(i + 1).cloned().unwrap_or_else(|| "-".into());
+        let saida = valor("--saida").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("prints"));
+        let tamanho = valor("--tamanho").and_then(|t| t.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((1280, 800));
+        let opcoes = ["--roteiro", "--saida", "--tamanho"];
+        let arquivo = args.iter().enumerate().find(|(j, a)| !a.starts_with('-') && (*j == 0 || !opcoes.contains(&args[j - 1].as_str()))).map(|(_, a)| std::path::PathBuf::from(a));
+        std::process::exit(harness::rodar_roteiro(&roteiro, saida, tamanho, arquivo, leader_key, cfg.font.size, (cfg.cursor.animation_ms, cfg.scroll.animation_ms)));
+    }
     // motor: ASTROGRAPH_ENGINE=native|nvim manda; sem ela vale `[engine] native` do config.toml
     let native_on = match std::env::var("ASTROGRAPH_ENGINE").as_deref() {
         Ok("native") => true,

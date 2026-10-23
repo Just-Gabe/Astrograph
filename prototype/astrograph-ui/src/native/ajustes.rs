@@ -14,6 +14,7 @@ pub(super) enum Ajuste {
     Relogio,
     Hora12,
     Formatar,
+    Controle,
     Motor,
     Lider,
     ArquivoConfig,
@@ -24,7 +25,7 @@ pub(super) enum Ajuste {
     Atalhos,
 }
 
-pub(super) const AJUSTES: [Ajuste; 17] = [
+pub(super) const AJUSTES: [Ajuste; 18] = [
     Ajuste::Tema,
     Ajuste::Fonte,
     Ajuste::Quebra,
@@ -34,6 +35,7 @@ pub(super) const AJUSTES: [Ajuste; 17] = [
     Ajuste::Relogio,
     Ajuste::Hora12,
     Ajuste::Formatar,
+    Ajuste::Controle,
     Ajuste::Motor,
     Ajuste::Lider,
     Ajuste::ArquivoConfig,
@@ -77,6 +79,7 @@ impl Ajuste {
             Ajuste::Relogio => "Relógio",
             Ajuste::Hora12 => "Relógio em 12 horas",
             Ajuste::Formatar => "Formatar ao salvar (LSP)",
+            Ajuste::Controle => "Agentes operam o editor (MCP)",
             Ajuste::Motor => "Motor de edição",
             Ajuste::Lider => "Tecla líder",
             Ajuste::ArquivoConfig => "Abrir o arquivo de configuração",
@@ -104,6 +107,7 @@ impl Ajuste {
             Ajuste::Relogio => sim_nao(c.clock.enabled),
             Ajuste::Hora12 => sim_nao(c.clock.hour12),
             Ajuste::Formatar => sim_nao(c.lsp.format_on_save),
+            Ajuste::Controle => sim_nao(c.agentes.controle),
             Ajuste::Motor => if c.engine.native { "nativo (Rust)" } else { "Neovim" }.into(),
             Ajuste::Lider => tecla_nome(c.keys.leader_char()),
             Ajuste::ArquivoConfig | Ajuste::Agente | Ajuste::ModoAgente | Ajuste::Atualizar | Ajuste::Saude | Ajuste::Atalhos => "abrir".into(),
@@ -129,6 +133,7 @@ impl Ajuste {
             Ajuste::Relogio => ("clock", "enabled", (!c.clock.enabled).into(), false),
             Ajuste::Hora12 => ("clock", "hour12", (!c.clock.hour12).into(), false),
             Ajuste::Formatar => ("lsp", "format_on_save", (!c.lsp.format_on_save).into(), true),
+            Ajuste::Controle => ("agentes", "controle", (!c.agentes.controle).into(), true),
             Ajuste::Motor => ("engine", "native", (!c.engine.native).into(), false),
             Ajuste::Lider => {
                 let atual = LIDERES.iter().find(|l| crate::config::KeysCfg { leader: (**l).into(), ..Default::default() }.leader_char() == c.keys.leader_char()).copied().unwrap_or("space");
@@ -181,6 +186,7 @@ impl Session {
             Ajuste::Quebra => self.set_ui(if nova.editor.wrap { "wrap" } else { "nowrap" }),
             Ajuste::Dicas => crate::dicas::ligar(nova.ui.tips),
             Ajuste::Formatar => self.formatar_ao_salvar = nova.lsp.format_on_save,
+            Ajuste::Controle => crate::controle::ligar(nova.agentes.controle),
             _ => {}
         }
         if !na_hora {

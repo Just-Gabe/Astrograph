@@ -407,6 +407,10 @@ fn nomeada(nome: &str) -> Option<Vec<u8>> {
         "esc" => seq("\x1b"),
         "cr" | "enter" | "return" => seq("\r"),
         "bs" | "backspace" => seq("\x7f"),
+        // Ctrl+Backspace apaga a palavra: no Windows o ConPTY lê ^H como Ctrl+Backspace (PSReadLine, cmd);
+        // nos shells Unix é o ^W do readline/zsh
+        "c-bs" | "c-backspace" => Some(vec![if cfg!(windows) { 0x08 } else { 0x17 }]),
+        "m-bs" | "m-backspace" | "a-bs" => seq("\x1b\x7f"),
         "tab" => seq("\t"),
         "s-tab" => seq("\x1b[Z"),
         "space" => seq(" "),

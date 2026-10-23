@@ -73,10 +73,16 @@ impl Spring {
             self.x += self.v * h;
             left -= h;
         }
+        // perto o bastante: encaixa no alvo. Sem isso a cena declara "parou" a uma fração do alvo e o próximo
+        // quadro (na próxima tecla) dá um tranco; em molas medidas em linhas, o destaque ficava ~1 px fora
+        if (self.target - self.x).abs() < 0.01 && self.v.abs() < 0.1 {
+            self.x = self.target;
+            self.v = 0.0;
+        }
     }
 
     pub fn settled(&self) -> bool {
-        (self.target - self.x).abs() < 0.05 && self.v.abs() < 0.5
+        self.x == self.target && self.v == 0.0
     }
 }
 
@@ -140,6 +146,7 @@ mod testes {
             max = max.max(s.x);
         }
         assert!(s.settled(), "convergiu: {}", s.x);
+        assert_eq!(s.x, 100.0, "assentada, fica exatamente no alvo (sem tranco no próximo quadro)");
         assert!(max <= 100.5, "sem quicar: {max}");
         // mesmo resultado com passos diferentes
         let mut a = Spring::new(0.0, 22.0, 1.0);

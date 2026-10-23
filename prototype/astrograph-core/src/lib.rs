@@ -15,4 +15,4 @@ pub mod textobj;
 pub use buffer::{Buffer, Pos};
 pub use editor::mapas;
 pub use editor::{Editor, Mode, VKind};
-pub use keys::{parse_keys, Key};
+pub use keys::{apagar_palavra, parse_keys, Key};

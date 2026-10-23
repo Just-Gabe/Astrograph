@@ -1062,6 +1062,22 @@ impl Editor {
                     self.pending.clear();
                     return;
                 }
+                // `/texto`: <C-w> apaga a palavra, <C-u> o texto todo (a busca continua aberta)
+                if matches!(k, Key::Ctrl('w') | Key::Ctrl('u')) {
+                    if let Some(l) = self.search_line() {
+                        let mut texto: String = l.chars().skip(1).collect();
+                        let antes = texto.chars().count();
+                        if k == Key::Ctrl('u') {
+                            texto.clear();
+                        } else {
+                            crate::keys::apagar_palavra(&mut texto);
+                        }
+                        for _ in texto.chars().count()..antes {
+                            self.pending.pop();
+                        }
+                        return;
+                    }
+                }
                 // apagar durante `/texto`: tira uma tecla; sem texto, cancela a busca
                 if k == Key::Backspace {
                     if let Some(l) = self.search_line() {

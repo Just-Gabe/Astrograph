@@ -162,6 +162,8 @@ pub enum PedidoAba {
     Proxima,
     Anterior,
     So,
+    /// `:wa` grava todas; `:qa` sai (com alterações não salvas, só com `!`); `:wqa`/`:xa` grava e sai
+    Todas { gravar: bool, sair: bool, forcar: bool },
 }
 
 /// Pedidos de janela (divisões) que a sessão faz ao espaço de trabalho.
@@ -362,6 +364,8 @@ pub struct Session {
     jan_espera: bool,
     /// apertou `]` ou `[` e espera o `d` (diagnóstico seguinte/anterior)
     colchete_espera: Option<char>,
+    /// apertou `z` no modo normal: `zz`/`zt`/`zb` são da tela (sessão); as dobras seguem para o núcleo
+    z_espera: bool,
     /// identifica o painel dentro da aba
     pub pane_id: PaneId,
     pub splits: Option<Box<Splits>>,
@@ -491,6 +495,7 @@ impl Session {
             formatar_ao_salvar: false,
             jan_espera: false,
             colchete_espera: None,
+            z_espera: false,
             pane_id: 0,
             splits: None,
             irmao: false,
@@ -591,7 +596,15 @@ impl Session {
     /// (nunca texto); teclas sem função (F1, Insert...) são ignoradas.
     pub fn feed(&mut self, keys: &str) {
         if self.term_focus && self.term.is_some() {
-            self.term_feed(keys);
+            // uma tecla por vez: `<C-\><C-n>` ou `<C-\>q` no meio de uma sequência (mapeamento, macro, um agente
+            // operando o app) tiram o foco do terminal, e o resto das teclas vai para o editor
+            let teclas = separar_teclas(keys);
+            for (i, t) in teclas.iter().enumerate() {
+                if !(self.term_focus && self.term.is_some()) {
+                    return self.feed(&teclas[i..].concat());
+                }
+                self.term_feed(t);
+            }
             return;
         }
         let chars: Vec<char> = keys.chars().collect();
@@ -601,6 +614,17 @@ impl Session {
             if chars[i] == '<' {
                 if let Some(j) = chars[i..].iter().take(14).position(|&c| c == '>') {
                     let name: String = chars[i + 1..i + j].iter().collect::<String>().to_lowercase();
+                    // Ctrl+Backspace (e Alt+Backspace) apagam a palavra onde se digita; no modo normal não fazem nada
+                    if matches!(name.as_str(), "c-bs" | "m-bs" | "c-backspace" | "m-backspace") {
+                        for k in parse_keys(&std::mem::take(&mut buf)) {
+                            self.key(k);
+                        }
+                        if self.digitando() {
+                            self.key(Key::Ctrl('w'));
+                        }
+                        i += j + 1;
+                        continue;
+                    }
                     if let Some(nav) = nav_name(&name) {
                         for k in parse_keys(&std::mem::take(&mut buf)) {
                             self.key(k);
@@ -619,6 +643,16 @@ impl Session {
         for k in parse_keys(&buf) {
             self.key(k);
         }
+    }
+
+    /// Há um campo de texto recebendo as teclas (buscador, prompts, linha de comando, busca ou inserção).
+    fn digitando(&self) -> bool {
+        self.picker.is_some()
+            || self.ia_prompt.is_some()
+            || self.tree_prompt.is_some()
+            || self.ed.cmdline().is_some()
+            || self.ed.search_line().is_some()
+            || self.ed.mode() == Mode::Insert
     }
 
     /// Setas e afins. No buscador movem a seleção; no editor, o cursor.
@@ -704,7 +738,9 @@ impl Session {
         let livre = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Normal;
         // <Espaço> é o líder: `ff` arquivos, `fw` texto, `fo` recentes (no visual também, para `<Líder>Ai` na seleção)
         let livre_visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && self.ed.mode() == Mode::Visual;
-        if (livre || livre_visual) && self.leader.is_empty() && k == Key::Char(self.leader_key) {
+        // com o prompt da IA ou o do explorador aberto, o espaço (líder) é texto: "explique esta" não abre o explorador
+        let prompt = self.ia_prompt.is_some() || self.tree_prompt.is_some();
+        if (livre || livre_visual) && !prompt && self.leader.is_empty() && k == Key::Char(self.leader_key) {
             self.leader.push(k);
             // o menu de atalhos é decisão da cena: ela espera um pouco e o anima (sem depender de outra thread)
             self.leader_desde = Some(std::time::Instant::now());
@@ -746,6 +782,7 @@ impl Session {
                     return;
                 }
                 [Key::Char('l'), Key::Char('i')] => self.lsp_consulta(PedidoLsp::Implementacao),
+                [Key::Char('l'), Key::Char('I')] => self.lsp_oferta_abrir(),
                 [Key::Char('l'), Key::Char('y')] => self.lsp_consulta(PedidoLsp::TipoDaDefinicao),
                 [Key::Char('l'), Key::Char('r')] => self.lsp_consulta(PedidoLsp::Referencias),
                 [Key::Char('x'), Key::Char('x')] => self.diag_lista(),
@@ -760,6 +797,7 @@ impl Session {
                 [Key::Char('A'), Key::Char('r')] => self.agente_enviar(crate::agentes::pedido_revisar()),
                 [Key::Char('A'), Key::Char('m')] => self.agente_enviar(crate::agentes::pedido_commit()),
                 [Key::Char('A'), Key::Char('z')] => self.toggle_zen(),
+                [Key::Char('A'), Key::Char('M')] => self.controle_alternar(),
                 [Key::Char('f'), Key::Char('f')] => self.pick_open(PickKind::Arquivos),
                 [Key::Char('f'), Key::Char('w')] => self.pick_open(PickKind::Texto),
                 [Key::Char('f'), Key::Char('o')] => self.pick_open(PickKind::Recentes),
@@ -811,6 +849,22 @@ impl Session {
             }
             return;
         }
+        // rolagem da tela (o núcleo não sabe o que está na tela): Ctrl+D/U/F/B/E/Y, H/M/L, zz/zt/zb
+        let visual = self.ed.cmdline().is_none() && !self.ed.has_pending() && matches!(self.ed.mode(), Mode::Visual);
+        if self.z_espera {
+            self.z_espera = false;
+            if !self.tela_z(k) {
+                self.ed.feed(&[Key::Char('z'), k]);
+            }
+            return;
+        }
+        if livre && !self.dash && k == Key::Char('z') {
+            self.z_espera = true;
+            return;
+        }
+        if (livre && !self.dash || visual) && self.tela_rolar(k) {
+            return;
+        }
         if self.dash && livre {
             match k {
                 // j/k, Ctrl+N/P e as setas movem o destaque; Enter faz a ação destacada
@@ -831,6 +885,119 @@ impl Session {
         if self.dash && (self.ed.mode() != Mode::Normal || self.modified()) {
             self.dash = false;
         }
+    }
+
+    /// Linha mostrada (com dobras e quebra de linha) <-> linha do arquivo, e a primeira linha mostrada.
+    fn tela_pos(&self) -> (f32, f32, f32, f32) {
+        let proj = self.proj_atual();
+        let n = proj.as_ref().map_or(self.ed.buf.line_count(), |p| p.linhas());
+        let top = proj.as_ref().map_or(self.top as usize, |p| p.a_proj(self.top as usize)) as f32 + self.top.fract();
+        let row = proj.as_ref().map_or(self.ed.cursor.row, |p| p.pos_a_proj(self.ed.cursor.row, self.ed.cursor.col).0) as f32;
+        let so = self.scrolloff.min((self.rows - 1.0) / 2.0).floor();
+        (top, row, n.saturating_sub(1) as f32, so)
+    }
+
+    /// Cursor na linha mostrada `p`, na mesma coluna (o `nostartofline` padrão do Neovim).
+    fn tela_cursor(&mut self, p: f32) {
+        let real = self.proj_a_real(p.max(0.0) as usize).min(self.ed.buf.line_count().saturating_sub(1));
+        let col = self.ed.cursor.col.min(self.ed.buf.line_len(real).saturating_sub(1));
+        self.ed.set_cursor(real, col);
+    }
+
+    /// Linha mostrada `p` trazida para dentro da tela que começa em `top`, respeitando o `scrolloff`
+    /// (no começo e no fim do arquivo ele não se aplica).
+    fn tela_dentro(&self, p: f32, top: f32) -> f32 {
+        let (_, _, ultima, so) = self.tela_pos();
+        let rows = self.rows.floor().max(1.0);
+        let lo = if top > 0.0 { top + so } else { 0.0 };
+        let hi = if top + rows - 1.0 < ultima { top + rows - 1.0 - so } else { ultima };
+        p.clamp(lo, hi.max(lo))
+    }
+
+    /// Põe a linha mostrada `p` no topo da tela.
+    fn tela_topo(&mut self, p: f32) {
+        let (_, _, ultima, _) = self.tela_pos();
+        let p = p.clamp(0.0, ultima);
+        self.top = self.proj_a_real(p as usize) as f32;
+    }
+
+    /// `Ctrl+D/U` (meia tela, cursor junto), `Ctrl+F/B` (tela inteira), `Ctrl+E/Y` (uma linha), `H M L`.
+    fn tela_rolar(&mut self, k: Key) -> bool {
+        if !matches!(k, Key::Ctrl('d' | 'u' | 'f' | 'b' | 'e' | 'y') | Key::Char('H' | 'M' | 'L')) {
+            return false;
+        }
+        // a tela acompanha o cursor antes (`ggH` numa macro ou mapeamento chega de uma vez)
+        self.follow_cursor();
+        let (top, row, ultima, so) = self.tela_pos();
+        let rows = self.rows.floor().max(1.0);
+        let meia = (rows / 2.0).floor().max(1.0);
+        match k {
+            Key::Ctrl('d') | Key::Ctrl('u') => {
+                let d = if k == Key::Ctrl('d') { meia } else { -meia };
+                if (d > 0.0 && row >= ultima) || (d < 0.0 && row <= 0.0) {
+                    return true;
+                }
+                let novo = (top + d).min((ultima - rows + 1.0).max(0.0)).max(0.0);
+                self.tela_topo(novo);
+                let alvo = self.tela_dentro((row + d).clamp(0.0, ultima), novo);
+                self.tela_cursor(alvo);
+            }
+            Key::Ctrl('f') | Key::Ctrl('b') => {
+                let d = (rows - 2.0).max(1.0);
+                self.scroll(if k == Key::Ctrl('f') { d } else { -d });
+                let (top, row, _, _) = self.tela_pos();
+                let alvo = self.tela_dentro(row, top);
+                self.tela_cursor(alvo);
+            }
+            Key::Ctrl('e') => self.scroll(1.0),
+            Key::Ctrl('y') => self.scroll(-1.0),
+            Key::Char('H') => self.tela_cursor(if top > 0.0 { top + so } else { 0.0 }),
+            Key::Char('L') => {
+                let fundo = top + rows - 1.0;
+                self.tela_cursor(if fundo < ultima { fundo - so } else { ultima });
+            }
+            Key::Char('M') => {
+                let visiveis = (ultima - top + 1.0).min(rows);
+                self.tela_cursor(top + ((visiveis - 1.0) / 2.0).floor());
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Segunda tecla depois de `z`: `zz`/`z.` (centro), `zt`/`z<CR>` (topo), `zb`/`z-` (base). As com ponto,
+    /// Enter e hífen também vão ao primeiro caractere não branco. `false` = não é da tela (dobra).
+    fn tela_z(&mut self, k: Key) -> bool {
+        self.follow_cursor();
+        let (_, row, _, so) = self.tela_pos();
+        let rows = self.rows.floor().max(1.0);
+        let topo = match k {
+            Key::Char('z') | Key::Char('.') => row - ((rows - 1.0) / 2.0).floor(),
+            Key::Char('t') | Key::Enter => row - so,
+            Key::Char('b') | Key::Char('-') => row - rows + 1.0 + so,
+            _ => return false,
+        };
+        self.tela_topo(topo.max(0.0));
+        if matches!(k, Key::Char('.') | Key::Enter | Key::Char('-')) {
+            self.tela_cursor(row);
+        }
+        true
+    }
+
+    /// `<Líder>AM`: liga ou desliga os agentes operando o editor (MCP/`--ctl`) e grava a escolha.
+    fn controle_alternar(&mut self) {
+        let novo = !crate::controle::ligado();
+        if let Err(e) = crate::config::gravar("agentes", "controle", novo.into()) {
+            self.say(e, ToastKind::Error);
+            return;
+        }
+        crate::controle::ligar(novo);
+        let texto = if novo {
+            "Agentes operando o editor: ligado (o Claude aberto pelo painel recebe as ferramentas do Astrograph)"
+        } else {
+            "Agentes operando o editor: desligado (pedidos recusados na hora; <Espaço>AM religa)"
+        };
+        self.say(texto.into(), if novo { ToastKind::Done } else { ToastKind::Info });
     }
 
     /// Mostra uma dica de atalho (poucas vezes por dica, com intervalo entre elas; some em Configurações).
@@ -991,12 +1158,36 @@ impl Session {
         }
     }
 
-    /// Não há servidor para este arquivo: se dá para instalar, pergunta (instalar agora, agora não, não perguntar
-    /// mais); senão só diz como. Cada linguagem aparece poucas vezes (o contador fica no estado do usuário).
-    fn lsp_oferecer(&mut self, path: &Path, inst: lsp::Instalacao) {
+    /// Não há servidor para este arquivo: avisa com uma dica (que não toma o teclado de quem já começou a
+    /// digitar) e ensina como abrir a oferta de instalar. Cada linguagem aparece poucas vezes (o contador fica
+    /// no estado do usuário).
+    fn lsp_oferecer(&mut self, _path: &Path, inst: lsp::Instalacao) {
         if !crate::dicas::mostrar(&format!("lsp-{}", inst.nome), 3) {
             return;
         }
+        let texto = match inst.comando {
+            Some(_) => format!("Sem servidor de linguagem para {}: {}lI (ou :LspInstall) instala", inst.nome, self.lider_nome()),
+            None => format!("Sem servidor de linguagem para {}. Instale: {}", inst.nome, inst.como),
+        };
+        self.say(texto, ToastKind::Dica);
+    }
+
+    /// `<Líder>lI` / `:LspInstall`: pergunta se instala o servidor do arquivo aberto (instalar agora, agora
+    /// não, não perguntar mais); sem comando automático, diz como.
+    fn lsp_oferta_abrir(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return self.say("Abra um arquivo para instalar o servidor de linguagem dele.".into(), ToastKind::Info);
+        };
+        if self.lsp.is_some() {
+            return self.say("O servidor de linguagem deste arquivo já está ativo.".into(), ToastKind::Info);
+        }
+        let Some(inst) = lsp::instalacao_para(&path) else {
+            return self.say("Não sei instalar um servidor de linguagem para este tipo de arquivo.".into(), ToastKind::Info);
+        };
+        self.lsp_oferta_lista(&path, inst);
+    }
+
+    fn lsp_oferta_lista(&mut self, path: &Path, inst: lsp::Instalacao) {
         let Some(comando) = inst.comando else {
             self.say(format!("Sem servidor de linguagem para {}. Instale: {}", inst.nome, inst.como), ToastKind::Info);
             return;
@@ -2056,6 +2247,13 @@ impl Session {
         for p in partes {
             cmd.arg(p);
         }
+        // o Claude Code ganha as ferramentas do Astrograph (MCP): ver a tela, abrir, salvar, commit...
+        if a.bin == "claude" && crate::controle::ligado() && std::env::var("ASTROGRAPH_CONTROLE").is_ok_and(|v| v != "0") {
+            if let Some(cfg) = crate::controle::arquivo_mcp() {
+                cmd.arg("--mcp-config");
+                cmd.arg(cfg);
+            }
+        }
         for e in extra {
             cmd.arg(e);
         }
@@ -2412,6 +2610,8 @@ impl Session {
             Key::Backspace => {
                 texto.pop();
             }
+            Key::Ctrl('w') => astrograph_core::apagar_palavra(&mut texto),
+            Key::Ctrl('u') => texto.clear(),
             Key::Char(c) => texto.push(c),
             Key::Enter => return self.ia_enviar(tipo, texto),
             _ => {}
@@ -2740,6 +2940,8 @@ impl Session {
             Key::Backspace => {
                 texto.pop();
             }
+            Key::Ctrl('w') => astrograph_core::apagar_palavra(&mut texto),
+            Key::Ctrl('u') => texto.clear(),
             Key::Char(c) => texto.push(c),
             Key::Enter => return self.tree_prompt_ok(op, texto),
             _ => {}
@@ -3048,6 +3250,12 @@ impl Session {
             Key::Ctrl('u') => {
                 if let Some(p) = self.picker.as_mut() {
                     p.query.clear();
+                }
+                self.pick_refresh();
+            }
+            Key::Ctrl('w') => {
+                if let Some(p) = self.picker.as_mut() {
+                    astrograph_core::apagar_palavra(&mut p.query);
                 }
                 self.pick_refresh();
             }
@@ -3575,6 +3783,7 @@ impl Session {
                 self.lsp_formatar(false, false);
             }
             "CodeAction" | "LspCodeAction" => self.lsp_acoes(),
+            "LspInstall" | "LspInstalar" => self.lsp_oferta_abrir(),
             "Astrograph" => self.comando_astrograph(arg),
             "AgentInstall" => self.agente_instalar(arg),
             "AgentLogin" => self.agente_login(),
@@ -3593,6 +3802,9 @@ impl Session {
             "tabn" | "tabnext" => self.aba_pedido = Some(PedidoAba::Proxima),
             "tabp" | "tabprevious" | "tabN" | "tabNext" => self.aba_pedido = Some(PedidoAba::Anterior),
             "tabo" | "tabonly" => self.aba_pedido = Some(PedidoAba::So),
+            "wa" | "wall" => self.aba_pedido = Some(PedidoAba::Todas { gravar: true, sair: false, forcar: bang }),
+            "qa" | "qall" | "quita" | "quitall" => self.aba_pedido = Some(PedidoAba::Todas { gravar: false, sair: true, forcar: bang }),
+            "wqa" | "wqall" | "xa" | "xall" => self.aba_pedido = Some(PedidoAba::Todas { gravar: true, sair: true, forcar: bang }),
             "noh" | "nohlsearch" | "syntax" | "filetype" => {}
             _ => self.say(format!("Comando desconhecido: {name}"), ToastKind::Error),
         }
@@ -4269,8 +4481,16 @@ impl Workspace {
             let mut nova = self.nova_sessao(Some(arquivo));
             let ativa = self.ativa;
             mover_paineis(&mut self.abas[ativa], &mut nova);
-            self.abas.insert(self.ativa + 1, nova);
-            self.ativa += 1;
+            // a aba atual é a tela inicial ou um buffer vazio nunca usado: o arquivo toma o lugar dela (sem
+            // deixar uma aba "Sem nome" sobrando)
+            let a = &self.abas[ativa];
+            let descartavel = a.path.is_none() && a.nome_fixo.is_none() && !a.tem_alteracoes() && a.splits.is_none() && a.ed.buf.line_count() == 1 && a.ed.buf.line_len(0) == 0;
+            if descartavel {
+                self.abas[ativa] = nova;
+            } else {
+                self.abas.insert(self.ativa + 1, nova);
+                self.ativa += 1;
+            }
         }
         if let Some((r, c)) = goto {
             let s = self.atual();
@@ -4598,6 +4818,27 @@ impl Workspace {
                         self.abas = vec![manter];
                         self.ativa = 0;
                     }
+                    PedidoAba::Todas { gravar, sair, forcar } => {
+                        if gravar {
+                            let (_, sem_nome) = self.salvar_todas();
+                            if !sem_nome.is_empty() {
+                                let lista = sem_nome.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+                                self.atual().say(format!("Abas sem nome não foram gravadas ({lista}). Use :w nome nelas."), ToastKind::Error);
+                                continue;
+                            }
+                        }
+                        if sair {
+                            let pendentes: Vec<String> = self.abas.iter().filter(|s| s.tem_alteracoes()).map(|s| s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Sem nome".into())).collect();
+                            if !pendentes.is_empty() && !forcar {
+                                self.atual().say(format!("Alterações não salvas em {}. Use :wqa para gravar e sair ou :qa! para sair sem salvar.", pendentes.join(", ")), ToastKind::Error);
+                            } else {
+                                for s in &self.abas {
+                                    s.guardar_cursor();
+                                }
+                                self.sair = true;
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -4697,6 +4938,85 @@ impl Workspace {
     pub fn n_abas(&self) -> usize {
         self.abas.len()
     }
+
+    // ---- harness: o que um agente (ou um teste) usa para operar o app sem passar por teclas ----
+
+    /// Pasta do projeto da aba ativa.
+    pub fn raiz(&self) -> PathBuf {
+        self.abas[self.ativa].root.clone()
+    }
+
+    pub fn lider(&self) -> char {
+        self.leader
+    }
+
+    /// Abre `arquivo` numa aba (ou vai para a aba dele), na linha `linha` (1 = primeira).
+    pub fn abrir(&mut self, arquivo: &Path, linha: Option<usize>) {
+        self.abrir_em_aba(arquivo, linha.map(|l| (l.saturating_sub(1), 0)));
+        self.depois();
+    }
+
+    /// Grava as abas com alterações que têm arquivo; devolve os nomes gravados e os que ficaram sem nome.
+    pub fn salvar_todas(&mut self) -> (Vec<String>, Vec<usize>) {
+        let (mut gravadas, mut sem_nome) = (Vec::new(), Vec::new());
+        for (i, s) in self.abas.iter_mut().enumerate() {
+            if !s.modified() {
+                continue;
+            }
+            match s.path.clone() {
+                Some(p) => {
+                    s.write("");
+                    if !s.modified() {
+                        gravadas.push(p.to_string_lossy().into_owned());
+                    }
+                }
+                None => sem_nome.push(i + 1),
+            }
+        }
+        self.depois();
+        (gravadas, sem_nome)
+    }
+
+    /// Texto da aba de `arquivo` (ou da ativa), como está no editor (com o que não foi salvo).
+    pub fn texto(&self, arquivo: Option<&Path>) -> Option<(String, String, bool)> {
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let s = match arquivo {
+            Some(a) => {
+                let alvo = canon(a);
+                self.abas.iter().find(|s| s.path.as_deref().map(canon).as_ref() == Some(&alvo))?
+            }
+            None => &self.abas[self.ativa],
+        };
+        let nome = s.path.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "(sem nome)".into());
+        // o mesmo texto que o `:w` gravaria (com a quebra de linha final)
+        Some((nome, s.ed.to_file_text(), s.modified()))
+    }
+
+    /// Linhas visíveis do terminal da aba ativa (sem espaços à direita) e se o processo terminou.
+    pub fn terminal_tela(&mut self) -> Option<(Vec<String>, bool)> {
+        let vm = self.view_model();
+        let t = vm.term?;
+        let linhas = t.screen.rows.iter().map(|r| r.iter().map(|c| c.ch).collect::<String>().trim_end().to_string()).collect();
+        Some((linhas, t.screen.exited))
+    }
+
+    /// Roda `comando` num terminal de shell do app (abre um se preciso; nunca digita dentro do agente).
+    pub fn terminal_rodar(&mut self, comando: &str) {
+        let s = self.atual();
+        if s.term.is_some() && s.term_agente {
+            s.term_novo();
+        } else if s.term.is_none() {
+            s.toggle_term();
+        }
+        s.term_focus = true;
+        s.term_feed(&format!("{}<CR>", comando.replace('<', "<lt>")));
+        self.depois();
+    }
+
+    /// Relê o git (branch e sinais da margem) depois de um commit feito por fora.
+    pub fn git_recarregar(&mut self) {
+        self.atual().git_load();
+    }
 }
 
 /// Tarefa do editor nativo: lê a fila de comandos da UI e publica o modelo.
@@ -4712,6 +5032,11 @@ pub async fn native_task(
     tx: tokio::sync::mpsc::UnboundedSender<crate::UiCommand>,
 ) {
     use crate::UiCommand;
+    // controle por agentes: antes de abrir o editor, para os processos filhos herdarem o endereço
+    crate::controle::ligar(crate::config::atual().agentes.controle);
+    let tx_controle = tx.clone();
+    let _controle = crate::controle::iniciar(move |p| tx_controle.send(crate::UiCommand::Controle(p)).is_ok());
+    let mut pintor: Option<crate::harness::Pintor> = None;
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
         let _ = tx.send(crate::UiCommand::TermOut);
     });
@@ -4737,6 +5062,10 @@ pub async fn native_task(
             UiCommand::Paste(t) => w.atual().colar(&t),
             UiCommand::ClipSync(t) => w.clipboard_do_sistema(&t),
             UiCommand::TermCopy => w.atual().term_copiar(),
+            UiCommand::Controle((linha, resp)) => {
+                let r = crate::harness::executar_ao_vivo(&mut w, &mut pintor, &linha);
+                let _ = resp.send(r);
+            }
             UiCommand::Panes(t) => {
                 let t: Vec<(PaneId, usize, f32)> = t.into_iter().map(|(id, c, r)| (id, c.max(1) as usize, r.max(1) as f32)).collect();
                 w.tamanhos_paineis(&t);
@@ -4797,6 +5126,28 @@ fn nav_name(name: &str) -> Option<Option<Nav>> {
     };
     // com Ctrl/Alt/Shift o comportamento seria outro: por ora, ignora
     Some(if modificada { None } else { Some(nav) })
+}
+
+/// `ls<CR><C-\>q` -> `["l", "s", "<CR>", "<C-\>", "q"]`: cada tecla nomeada (`<...>` curto) ou caractere.
+fn separar_teclas(keys: &str) -> Vec<String> {
+    let chars: Vec<char> = keys.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<' {
+            if let Some(j) = chars[i + 1..].iter().take(14).position(|&c| c == '>') {
+                // `<C-\>`: o `\` faz parte do nome; `<>` não é nome
+                if j > 0 {
+                    out.push(chars[i..i + j + 2].iter().collect());
+                    i += j + 2;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i].to_string());
+        i += 1;
+    }
+    out
 }
 
 /// Nome da tecla para mostrar ao usuário: `<Espaço>`, `<Tab>` ou `<,>`.
@@ -5941,7 +6292,7 @@ mod testes {
 
     #[test]
     fn lsp_mostra_diagnosticos_hover_e_vai_para_a_definicao() {
-        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())) else { return };
         let _trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto("lsp");
         let script = d.join("falso.py");
@@ -6009,7 +6360,7 @@ mod testes {
 
     #[test]
     fn completar_do_servidor_filtra_navega_e_aceita() {
-        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok()) else { return };
+        let Some(py) = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success())) else { return };
         let _trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto("comp");
         let script = d.join("falso.py");
@@ -6078,7 +6429,7 @@ mod testes {
     /// Espaço de trabalho com o servidor falso (python) num arquivo `a.py` de texto `texto`.
     /// Devolve `None` se não há python. A trava serializa o uso da variável de ambiente.
     fn com_falso(nome: &str, texto: &str) -> Option<(std::sync::MutexGuard<'static, ()>, Workspace, PathBuf)> {
-        let py = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok())?;
+        let py = ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))?;
         let trava = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let d = projeto(nome);
         let script = d.join("falso.py");
@@ -6661,6 +7012,8 @@ mod testes {
     #[test]
     fn central_de_configuracoes_troca_grava_e_aplica() {
         let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
+        // o interruptor dos agentes é global: o teste do controle não pode rodar no meio
+        let _t = crate::lsp::testes::TRAVA_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let arq = crate::config::caminho_para_gravar();
         let _ = std::fs::remove_file(&arq);
         let mut s = Session::new("", None);
@@ -6687,6 +7040,12 @@ mod testes {
         // dicas ligam/desligam na hora
         s.ajuste_aplicar(Ajuste::Dicas);
         assert!(!crate::config::atual().ui.tips && !crate::dicas::ligadas());
+        // agentes operando o editor: desliga na hora e grava; o atalho <Espaço>AM faz o mesmo
+        assert!(crate::config::atual().agentes.controle, "ligado por padrão");
+        s.ajuste_aplicar(Ajuste::Controle);
+        assert!(!crate::config::atual().agentes.controle && !crate::controle::ligado());
+        s.feed("<Esc> AM");
+        assert!(crate::config::atual().agentes.controle && crate::controle::ligado(), "o atalho religa");
         // líder e animação do cursor avançam na lista
         s.ajuste_aplicar(Ajuste::Lider);
         s.ajuste_aplicar(Ajuste::AnimCursor);
@@ -6703,13 +7062,204 @@ mod testes {
     }
 
     #[test]
+    fn rolagem_da_tela_ctrl_d_u_f_b_e_y_zz_zt_zb_e_h_m_l() {
+        // números medidos no Neovim 0.12 (`--clean`, scrolloff=3, janela de 20 linhas, 200 linhas com recuo)
+        let texto: String = (1..=200).map(|i| format!("    linha {i}
+")).collect();
+        let mut s = Session::new(&texto, None);
+        s.resize(80, 20.0);
+        let pos = |s: &mut Session| {
+            let m = modelo(s);
+            (m.top as usize, m.cursor.0)
+        };
+        let casos: &[(&str, (usize, usize))] = &[
+            ("<C-d>", (10, 13)),
+            ("<C-d>", (20, 23)),
+            ("<C-u>", (10, 13)),
+            ("<C-u><C-u>", (0, 0)),
+            ("<C-f>", (18, 21)),
+            ("<C-b>", (0, 16)),
+            ("gg<C-e>", (1, 4)),
+            ("<C-y>", (0, 4)),
+            ("100Gzt", (96, 99)),
+            ("zz", (90, 99)),
+            ("zb", (83, 99)),
+            ("H", (83, 86)),
+            ("M", (83, 92)),
+            ("L", (83, 99)),
+            ("ggH", (0, 0)),
+        ];
+        for (teclas, esperado) in casos {
+            s.feed(teclas);
+            assert_eq!(pos(&mut s), *esperado, "depois de {teclas}");
+        }
+        // a coluna fica (nostartofline)
+        s.feed("gg0<C-d>");
+        assert_eq!(modelo(&mut s).cursor.1, 0);
+        s.feed("GL");
+        assert_eq!(pos(&mut s).1, 199);
+        s.feed("<C-d>");
+        assert_eq!(pos(&mut s).1, 199, "Ctrl+D na última linha não faz nada");
+        // controle: as dobras continuam com o núcleo (zf cria, zo abre) e o texto não muda
+        s.feed("ggzfj");
+        assert_eq!(modelo(&mut s).row_map.as_ref().map(|m| m.len()), Some(199), "zfj dobrou duas linhas em uma");
+        s.feed("zo");
+        assert!(modelo(&mut s).row_map.is_none(), "zo abriu");
+        assert_eq!(modelo(&mut s).line(0), "    linha 1");
+        // no visual também
+        s.feed("gg");
+        s.feed("v<C-d>");
+        let m = modelo(&mut s);
+        assert_eq!((m.cursor.0, m.selection.is_some()), (13, true));
+        s.feed("<Esc>");
+    }
+
+    #[test]
+    fn qa_wa_e_wqa_em_todas_as_abas() {
+        let d = projeto("qa");
+        let (a, b) = (d.join("src/alfa.rs"), d.join("src/beta.rs"));
+        let mut w = Workspace::new(Some(a.clone()), ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        w.feed(&format!(":tabnew {}<CR>", b.display()));
+        w.feed("ggI// b<Esc>");
+        // :qa com alteração: não sai e diz onde
+        w.feed(":qa<CR>");
+        assert!(!w.sair);
+        assert!(w.view_model().toast.is_some_and(|(_, t, _)| t.contains("beta.rs")));
+        // :wa grava todas e fica
+        w.feed("gT");
+        w.feed("ggI// a<Esc>");
+        w.feed(":wa<CR>");
+        assert!(!w.sair);
+        assert!(std::fs::read_to_string(&a).unwrap().starts_with("// a") && std::fs::read_to_string(&b).unwrap().starts_with("// b"));
+        // :qa sem alterações sai
+        w.feed(":qa<CR>");
+        assert!(w.sair);
+        // :wqa grava e sai; :qa! sai sem gravar
+        let mut w = Workspace::new(Some(a.clone()), ' ', std::sync::Arc::new(|| {}));
+        w.feed("ggI!<Esc>:wqa<CR>");
+        assert!(w.sair && std::fs::read_to_string(&a).unwrap().starts_with("!// a"));
+        let mut w = Workspace::new(Some(a.clone()), ' ', std::sync::Arc::new(|| {}));
+        w.feed("ggdd:qa!<CR>");
+        assert!(w.sair && std::fs::read_to_string(&a).unwrap().starts_with("!// a"), "qa! não gravou");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn espaco_nos_prompts_e_texto_e_nao_a_tecla_lider() {
+        let mut s = Session::new("fn main() {}\n", None);
+        s.resize(80, 20.0);
+        s.feed(" AE");
+        assert!(s.ia_prompt.is_some(), "<Espaço>AE sem seleção abre a pergunta");
+        s.feed("explique esta funcao");
+        assert_eq!(s.ia_prompt.as_ref().map(|(_, t)| t.as_str()), Some("explique esta funcao"));
+        assert!(s.tree.is_none(), "o ␣e do texto não abriu o explorador");
+        s.feed("<Esc>");
+        // explorador: nome com espaço
+        s.feed(" e");
+        s.feed("a");
+        s.feed("meu arquivo.rs");
+        assert_eq!(s.tree_prompt.as_ref().map(|(_, t)| t.as_str()), Some("meu arquivo.rs"));
+        s.feed("<Esc>");
+        // controle: sem prompt, o espaço continua sendo a líder (␣e fecha o explorador)
+        s.feed(" e");
+        assert!(s.tree.is_none());
+        assert_eq!(modelo(&mut s).line(0), "fn main() {}", "nada vazou para o texto");
+    }
+
+    #[test]
+    fn arquivo_aberto_da_tela_inicial_toma_o_lugar_dela_sem_aba_sem_nome() {
+        let d = projeto("tela-inicial-aba");
+        let mut w = Workspace::new(None, ' ', std::sync::Arc::new(|| {}));
+        w.resize(80, 20.0);
+        assert!(w.view_model().dash);
+        w.abrir_em_aba(&d.join("src/alfa.rs"), None);
+        let vm = w.view_model();
+        assert_eq!((w.n_abas(), vm.name.as_str()), (1, "alfa.rs"), "a tela inicial deu lugar ao arquivo");
+        // controle: com um buffer novo que já tem texto, abrir outro arquivo cria outra aba
+        w.feed(":tabnew<CR>");
+        w.feed("itexto<Esc>");
+        w.abrir_em_aba(&d.join("src/beta.rs"), None);
+        assert_eq!(w.n_abas(), 3);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn teclas_juntas_saem_do_terminal_e_o_resto_vai_ao_editor() {
+        assert_eq!(separar_teclas("ls<CR><C-\\>q<lt>x<>"), ["l", "s", "<CR>", "<C-\\>", "q", "<lt>", "x", "<", ">"]);
+        let mut s = Session::new("abc\n", None);
+        s.resize(80, 20.0);
+        s.feed(" t");
+        if s.term.is_none() {
+            return; // sem pty nesta máquina
+        }
+        assert!(s.term_focus);
+        // tudo numa chamada só (como chega de um mapeamento ou de um agente): fecha o terminal e edita
+        s.feed("<C-\\>qIx<Esc>");
+        assert!(s.term.is_none(), "<C-\\>q fechou o terminal");
+        assert_eq!(modelo(&mut s).line(0), "xabc", "o resto das teclas foi para o editor");
+        // <C-\><C-n> devolve o foco sem fechar
+        s.feed(" t");
+        s.feed("<C-\\><C-n>A!<Esc>");
+        assert!(s.term.is_some() && !s.term_focus);
+        assert_eq!(modelo(&mut s).line(0), "xabc!");
+        s.term_close();
+    }
+
+    #[test]
+    fn ctrl_backspace_apaga_a_palavra_onde_se_digita_e_nunca_vira_texto() {
+        let mut s = Session::new("fn main() {}\n", None);
+        s.resize(80, 20.0);
+        // modo normal: nada muda (antes virava o texto literal "<C-BS>" no buffer)
+        s.feed("<C-BS>");
+        let m = modelo(&mut s);
+        assert_eq!((m.line(0).as_str(), m.mode, m.cmd.clone()), ("fn main() {}", ModeKind::Normal, None));
+        // linha de comando
+        s.feed(":echo uma palavra<C-BS>");
+        assert_eq!(modelo(&mut s).cmd, Some((':', "echo uma ".into())));
+        s.feed("<C-u>");
+        assert_eq!(modelo(&mut s).cmd, Some((':', String::new())), "<C-u> limpa e a linha segue aberta");
+        s.feed("<Esc>");
+        // busca
+        s.feed("/main tela<C-BS>");
+        assert_eq!(modelo(&mut s).cmd, Some(('/', "main ".into())));
+        s.feed("<Esc>");
+        // inserção (Alt+Backspace também)
+        s.feed("Ototal = soma(1, 2)<C-BS><M-BS>");
+        assert_eq!(modelo(&mut s).line(0), "total = soma(1, ");
+        s.feed("<Esc>");
+        // buscador (qualquer lista com filtro)
+        let itens = vec![ListaItem { texto: "um".into(), detalhe: String::new(), destino: Destino::Nada }];
+        s.pick_lista("Teste", itens);
+        s.feed("main tela<C-BS>");
+        assert_eq!(modelo(&mut s).picker.expect("lista").query, "main ");
+        s.feed("<C-w><C-w>");
+        assert_eq!(modelo(&mut s).picker.expect("lista").query, "");
+        s.feed("<Esc>");
+        // explorador: criar arquivo (sem Enter, nada é criado)
+        s.feed(" e");
+        s.feed("a");
+        assert!(s.tree_prompt.is_some(), "a abre o campo do nome");
+        s.feed("src/novo arquivo<C-BS>");
+        assert_eq!(s.tree_prompt.as_ref().map(|(_, t)| t.as_str()), Some("src/novo "));
+    }
+
+    #[test]
     fn sem_servidor_oferece_instalar_agora_nao_ou_nunca_mais() {
         let _g = crate::dicas::TESTE.lock().unwrap_or_else(|e| e.into_inner());
         crate::dicas::zerar();
         let inst = lsp::Instalacao { nome: "Teste", requer: Some("sh"), comando: Some("echo instalando"), como: "echo instalando" };
         let mut s = Session::new("x\n", Some("a.ts".into()));
         s.resize(80, 20.0);
+        // ao abrir o arquivo, só uma dica: quem já está digitando não perde as teclas para um menu
         s.lsp_oferecer(Path::new("a.ts"), inst);
+        let m = modelo(&mut s);
+        assert!(m.picker.is_none(), "a oferta não abre sozinha");
+        assert!(m.toast.as_ref().is_some_and(|(_, t, k)| *k == ToastKind::Dica && t.contains("lI") && t.contains("LspInstall")), "{:?}", m.toast);
+        s.feed("ix<Esc>");
+        assert_eq!(modelo(&mut s).line(0), "xx", "as teclas foram para o texto");
+        // a oferta abre quando pedida
+        s.lsp_oferta_lista(Path::new("a.ts"), inst);
         let p = modelo(&mut s).picker.expect("oferta");
         assert!(p.title.contains("Sem servidor de linguagem para Teste"), "{}", p.title);
         let textos: Vec<&str> = p.items.iter().map(|i| i.text.as_str()).collect();
